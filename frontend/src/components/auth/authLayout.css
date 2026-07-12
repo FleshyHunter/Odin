@@ -1,0 +1,60 @@
+/* Shared page shell for both auth pages (Login, Signup) — nav, wordmark,
+   and the split layout/signin-pane wrapper. Both pages wrap their JSX in
+   the same `.auth-page` root class so this one file covers both, rather
+   than each page duplicating it. Form content styles live in AuthForm's
+   own authForm.css; the constellation canvas's styles live in
+   BigDipperCanvas's own bigDipperCanvas.css. */
+
+.auth-page nav {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 1.1rem 1.75rem;
+  border-bottom: 1px solid var(--border);
+}
+
+/* .wordmark is shared with the Session sidebar (Wordmark.tsx) but the two
+   prototypes styled it differently — scoped via this modifier class
+   (passed to <Wordmark className="nav-wordmark">) to avoid the two
+   pages' rules colliding now that both load in one SPA. */
+.auth-page .nav-wordmark {
+  font-size: 1.05rem;
+  font-weight: 500;
+  letter-spacing: 0.01em;
+}
+.auth-page .nav-wordmark svg { flex-shrink: 0; }
+
+.auth-page .nav-icon {
+  color: var(--text-muted);
+  display: flex;
+  align-items: center;
+  cursor: pointer;
+  transition: color 0.15s ease;
+  padding: 0.25rem;
+  border-radius: 6px;
+}
+.auth-page .nav-icon:hover { color: var(--text-secondary); }
+.auth-page .nav-icon:focus-visible {
+  outline: 2px solid var(--focus);
+  outline-offset: 2px;
+}
+
+.auth-page main.split {
+  display: flex;
+  min-height: calc(100vh - 61px);
+}
+
+/* Exact 50/50 split with .graph-pane. flex: 1 (flex-basis 0%) alone
+   isn't enough here — a flex item's default min-width:auto still lets
+   this pane's own horizontal padding act as a shrink floor, which skewed
+   the split (e.g. 748px/652px of 1400px, not 700/700). flex: 0 0 50% is
+   an explicit hard basis that padding can't perturb. */
+.auth-page .signin-pane {
+  flex: 0 0 50%;
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  align-items: center;
+  padding: 2.75rem 3rem;
+  box-sizing: border-box;
+}

@@ -1,0 +1,32 @@
+.projects-page {
+  padding: 2rem 2.5rem;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 1.25rem;
+}
+
+.projects-page-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+.projects-page-header h1 {
+  font-size: 1.5rem;
+  font-weight: 500;
+  margin: 0;
+}
+
+/* Button's shared .btn-primary is width:100% by default (built for
+   full-width form-submit contexts) — overridden here to its natural
+   compact size for this header action, same pattern as .nav-wordmark/
+   .sidebar-wordmark's per-context overrides elsewhere. */
+.projects-page-header .btn-primary {
+  width: auto;
+  padding: 0.6rem 1.1rem;
+}
+
+.projects-list {
+  display: flex;
+  flex-direction: column;
+}

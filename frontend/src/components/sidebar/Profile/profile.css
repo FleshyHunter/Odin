@@ -1,0 +1,10 @@
+/* Moved out of pages/Session/Session.css. .profile-switcher is this
+   component's own root class, so no extra scoping prefix is needed. */
+
+.profile-switcher {
+  display: flex; align-items: center; gap: 0.6rem;
+  padding: 0.6rem; border-top: 1px solid var(--border);
+  margin-top: 0.5rem; cursor: pointer; border-radius: 7px;
+}
+.profile-switcher:hover { background: var(--surface); }
+.profile-switcher span { font-size: 0.83rem; color: var(--text-secondary); }

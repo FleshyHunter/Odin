@@ -1,0 +1,31 @@
+/* Moved out of pages/Login/Login.css. .graph-pane is this component's
+   own root class, so no extra scoping prefix is needed. flex: 0 0 50%
+   assumes it's a direct child of a `display: flex` row (the auth pages'
+   `main.split`) — see components/auth/authLayout.css. */
+
+.graph-pane {
+  flex: 0 0 50%;
+  position: relative;
+  background: var(--bg-pane);
+  overflow: hidden;
+}
+
+.graph-pane canvas {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  display: block;
+}
+
+.graph-pane::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  background: radial-gradient(circle at 50% 50%, transparent 45%, var(--bg-pane) 100%);
+  pointer-events: none;
+}
+
+@media (max-width: 860px) {
+  .graph-pane { display: none; }
+}

@@ -1,0 +1,14 @@
+.project-search-bar {
+  display: flex; align-items: center; gap: 0.6rem;
+  background: var(--surface); border: 1px solid var(--border);
+  border-radius: 8px; padding: 0.65rem 0.85rem;
+  color: var(--text-muted);
+  transition: border-color 0.15s ease;
+}
+.project-search-bar:focus-within { border-color: var(--glow); color: var(--text-secondary); }
+.project-search-bar svg { flex-shrink: 0; }
+.project-search-bar input {
+  flex: 1; background: none; border: none; outline: none;
+  color: var(--text); font-size: 0.9rem;
+}
+.project-search-bar input::placeholder { color: var(--text-muted); }

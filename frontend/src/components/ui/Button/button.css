@@ -1,0 +1,30 @@
+/* Consolidates the two previously-duplicated CTA button classes:
+   .primary (components/auth/authForm.css) and .submit-btn
+   (pages/Session/Session.css, used by ExerciseCard). They had already
+   drifted slightly (0.75rem/0.92rem padding+font-size vs 0.65rem/0.87rem,
+   only .primary had cursor/active-press styling) — this picks the more
+   complete of the two as the single canonical style. */
+
+.btn-primary {
+  width: 100%;
+  background: var(--glow);
+  color: #1A1206;
+  border: none;
+  border-radius: 8px;
+  padding: 0.75rem;
+  font-size: 0.92rem;
+  font-weight: 600;
+  font-family: inherit;
+  cursor: pointer;
+  transition: filter 0.15s ease, transform 0.1s ease;
+}
+.btn-primary:hover { filter: brightness(1.08); }
+.btn-primary:active { transform: scale(0.99); }
+.btn-primary:focus-visible {
+  outline: 2px solid var(--glow);
+  outline-offset: 3px;
+}
+.btn-primary:disabled {
+  opacity: 0.6;
+  cursor: default;
+}

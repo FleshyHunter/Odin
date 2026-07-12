@@ -1,0 +1,137 @@
+/*
+  Odin — Global Design Tokens
+  Single source of truth for color, type, and base resets.
+
+  This file is the real fix for a question raised during design review:
+  "will colors stay uniform across screens automatically?" — in the two
+  standalone HTML prototypes (odin_login.html, odin_session.html) the
+  answer was NO, each file carried its own independent copy of these
+  variables, and they had already started to drift (see merge note below).
+  Importing THIS file from every component is what makes uniformity real
+  rather than coincidental. Change a value once, here, and everything
+  using var(--token-name) updates everywhere.
+
+  Merge note: this is the UNION of both prototypes' :root blocks, not
+  either one alone — login.html defined --node-dim (used by the
+  constellation graph) that session.html didn't have; session.html
+  defined --glow-dim and --success that login.html didn't have.
+  --success is defined but not yet wired to any component — it's the
+  anticipated "correct answer" feedback color for ExerciseCard, which
+  the Assessment Engine design implies but no component uses yet.
+*/
+
+@import url('https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,400;9..144,500;9..144,600&family=Inter:wght@400;500;600&display=swap');
+
+:root {
+  /* ---- Background layers ---- */
+  --bg: #0A0C10;
+  /* --bg: #050505; -- alternative: neutral true black, GPT-style, no blue tint.
+     Swap this in if the cool undertone ever needs revisiting — see
+     ARCHITECTURE_LOCK.md discussion for the reasoning behind the default. */
+  --bg-pane: #0D1015;
+
+  /* ---- Surfaces (cards, inputs, raised elements) ---- */
+  --surface: #14171D;
+  --surface-raised: #1A1E25;
+
+  /* ---- Borders ---- */
+  --border: #262B33;
+  --border-strong: #363C46;
+
+  /* ---- Text ---- */
+  --text: #EDEEF0;
+  --text-secondary: #9BA1AC;
+  --text-muted: #5C626D;
+
+  /* ---- Accent (the one deliberate signature color — see design notes.
+     Reserved for: primary buttons, the constellation glow, active/focus
+     states, and completion markers. Never used for body text or anything
+     read repeatedly at small size — legibility risk at low luminance. ) --- */
+  --glow: #E8B76A;
+  --glow-dim: #4A3D26;   /* muted backgrounds behind gold text/icons */
+  --node-dim: #3A4048;   /* unlit/unreached state — constellation nodes,
+                             dim UI elements before activation */
+
+  /* ---- Semantic (anticipated, not yet consumed by any component) ---- */
+  --success: #6FA98A;    /* reserved: correct-answer feedback state */
+  --error: #E08585;      /* already used inline for destructive actions
+                             (TrackMenu delete) — promoted to a token here
+                             so it's not hand-typed hex in component CSS */
+
+  /* ---- Focus ring ---- */
+  --focus: #E8B76A;
+
+  /* ---- Radii (observed pattern across both prototypes, formalized) ---- */
+  --radius-sm: 6px;
+  --radius-md: 8px;
+  --radius-lg: 10px;
+  --radius-xl: 12px;
+}
+
+/* ---------------- Base reset ---------------- */
+
+*, *::before, *::after {
+  box-sizing: border-box;
+}
+
+html, body {
+  margin: 0;
+  padding: 0;
+  height: 100%;
+  background: var(--bg);
+  color: var(--text);
+  font-family: 'Inter', -apple-system, sans-serif;
+  -webkit-font-smoothing: antialiased;
+}
+
+button, input, textarea, select {
+  font-family: inherit;
+}
+
+button {
+  cursor: pointer;
+}
+
+a {
+  color: inherit;
+}
+
+/* ---------------- Shared utility classes ---------------- */
+
+.display {
+  font-family: 'Fraunces', serif;
+  font-optical-sizing: auto;
+}
+
+/* Scrollbar styling — currently only used in the session view, but
+   global since any scrollable panel in the app should match. */
+::-webkit-scrollbar {
+  width: 8px;
+}
+::-webkit-scrollbar-thumb {
+  background: var(--border-strong);
+  border-radius: 8px;
+}
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+/* ---------------- Accessibility floor ----------------
+   Per the frontend-design skill's quality-floor requirement:
+   visible keyboard focus everywhere, reduced motion respected.
+   Component-level :focus-visible rules still apply per-element for
+   correct offset/shape, but this is the fallback for anything that
+   doesn't define its own. */
+
+:focus-visible {
+  outline: 2px solid var(--focus);
+  outline-offset: 2px;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+  }
+}

@@ -1,0 +1,95 @@
+/* Moved out of pages/Login/Login.css. .signin-pane-content is this
+   component's own root class, so no extra scoping prefix is needed. */
+
+.signin-pane-content {
+  width: 100%;
+  max-width: 420px;
+}
+
+.signin-pane-content h1.headline {
+  font-size: 2.1rem;
+  font-weight: 500;
+  line-height: 1.15;
+  margin: 0 0 0.45rem;
+  letter-spacing: -0.01em;
+}
+
+.signin-pane-content p.subhead {
+  font-size: 0.94rem;
+  color: var(--text-secondary);
+  margin: 0 0 2rem;
+}
+
+.signin-pane-content .field {
+  margin-bottom: 1.05rem;
+}
+
+.signin-pane-content .field label {
+  display: block;
+  font-size: 0.78rem;
+  color: var(--text-muted);
+  margin-bottom: 0.4rem;
+  font-weight: 500;
+}
+
+.signin-pane-content .field input {
+  width: 100%;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 0.7rem 0.85rem;
+  font-size: 0.92rem;
+  font-family: inherit;
+  color: var(--text);
+  transition: border-color 0.15s ease, background 0.15s ease;
+}
+
+.signin-pane-content .field input::placeholder { color: var(--text-muted); }
+.signin-pane-content .field input:hover { border-color: var(--border-strong); }
+.signin-pane-content .field input:focus-visible {
+  outline: none;
+  border-color: var(--glow);
+  background: var(--surface-raised);
+  box-shadow: 0 0 0 3px rgba(232, 183, 106, 0.12);
+}
+
+.signin-pane-content .row-between {
+  display: flex;
+  justify-content: flex-end;
+  align-items: center;
+  margin-bottom: 1.5rem;
+}
+
+.signin-pane-content .forgot-link {
+  font-size: 0.8rem;
+  color: var(--text-muted);
+  text-decoration: none;
+  transition: color 0.15s ease;
+}
+.signin-pane-content .forgot-link:hover { color: var(--text-secondary); }
+.signin-pane-content .forgot-link:focus-visible {
+  outline: 2px solid var(--focus);
+  outline-offset: 2px;
+  border-radius: 3px;
+}
+
+/* button.primary moved to components/ui/Button/button.css (.btn-primary) */
+
+.signin-pane-content .switch-line {
+  text-align: center;
+  margin-top: 1.4rem;
+  font-size: 0.85rem;
+  color: var(--text-muted);
+}
+
+.signin-pane-content .switch-line a.link {
+  color: var(--text);
+  text-decoration: underline;
+  text-underline-offset: 2px;
+  font-size: 0.85rem;
+}
+.signin-pane-content .switch-line a.link:focus-visible {
+  outline: 2px solid var(--focus);
+  outline-offset: 2px;
+  border-radius: 3px;
+}

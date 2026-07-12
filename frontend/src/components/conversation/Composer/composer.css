@@ -1,0 +1,67 @@
+/* Moved out of pages/Session/Session.css to live alongside the component
+   that owns it. Scoped under .composer (this component's own root class)
+   rather than .session-page — .icon-btn/.send-btn are exclusively used
+   here (verified: grep found no other component referencing them), so
+   this scoping is defensive, not currently load-bearing. */
+
+/* No horizontal padding here — .composer-box's width: 80% below needs to
+   be 80% of the FULL .conversation width, not 80% of an already-padded-in
+   content box (which would understate it). Vertical padding only. */
+.composer {
+  width: 100%;
+  display: flex; justify-content: center;
+  padding: 1rem 0 1.5rem;
+  border-top: 1px solid var(--border);
+}
+
+/* 80% of the .conversation column's width, centered — not edge-to-edge. */
+.composer .composer-box {
+  width: 80%;
+  display: flex; flex-direction: column;
+  background: var(--surface); border: 1px solid var(--border);
+  border-radius: 14px;
+  transition: border-color 0.15s ease;
+}
+.composer .composer-box:focus-within { border-color: var(--glow); }
+
+.composer .composer-textarea {
+  resize: none;
+  background: none; border: none; outline: none;
+  color: var(--text); font-size: 0.9rem; font-family: inherit;
+  line-height: 1.5;
+  padding: 0.7rem 0.9rem 0.3rem;
+  /* Starts at one row (matches the previous single-line input's height),
+     grows with content via JS (Composer.tsx), caps at half the
+     .conversation column's height, then scrolls internally past that. */
+  max-height: 50vh;
+  overflow-y: auto;
+}
+.composer .composer-textarea::placeholder { color: var(--text-muted); }
+
+.composer .composer-toolbar {
+  display: flex; align-items: center; justify-content: space-between;
+  padding: 0.35rem 0.55rem 0.55rem;
+}
+.composer .composer-toolbar-left {
+  display: flex; align-items: center; gap: 0.2rem;
+}
+
+.composer .icon-btn {
+  background: none; border: none; color: var(--text-muted);
+  display: flex; align-items: center; padding: 0.3rem;
+  border-radius: 6px; transition: color 0.15s ease;
+}
+.composer .icon-btn:hover { color: var(--text-secondary); }
+.composer .icon-btn:focus-visible { outline: 2px solid var(--focus); outline-offset: 1px; }
+.composer .icon-btn[aria-pressed="true"] { color: var(--glow); }
+.composer .icon-btn:disabled { opacity: 0.5; cursor: default; }
+
+.composer .send-btn {
+  background: var(--glow); border: none; color: #1A1206;
+  width: 36px; height: 36px; border-radius: 9px; flex-shrink: 0;
+  display: flex; align-items: center; justify-content: center;
+  transition: filter 0.15s ease;
+}
+.composer .send-btn:hover { filter: brightness(1.08); }
+.composer .send-btn:focus-visible { outline: 2px solid var(--focus); outline-offset: 2px; }
+.composer .send-btn:disabled { opacity: 0.5; cursor: default; }

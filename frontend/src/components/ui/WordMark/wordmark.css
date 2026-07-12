@@ -1,0 +1,13 @@
+/* Base layout for .wordmark — this component's own root class. Genuinely
+   missing until now: only the two per-consumer modifier classes existed
+   (.nav-wordmark in components/auth/authLayout.css, .sidebar-wordmark in
+   pages/Session/Session.css, both intentionally kept separate to avoid
+   the two pages' differing font-size/margin colliding), but neither ever
+   set display/gap. It only ever looked right by accident — the icon
+   <svg> and text <span> are both inline-level, so they sat side by side
+   in normal text flow with no real gap control. This is the real fix. */
+.wordmark {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+}

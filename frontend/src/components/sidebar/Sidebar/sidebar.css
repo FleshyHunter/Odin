@@ -1,0 +1,22 @@
+/* Moved out of pages/Session/Session.css. .sidebar is this component's
+   own root class, so no extra scoping prefix is needed. */
+
+.sidebar {
+  background: var(--bg-pane);
+  border-right: 1px solid var(--border);
+  display: flex;
+  flex-direction: column;
+  padding: 1rem 0.75rem;
+}
+
+/* .wordmark is shared with the auth pages' nav (Wordmark.tsx) but the two
+   contexts styled it differently — scoped via this modifier class
+   (Sidebar.tsx is the only place that ever passes
+   <Wordmark className="sidebar-wordmark">) to avoid colliding with
+   .nav-wordmark in components/auth/authLayout.css. */
+.sidebar-wordmark {
+  margin: 0.25rem 0.25rem 1.25rem;
+  font-size: 1rem;
+}
+
+.sidebar-spacer { flex: 1; }

@@ -1,0 +1,26 @@
+/* Moved out of pages/Session/Session.css. NavItem renders BOTH variants
+   below via its baseClassName prop ('nav-item' for Tracks/Projects/Pinned,
+   'recent-item' for RecentsList rows) — it's the sole component that ever
+   renders either class, so both blocks belong here now, not split. */
+
+.nav-item {
+  display: flex; align-items: center; gap: 0.6rem;
+  padding: 0.5rem 0.6rem; border-radius: 7px;
+  font-size: 0.85rem; color: var(--text-secondary);
+  cursor: pointer; transition: background 0.12s ease, color 0.12s ease;
+}
+.nav-item svg { flex-shrink: 0; opacity: 0.8; }
+.nav-item:hover { background: var(--surface); color: var(--text); }
+.nav-item.active { background: var(--surface); color: var(--text); font-weight: 500; }
+.nav-item:focus-visible { outline: 2px solid var(--focus); outline-offset: -2px; }
+
+.recent-item {
+  padding: 0.42rem 0.6rem; border-radius: 7px;
+  font-size: 0.83rem; color: var(--text-secondary);
+  cursor: pointer; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+  transition: background 0.12s ease, color 0.12s ease;
+}
+.recent-item:hover { background: var(--surface); color: var(--text); }
+.recent-item.active {
+  background: var(--glow-dim); color: var(--glow); font-weight: 500;
+}

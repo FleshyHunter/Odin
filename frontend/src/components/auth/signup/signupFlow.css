@@ -1,0 +1,69 @@
+/* New pieces needed for the multi-step signup wizard, on top of the
+   shared headline/subhead/field/button.primary/switch-line rules already
+   in components/auth/authForm.css (both scoped under .signin-pane-content,
+   so they apply here too). */
+
+.signin-pane-content .field input[readonly] {
+  color: var(--text-secondary);
+  cursor: default;
+}
+
+.signin-pane-content .resend-link {
+  display: block;
+  width: 100%;
+  margin: 0.9rem 0 0;
+  background: none;
+  border: none;
+  color: var(--text-muted);
+  font-size: 0.85rem;
+  text-decoration: underline;
+  text-underline-offset: 2px;
+  cursor: pointer;
+  text-align: center;
+}
+.signin-pane-content .resend-link:hover { color: var(--text-secondary); }
+.signin-pane-content .resend-link:focus-visible {
+  outline: 2px solid var(--focus);
+  outline-offset: 2px;
+  border-radius: 3px;
+}
+
+.signin-pane-content .auth-divider {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  margin: 1.4rem 0;
+  color: var(--text-muted);
+  font-size: 0.72rem;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+}
+.signin-pane-content .auth-divider::before,
+.signin-pane-content .auth-divider::after {
+  content: "";
+  flex: 1;
+  height: 1px;
+  background: var(--border);
+}
+
+.signin-pane-content .secondary-btn {
+  width: 100%;
+  background: none;
+  border: 1px solid var(--border-strong);
+  color: var(--text);
+  border-radius: 8px;
+  padding: 0.75rem;
+  font-size: 0.92rem;
+  font-weight: 500;
+  font-family: inherit;
+  cursor: pointer;
+  transition: border-color 0.15s ease, background 0.15s ease;
+}
+.signin-pane-content .secondary-btn:hover {
+  border-color: var(--glow);
+  background: var(--surface);
+}
+.signin-pane-content .secondary-btn:focus-visible {
+  outline: 2px solid var(--focus);
+  outline-offset: 2px;
+}
