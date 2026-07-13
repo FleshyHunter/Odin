@@ -3,17 +3,24 @@
    globally in global.css — only this page's own layout/component
    rules remain here. */
 
+/* Flexbox rather than grid: the sidebar's own width transitions (see
+   sidebar.css's .sidebar-collapsed) to animate its collapse, and a flex
+   item's width transition is far more reliably smooth cross-browser than
+   animating a grid-template-columns track. It also means this no longer
+   needs a distinct "empty" 2-column variant — a flex container just
+   naturally reflows around however many children it has (Sidebar, plus
+   either [conversation, active-panel], or a single main element for
+   Projects/Tracks/EmptyLanding). */
 .session-page .app-shell {
-  display: grid;
-  grid-template-columns: 220px 1fr 320px;
+  display: flex;
   height: 100vh;
 }
 
 /* ---------------- Sidebar ----------------
    .sidebar / .sidebar-spacer / .sidebar-wordmark moved to
-   components/sidebar/Sidebar/sidebar.css; .new-track moved to
-   components/sidebar/NewTrackButton/newTrackButton.css; .nav-item /
-   .recent-item moved to components/sidebar/NavItem/navItem.css */
+   components/sidebar/Sidebar/sidebar.css; .nav-item / .recent-item moved
+   to components/sidebar/NavItem/navItem.css. "New track" is a NavItem
+   like any other nav row now (no separate bespoke button component). */
 
 .session-page .section-label {
   font-size: 0.7rem; color: var(--text-muted);
@@ -37,20 +44,34 @@
 
 .session-page .conversation {
   display: flex; flex-direction: column;
-  min-width: 0;
+  flex: 1;
+  min-width: 420px;
 }
 
-/* ---------------- Empty landing (no active track yet) ----------------
-   No third (active-panel) column at all in this state — there's no
-   exercise/mastery to show anything for yet — so .app-shell switches to
-   a genuine 2-column grid rather than leaving an empty third column. */
-.session-page .app-shell-empty {
-  grid-template-columns: 220px 1fr;
+/* Resize handle between .conversation and .active-panel (see ChatView.tsx
+   for the drag logic). Both sides get a fixed min-width (conversation
+   above, .active-panel below) and neither is ever forced past its own
+   floor — the browser's flex layout enforces that on its own, so there's
+   no separate "max width" to compute for either side. */
+.session-page .active-panel-resize-handle {
+  width: 5px;
+  flex-shrink: 0;
+  cursor: col-resize;
+  background: transparent;
+  transition: background 0.15s ease;
 }
+.session-page .active-panel-resize-handle:hover,
+.session-page .active-panel-resize-handle.resizing {
+  background: var(--glow);
+}
+
+/* ---------------- Empty landing (no active track yet) ---------------- */
 
 .session-page .empty-main {
   display: flex; flex-direction: column;
   align-items: center; justify-content: center;
+  flex: 1;
+  min-width: 0;
   padding: 2rem; text-align: center;
 }
 
@@ -158,6 +179,16 @@
   background: var(--bg-pane); border-left: 1px solid var(--border);
   display: flex; flex-direction: column;
   padding: 1rem 1.1rem;
+  /* Width itself comes from an inline style (ChatView.tsx, driven by
+     useActivePanel's persisted state) — flex-grow:0 so it never silently
+     grows to fill extra space on its own, flex-shrink:1 + min-width so it
+     CAN compress down to its floor if the stored width doesn't fit the
+     current viewport (e.g. resized wide on a bigger screen, then opened
+     on a narrower one). */
+  flex-grow: 0;
+  flex-shrink: 1;
+  min-width: 320px;
+  overflow: hidden;
 }
 
 .session-page .panel-tabs {
@@ -244,5 +275,13 @@
 }
 
 @media (max-width: 1100px) {
-  .session-page .app-shell { grid-template-columns: 200px 1fr 280px; }
+  /* .active-panel isn't listed here anymore — its width comes from an
+     inline style now (ChatView.tsx), which always outranks a class-based
+     media query rule regardless of specificity, so a CSS override here
+     would just be dead code. Its own min-width (320px) plus the resize
+     handle already handle narrow viewports: the panel compresses down to
+     that floor if the stored/dragged width doesn't fit.
+     .sidebar isn't touched when collapsed (aside.sidebar.sidebar-collapsed
+     in sidebar.css outranks this two-class selector on specificity). */
+  .session-page .sidebar { width: 200px; }
 }

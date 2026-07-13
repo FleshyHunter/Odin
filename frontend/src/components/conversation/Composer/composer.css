@@ -29,7 +29,7 @@
   background: none; border: none; outline: none;
   color: var(--text); font-size: 0.9rem; font-family: inherit;
   line-height: 1.5;
-  padding: 0.7rem 0.9rem 0.3rem;
+  padding: 1.1rem 0.9rem 0.3rem;
   /* Starts at one row (matches the previous single-line input's height),
      grows with content via JS (Composer.tsx), caps at half the
      .conversation column's height, then scrolls internally past that. */
@@ -45,20 +45,24 @@
 .composer .composer-toolbar-left {
   display: flex; align-items: center; gap: 0.2rem;
 }
+.composer .composer-toolbar-right {
+  display: flex; align-items: center; gap: 0.4rem;
+}
 
 .composer .icon-btn {
-  background: none; border: none; color: var(--text-muted);
-  display: flex; align-items: center; padding: 0.3rem;
+  background: none; border: none; color: var(--text);
+  display: flex; align-items: center; justify-content: center;
+  width: 32px; height: 32px;
   border-radius: 6px; transition: color 0.15s ease;
 }
-.composer .icon-btn:hover { color: var(--text-secondary); }
+.composer .icon-btn:hover { color: var(--text); }
 .composer .icon-btn:focus-visible { outline: 2px solid var(--focus); outline-offset: 1px; }
 .composer .icon-btn[aria-pressed="true"] { color: var(--glow); }
 .composer .icon-btn:disabled { opacity: 0.5; cursor: default; }
 
 .composer .send-btn {
   background: var(--glow); border: none; color: #1A1206;
-  width: 36px; height: 36px; border-radius: 9px; flex-shrink: 0;
+  width: 32px; height: 32px; border-radius: 9px; flex-shrink: 0;
   display: flex; align-items: center; justify-content: center;
   transition: filter 0.15s ease;
 }

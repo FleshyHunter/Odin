@@ -1,9 +1,19 @@
 import type { Project } from '../types';
 import { simulateDelay } from './client';
 
-// In-memory only — same pattern as api/tracks.ts's track store. Starts
-// empty: no projects exist until the user actually creates one.
-const projects: Project[] = [];
+// In-memory only — same pattern as api/tracks.ts's track store. Normally
+// starts empty (true empty state — no projects until the user creates
+// one); one demo entry is seeded below at the user's explicit request, to
+// have something on screen while designing/reviewing the Projects and
+// Tracks list pages. Remove this entry to go back to a true empty start.
+const projects: Project[] = [
+  {
+    id: 'project-seed-1',
+    title: 'Machine Learning Research',
+    description: 'Understand papers on action recognition and build models that work with small training sets',
+    updatedAt: new Date().toISOString(),
+  },
+];
 
 // Real contract: GET /projects -> Project[]
 export async function listProjects(): Promise<Project[]> {

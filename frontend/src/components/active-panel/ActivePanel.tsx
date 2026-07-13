@@ -9,13 +9,14 @@ interface ActivePanelProps {
   exercise: Exercise | null;
   mastery: MasteryStatus | null;
   onSubmitAnswer?: (answer: string) => void;
+  width: number;
 }
 
-export function ActivePanel({ exercise, mastery, onSubmitAnswer }: ActivePanelProps) {
+export function ActivePanel({ exercise, mastery, onSubmitAnswer, width }: ActivePanelProps) {
   const [tab, setTab] = useState<PanelTab>('now');
 
   return (
-    <aside className="active-panel">
+    <aside className="active-panel" style={{ width }}>
       <div className="panel-tabs">
         <button className={tab === 'now' ? 'tab active' : 'tab'} onClick={() => setTab('now')}>
           Now

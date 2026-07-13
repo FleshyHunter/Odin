@@ -8,9 +8,9 @@ interface ProfileSwitcherProps {
 
 export function ProfileSwitcher({ displayName, onClick }: ProfileSwitcherProps) {
   return (
-    <div className="profile-switcher" role="button" tabIndex={0} onClick={onClick}>
-      <Avatar label={displayName} />
-      <span>{displayName}</span>
+    <div className="profile-switcher" role="button" tabIndex={0} onClick={onClick} title={displayName}>
+      <Avatar label={displayName} size={34} />
+      <span className="profile-name">{displayName}</span>
     </div>
   );
 }

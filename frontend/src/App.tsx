@@ -6,13 +6,17 @@ import { Signup } from './pages/Signup/Signup';
 import { SessionLayout } from './pages/Session/SessionLayout';
 import { ChatView } from './pages/Session/ChatView';
 import { Projects } from './pages/Projects/Projects';
+import { Tracks } from './pages/Tracks/Tracks';
 
 // No real backend session yet — isAuthenticated is still just local state
-// (see Login/useAuth's mock signIn/signUp). Per ARCHITECTURE_LOCK.md's
-// Routing section: /chat is the landing/chooser route (post-login),
-// /project is the Projects index — both real, linkable/refreshable URLs
-// rendered under one SessionLayout so the sidebar never remounts when
-// switching between them (same pattern as AuthLayout for /signin<->/signup).
+// (see Login/useAuth's mock signIn/signUp). /chat is the landing/chooser
+// route (post-login) and also the unified memoryless-or-track-backed
+// conversation route (/chat/:id, not yet added); /projects and /tracks are
+// each a browse-all index (plural, a deliberate deviation from
+// ARCHITECTURE_LOCK.md's singular /project convention). All three are
+// real, linkable/refreshable URLs rendered under one SessionLayout so the
+// sidebar never remounts when switching between them (same pattern as
+// AuthLayout for /signin<->/signup).
 function App() {
   const [isAuthenticated, setIsAuthenticated] = useState(false);
   const navigate = useNavigate();
@@ -45,7 +49,8 @@ function App() {
         }
       >
         <Route path="/chat" element={<ChatView />} />
-        <Route path="/project" element={<Projects />} />
+        <Route path="/projects" element={<Projects />} />
+        <Route path="/tracks" element={<Tracks />} />
       </Route>
       <Route path="*" element={<Navigate to="/chat" replace />} />
     </Routes>

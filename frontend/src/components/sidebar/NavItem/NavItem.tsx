@@ -27,9 +27,10 @@ export function NavItem({ icon, label, active, onClick, baseClassName = 'nav-ite
       tabIndex={0}
       onClick={onClick}
       onKeyDown={handleKeyDown}
+      title={label}
     >
       {icon}
-      {label}
+      <span className="nav-item-label">{label}</span>
     </div>
   );
 }

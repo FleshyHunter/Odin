@@ -32,7 +32,7 @@ export function Projects() {
         <Button onClick={handleNewProject}>+ New project</Button>
       </div>
 
-      <SearchBar value={search} onChange={setSearch} />
+      <SearchBar value={search} onChange={setSearch} placeholder="Search projects..." />
 
       <div className="projects-list">
         {filtered.length === 0 ? (
@@ -42,7 +42,14 @@ export function Projects() {
               : 'No projects match your search.'}
           </p>
         ) : (
-          filtered.map((project) => <ListItem key={project.id} project={project} />)
+          filtered.map((project) => (
+            <ListItem
+              key={project.id}
+              title={project.title}
+              date={project.updatedAt}
+              description={project.description}
+            />
+          ))
         )}
       </div>
     </main>

@@ -4,6 +4,17 @@
   display: flex;
   flex-direction: column;
   gap: 1.25rem;
+  /* .app-shell is a flex row (Session.css) — flex:1 lets this fill
+     whatever space the sidebar leaves, min-width:0 lets it shrink below
+     its content size instead of overflowing. max-width + margin:auto then
+     contains the actual content to a centered column rather than
+     stretching edge-to-edge on wide screens (matches Claude's own list
+     pages: a centered column, not full-bleed rows). */
+  flex: 1;
+  min-width: 0;
+  max-width: 900px;
+  margin: 0 auto;
+  width: 100%;
 }
 
 .projects-page-header {

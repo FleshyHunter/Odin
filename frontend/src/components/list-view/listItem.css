@@ -1,29 +1,29 @@
-.project-list-item {
+.list-item {
   padding: 0.9rem 0;
   border-bottom: 1px solid var(--border);
   cursor: pointer;
 }
-.project-list-item:hover .project-list-item-title { color: var(--glow); }
-.project-list-item:focus-visible {
+.list-item:hover .list-item-title { color: var(--glow); }
+.list-item:focus-visible {
   outline: 2px solid var(--focus);
   outline-offset: -2px;
 }
 
-.project-list-item-row {
+.list-item-row {
   display: flex; align-items: baseline; justify-content: space-between;
   gap: 1rem;
 }
 
-.project-list-item-title {
+.list-item-title {
   font-size: 0.95rem; font-weight: 500; color: var(--text);
   transition: color 0.15s ease;
 }
 
-.project-list-item-date {
+.list-item-date {
   font-size: 0.78rem; color: var(--text-muted); flex-shrink: 0;
 }
 
-.project-list-item-description {
+.list-item-description {
   margin: 0.3rem 0 0;
   font-size: 0.85rem; color: var(--text-secondary);
   overflow: hidden; text-overflow: ellipsis; white-space: nowrap;

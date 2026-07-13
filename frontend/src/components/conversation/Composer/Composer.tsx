@@ -74,11 +74,14 @@ export function Composer({ onSend, disabled, isSending }: ComposerProps) {
             {/* No defined behavior yet (Claude's reference opens an
                 attachment/tools menu) — placeholder affordance only. */}
             <button className="icon-btn" aria-label="Add" disabled={disabled}>
-              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.8}>
+              <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.8}>
                 <line x1="12" y1="5" x2="12" y2="19" />
                 <line x1="5" y1="12" x2="19" y2="12" />
               </svg>
             </button>
+          </div>
+
+          <div className="composer-toolbar-right">
             <button
               className="icon-btn"
               aria-label={status === 'recording' ? 'Stop recording' : 'Voice input'}
@@ -92,25 +95,25 @@ export function Composer({ onSend, disabled, isSending }: ComposerProps) {
                 <line x1="12" y1="19" x2="12" y2="23" />
               </svg>
             </button>
-          </div>
 
-          <button
-            className="send-btn"
-            aria-label={isSending ? 'Stop' : 'Send'}
-            onClick={handleSend}
-            disabled={disabled}
-          >
-            {isSending ? (
-              <svg width="12" height="12" viewBox="0 0 24 24" fill="currentColor">
-                <rect x="3" y="3" width="18" height="18" rx="4" />
-              </svg>
-            ) : (
-              <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2.2}>
-                <line x1="12" y1="19" x2="12" y2="5" />
-                <polyline points="5 12 12 5 19 12" />
-              </svg>
-            )}
-          </button>
+            <button
+              className="send-btn"
+              aria-label={isSending ? 'Stop' : 'Send'}
+              onClick={handleSend}
+              disabled={disabled}
+            >
+              {isSending ? (
+                <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor">
+                  <rect x="3" y="3" width="18" height="18" rx="4" />
+                </svg>
+              ) : (
+                <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2.2}>
+                  <line x1="12" y1="19" x2="12" y2="5" />
+                  <polyline points="5 12 12 5 19 12" />
+                </svg>
+              )}
+            </button>
+          </div>
         </div>
       </div>
     </div>

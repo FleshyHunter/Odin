@@ -1,9 +1,9 @@
 import type { Track } from '../../../types';
 import { Wordmark } from '../../ui/WordMark/Wordmark';
-import { NewTrackButton } from '../NewTrackButton/NewTrackButton';
 import { NavItem } from '../NavItem/NavItem';
 import { RecentsList } from '../RecentsList';
 import { ProfileSwitcher } from '../Profile/Profile';
+import { useSidebarCollapsed } from '../../../hooks/useSidebarCollapsed';
 import './sidebar.css';
 
 export type SidebarSection = 'tracks' | 'projects' | 'pinned';
@@ -38,6 +38,25 @@ const PINNED_ICON = (
   </svg>
 );
 
+const TOGGLE_ICON = (
+  <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.7}>
+    <rect x="3" y="4" width="18" height="16" rx="2" />
+    <line x1="9" y1="4" x2="9" y2="20" />
+  </svg>
+);
+
+// "Compose" icon (ChatGPT's new-chat glyph) — a square outline with a
+// pencil crossing its top-right corner. Chosen deliberately over a plain
+// "+": as a filled/outlined square it already carries enough visual
+// weight as a plain NavItem row, unlike a thin cross which would need an
+// extra badge/background to read as an action (see New track's history).
+const COMPOSE_ICON = (
+  <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.7} strokeLinecap="round" strokeLinejoin="round">
+    <path d="M12 3H5a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7" />
+    <path d="M18.375 2.625a1 1 0 0 1 3 3l-9.013 9.014a2 2 0 0 1-.853.505l-2.873.84a.5.5 0 0 1-.62-.62l.84-2.873a2 2 0 0 1 .506-.852z" />
+  </svg>
+);
+
 export function Sidebar({
   tracks,
   activeTrackId,
@@ -47,11 +66,23 @@ export function Sidebar({
   activeSection,
   onSectionChange,
 }: SidebarProps) {
-  return (
-    <aside className="sidebar">
-      <Wordmark showIcon={false} className="sidebar-wordmark" />
+  const { collapsed, toggle } = useSidebarCollapsed();
 
-      <NewTrackButton onClick={onNewTrack} />
+  return (
+    <aside className={collapsed ? 'sidebar sidebar-collapsed' : 'sidebar'}>
+      <div className="sidebar-top-row">
+        <Wordmark showIcon={false} className="sidebar-wordmark" />
+        <button
+          className="sidebar-toggle"
+          onClick={toggle}
+          aria-label={collapsed ? 'Expand sidebar' : 'Collapse sidebar'}
+          aria-pressed={collapsed}
+        >
+          {TOGGLE_ICON}
+        </button>
+      </div>
+
+      <NavItem icon={COMPOSE_ICON} label="New track" onClick={onNewTrack} />
 
       <NavItem
         icon={TRACKS_ICON}
@@ -72,23 +103,24 @@ export function Sidebar({
         onClick={() => onSectionChange('pinned')}
       />
 
-      {activeSection === 'pinned' ? (
-        <RecentsList
-          label="Pinned"
-          tracks={tracks.filter((track) => track.pinned)}
-          activeTrackId={activeTrackId}
-          onSelect={onSelectTrack}
-          emptyMessage="Nothing pinned yet — pin a track from its menu to see it here."
-        />
-      ) : (
-        <RecentsList
-          label="Recents"
-          tracks={tracks}
-          activeTrackId={activeTrackId}
-          onSelect={onSelectTrack}
-          emptyMessage="Nothing yet — start a track and it'll show up here."
-        />
-      )}
+      {!collapsed &&
+        (activeSection === 'pinned' ? (
+          <RecentsList
+            label="Pinned"
+            tracks={tracks.filter((track) => track.pinned)}
+            activeTrackId={activeTrackId}
+            onSelect={onSelectTrack}
+            emptyMessage="Nothing pinned yet — pin a track from its menu to see it here."
+          />
+        ) : (
+          <RecentsList
+            label="Recents"
+            tracks={tracks}
+            activeTrackId={activeTrackId}
+            onSelect={onSelectTrack}
+            emptyMessage="Nothing yet — start a track and it'll show up here."
+          />
+        ))}
 
       <div className="sidebar-spacer" />
 

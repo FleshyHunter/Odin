@@ -10,16 +10,22 @@ interface SessionLayoutProps {
 }
 
 export interface SessionOutletContext {
+  tracks: Track[];
   activeTrackId: string;
   activeTrack: Track | null;
   setActiveTrackId: (id: string) => void;
+  createTrack: (title: string) => Promise<Track>;
   removeTrack: (id: string) => Promise<void>;
   togglePin: (id: string) => Promise<void>;
 }
 
-// Layout route for /chat and /project (see App.tsx) — mirrors AuthLayout's
-// pattern: this (and the Sidebar it renders) stays mounted across
-// navigation between the two; only the matched child swaps via <Outlet />.
+// Layout route for /chat, /projects and /tracks (see App.tsx) — mirrors
+// AuthLayout's pattern: this (and the Sidebar it renders) stays mounted
+// across navigation between them; only the matched child swaps via
+// <Outlet />. tracks/createTrack are passed through the outlet context
+// (not just used locally for the Sidebar) so the Tracks browse page reads
+// and writes the exact same list the Sidebar does, rather than each
+// holding its own separate useTracks() copy that could drift out of sync.
 // Section highlighting is derived from the URL itself now (real routes),
 // not local state — except "Pinned", which still has no route/content of
 // its own (out of scope so far), so it stays a harmless local-only toggle.
@@ -30,7 +36,10 @@ export function SessionLayout({ profileName }: SessionLayoutProps) {
   const location = useLocation();
   const navigate = useNavigate();
 
-  const urlSection: SidebarSection = location.pathname.startsWith('/project') ? 'projects' : 'tracks';
+  // "Tracks" nav now mirrors "Projects" exactly: both point at their own
+  // browse-all page. /chat (bare) is reached by opening a track from any
+  // list, not by clicking "Tracks" — so it isn't part of this check.
+  const urlSection: SidebarSection = location.pathname.startsWith('/projects') ? 'projects' : 'tracks';
   const activeSection: SidebarSection = pinnedActive ? 'pinned' : urlSection;
 
   const handleSectionChange = (section: SidebarSection) => {
@@ -39,7 +48,7 @@ export function SessionLayout({ profileName }: SessionLayoutProps) {
       return;
     }
     setPinnedActive(false);
-    navigate(section === 'projects' ? '/project' : '/chat');
+    navigate(section === 'projects' ? '/projects' : '/tracks');
   };
 
   const handleSelectTrack = (trackId: string) => {
@@ -62,11 +71,15 @@ export function SessionLayout({ profileName }: SessionLayoutProps) {
   };
 
   const activeTrack = tracks.find((track) => track.id === activeTrackId) ?? null;
-  const showConversation = urlSection === 'tracks' && !!activeTrack;
 
   return (
     <div className="session-page">
-      <div className={showConversation ? 'app-shell' : 'app-shell app-shell-empty'}>
+      {/* .app-shell is a flex row now (see Session.css) — it naturally
+          reflows around however many children the Outlet renders (2 for
+          Projects/Tracks/EmptyLanding, 3 for an open conversation's
+          conversation+active-panel), so no separate "empty" variant
+          class is needed here anymore. */}
+      <div className="app-shell">
         <Sidebar
           tracks={tracks}
           activeTrackId={activeTrackId}
@@ -79,7 +92,15 @@ export function SessionLayout({ profileName }: SessionLayoutProps) {
 
         <Outlet
           context={
-            { activeTrackId, activeTrack, setActiveTrackId, removeTrack, togglePin } satisfies SessionOutletContext
+            {
+              tracks,
+              activeTrackId,
+              activeTrack,
+              setActiveTrackId,
+              createTrack,
+              removeTrack,
+              togglePin,
+            } satisfies SessionOutletContext
           }
         />
       </div>

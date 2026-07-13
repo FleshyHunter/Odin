@@ -23,16 +23,29 @@
 @import url('https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,400;9..144,500;9..144,600&family=Inter:wght@400;500;600&display=swap');
 
 :root {
-  /* ---- Background layers ---- */
-  --bg: #0A0C10;
-  /* --bg: #050505; -- alternative: neutral true black, GPT-style, no blue tint.
-     Swap this in if the cool undertone ever needs revisiting — see
-     ARCHITECTURE_LOCK.md discussion for the reasoning behind the default. */
-  --bg-pane: #0D1015;
+  /* ---- Background layers ----
+     Sidebar/side-panels now deliberately DARKER than the main content
+     area (reversed from the original where --bg-pane was slightly
+     lighter than --bg) — the content column reads as the visual "stage",
+     the flanking panels recede. --bg-pane is shared by the sidebar, the
+     active-panel, and the auth page's constellation canvas, so all three
+     get darker together. */
+  --bg: #12151B;
+  /* --bg: #0A0C10; -- previous. */
+  --bg-pane: #08090C;
+  /* --bg-pane: #0D1015; -- previous (was lighter than --bg, backwards
+     from the depth hierarchy intended here). */
 
   /* ---- Surfaces (cards, inputs, raised elements) ---- */
-  --surface: #14171D;
-  --surface-raised: #1A1E25;
+  --surface: #222630;
+  /* --surface: #1C2028; -- previous; #14171D before that. Lightened
+     again per feedback that the composer/cards still read too close to
+     the (now-lighter) content background. */
+  --surface-raised: #282D37;
+  /* Bumped up alongside --surface to preserve the
+     surface < surface-raised < border layering — otherwise raised
+     elements (active tabs, the track dropdown menu) would render
+     darker than the plain surface behind them. */
 
   /* ---- Borders ---- */
   --border: #262B33;

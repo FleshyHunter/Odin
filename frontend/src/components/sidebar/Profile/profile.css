@@ -7,4 +7,32 @@
   margin-top: 0.5rem; cursor: pointer; border-radius: 7px;
 }
 .profile-switcher:hover { background: var(--surface); }
-.profile-switcher span { font-size: 0.83rem; color: var(--text-secondary); }
+
+/* See navItem.css's .nav-item-label for why this fades/collapses rather
+   than vanishing outright when the sidebar collapses. */
+.profile-name {
+  font-size: 0.83rem; color: var(--text-secondary);
+  overflow: hidden; white-space: nowrap;
+  max-width: 160px; opacity: 1;
+  transition: opacity 0.15s ease, max-width 0.2s ease;
+}
+.sidebar-collapsed .profile-name { max-width: 0; opacity: 0; }
+
+/* Unlike the nav icons above (which deliberately never shift — see
+   navItem.css), the avatar is allowed to move and grow: it's the one
+   element meant to read as bigger/more prominent than a plain nav icon,
+   closer to the rail's edges rather than boxed into the same tight
+   column, matching the reference where the profile badge visibly
+   "pushes out" past the nav icons' inset.
+   Padding is small and equal on all sides (rather than just left/right)
+   so the row settles into a square around the 34px avatar (~40x40,
+   matching the nav-item tiles above) instead of the tall rectangle it
+   was before — that shape came from keeping the old vertical padding
+   (sized for a plain single-line name row) after the avatar itself grew
+   bigger, without ever shrinking to match. */
+.sidebar-collapsed .profile-switcher {
+  gap: 0;
+  justify-content: center;
+  padding: 0.2rem;
+  transition: padding 0.2s ease;
+}

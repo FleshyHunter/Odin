@@ -1,11 +1,24 @@
 import type { ChatMessage, Track } from '../types';
 import { simulateDelay } from './client';
 
-// In-memory only — stands in for a real backend/DB row set. Starts empty:
-// no tracks exist until the user actually creates one (true empty state,
-// not a pre-seeded example). Lost on page refresh; that's expected for a
-// stub, not a bug.
-const tracks: Track[] = [];
+// In-memory only — stands in for a real backend/DB row set. Normally
+// starts empty (true empty state — no tracks until the user creates one);
+// one demo entry is seeded below at the user's explicit request, to have
+// something on screen while designing/reviewing the Tracks list page.
+// Remove this entry to go back to a true empty start. Lost on page
+// refresh either way; that's expected for a stub, not a bug.
+const tracks: Track[] = [
+  {
+    id: 'track-seed-1',
+    title: 'Linear Algebra',
+    subjectTitle: 'Linear Algebra',
+    currentConceptTitle: 'Eigenvalues & Eigenvectors',
+    status: 'active',
+    pinned: false,
+    projectId: null,
+    lastActiveAt: new Date().toISOString(),
+  },
+];
 
 // Real contract: GET /tracks -> Track[]
 export async function listTracks(): Promise<Track[]> {

@@ -7,6 +7,32 @@
   display: flex;
   flex-direction: column;
   padding: 1rem 0.75rem;
+  width: 220px;
+  flex-shrink: 0;
+  overflow-x: hidden;
+  transition: width 0.2s ease;
+}
+
+/* Icon-only rail. Padding deliberately stays IDENTICAL to the expanded
+   state (only width changes) — every icon below sits at a fixed offset
+   from the sidebar's left edge in both states, so nothing shifts
+   position mid-transition. Only the trailing label space (nav-item-label,
+   new-track-label, profile-name — each with their own max-width/opacity
+   transition) shrinks away, giving a "drawer closing beside a fixed icon
+   column" effect rather than the whole row re-flowing.
+   Specificity bumped with the element selector so this reliably wins
+   over the .session-page .sidebar responsive breakpoint below
+   (Session.css) regardless of CSS import order — both are otherwise
+   two-class selectors that would tie. */
+aside.sidebar.sidebar-collapsed {
+  width: 64px;
+}
+
+.sidebar-top-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin: 0.25rem 0.25rem 1.25rem;
 }
 
 /* .wordmark is shared with the auth pages' nav (Wordmark.tsx) but the two
@@ -15,8 +41,20 @@
    <Wordmark className="sidebar-wordmark">) to avoid colliding with
    .nav-wordmark in components/auth/authLayout.css. */
 .sidebar-wordmark {
-  margin: 0.25rem 0.25rem 1.25rem;
   font-size: 1rem;
+  overflow: hidden; white-space: nowrap;
+  max-width: 140px; opacity: 1;
+  transition: opacity 0.15s ease, max-width 0.2s ease;
 }
+.sidebar-collapsed .sidebar-wordmark { max-width: 0; opacity: 0; }
+
+.sidebar-toggle {
+  flex-shrink: 0;
+  background: none; border: none; color: var(--text);
+  display: flex; align-items: center; padding: 0.4rem;
+  border-radius: 6px; transition: color 0.15s ease, background 0.15s ease;
+}
+.sidebar-toggle:hover { color: var(--text); background: var(--surface); }
+.sidebar-toggle:focus-visible { outline: 2px solid var(--focus); outline-offset: 1px; }
 
 .sidebar-spacer { flex: 1; }

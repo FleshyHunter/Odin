@@ -6,13 +6,35 @@
 .nav-item {
   display: flex; align-items: center; gap: 0.6rem;
   padding: 0.5rem 0.6rem; border-radius: 7px;
-  font-size: 0.85rem; color: var(--text-secondary);
-  cursor: pointer; transition: background 0.12s ease, color 0.12s ease;
+  font-size: 0.85rem; color: var(--text);
+  cursor: pointer; transition: background 0.12s ease, color 0.12s ease, padding 0.2s ease;
 }
-.nav-item svg { flex-shrink: 0; opacity: 0.8; }
+.nav-item svg { flex-shrink: 0; }
 .nav-item:hover { background: var(--surface); color: var(--text); }
 .nav-item.active { background: var(--surface); color: var(--text); font-weight: 500; }
 .nav-item:focus-visible { outline: 2px solid var(--focus); outline-offset: -2px; }
+
+/* Label fades/collapses to zero width when the sidebar collapses
+   (.sidebar-collapsed, see sidebar.css) — animated in tandem with the
+   sidebar's own width transition rather than vanishing abruptly. */
+.nav-item-label {
+  overflow: hidden; white-space: nowrap;
+  max-width: 160px; opacity: 1;
+  transition: opacity 0.15s ease, max-width 0.2s ease;
+}
+.sidebar-collapsed .nav-item-label { max-width: 0; opacity: 0; }
+/* gap and vertical padding only — left/right padding deliberately never
+   changes (that's what keeps the icon's horizontal position fixed, see
+   sidebar.css). Vertical padding DOES grow here: at the base 0.5rem the
+   row renders ~39x31px when collapsed — a wide rectangle, since width is
+   pinned to the sidebar's available column but height was never sized to
+   match. Bumping top/bottom padding brings height to ~39px too, making
+   each collapsed row a proper square tile instead. */
+.sidebar-collapsed .nav-item {
+  gap: 0;
+  padding-top: 0.75rem;
+  padding-bottom: 0.75rem;
+}
 
 .recent-item {
   padding: 0.42rem 0.6rem; border-radius: 7px;
