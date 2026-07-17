@@ -1,0 +1,31 @@
+# Local-dev compose for the three app-layer services (backend, ai
+# service, frontend). This is a DIFFERENT scope from the locked
+# architecture's own eventual docker-compose.yml, which covers the
+# Windows-side services instead (postgres, chromadb, redis, ai_service,
+# ollama) — per Hardware Distribution, the Rust backend and React
+# frontend normally run natively on the Mac dev machine, not
+# containerized. This file exists for local containerized dev/testing
+# convenience on top of that, not as a replacement for it.
+#
+# ai_service will fail to build until Block 4 adds real application
+# code (requirements.txt, app/main.py) — see ai_service/Dockerfile.
+services:
+  backend:
+    build:
+      context: ./backend
+    env_file:
+      - ./backend/.env
+    ports:
+      - "8080:8080"
+
+  ai_service:
+    build:
+      context: ./ai_service
+    ports:
+      - "8000:8000"
+
+  frontend:
+    build:
+      context: ./frontend
+    ports:
+      - "5173:80"

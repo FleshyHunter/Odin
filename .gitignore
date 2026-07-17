@@ -26,3 +26,15 @@ dist-ssr
 # Project-local directories
 /prototypes/
 /.claude/
+/markdown/
+/prompt sequence/
+
+# Rust backend
+/backend/target/
+/backend/.env
+
+# Python AI service
+/ai_service/__pycache__/
+/ai_service/.venv/
+/ai_service/*.pyc
+/ai_service/.env
