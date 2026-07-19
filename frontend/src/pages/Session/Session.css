@@ -262,18 +262,6 @@
   line-height: 1.5;
 }
 
-/* New: Map tab placeholder (NC4 unresolved — no prototype markup exists
-   for this, since the tab never had real content designed). Minimal,
-   consistent with the panel's existing muted/centered footnote style. */
-.session-page .panel-map-placeholder {
-  flex: 1;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  text-align: center;
-  padding: 2rem 1rem;
-}
-
 @media (max-width: 1100px) {
   /* .active-panel isn't listed here anymore — its width comes from an
      inline style now (ChatView.tsx), which always outranks a class-based

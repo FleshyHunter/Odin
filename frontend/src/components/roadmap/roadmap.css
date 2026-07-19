@@ -1,0 +1,68 @@
+.roadmap-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  margin-bottom: 0.6rem;
+}
+
+.roadmap-header h3 {
+  font-size: 0.95rem;
+  font-weight: 500;
+  margin: 0;
+}
+
+.roadmap-progress {
+  font-size: 0.75rem;
+  color: var(--text-muted);
+}
+
+.roadmap-canvas-wrap {
+  position: relative;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  height: 480px;
+  overflow: hidden;
+}
+
+.roadmap-legend {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.8rem;
+  margin-top: 0.85rem;
+  font-size: 0.72rem;
+  color: var(--text-muted);
+}
+
+.roadmap-legend-item {
+  display: flex;
+  align-items: center;
+  gap: 0.35rem;
+}
+
+.roadmap-legend-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  flex-shrink: 0;
+  background: var(--node-dim);
+}
+
+.roadmap-legend-dot.mastered {
+  background: var(--glow);
+}
+
+.roadmap-legend-dot.current {
+  background: var(--glow);
+  box-shadow:
+    0 0 0 2px var(--bg),
+    0 0 0 3px var(--glow);
+}
+
+.roadmap-legend-swatch-collapsed {
+  width: 12px;
+  height: 8px;
+  border: 1.5px dashed var(--text-muted);
+  border-radius: 3px;
+  flex-shrink: 0;
+}

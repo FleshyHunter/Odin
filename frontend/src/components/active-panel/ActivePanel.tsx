@@ -1,5 +1,6 @@
 import { useState } from 'react';
 import type { Exercise, MasteryStatus } from '../../types';
+import { Roadmap } from '../roadmap/Roadmap';
 import { ExerciseCard } from './ExerciseCard';
 import { MasteryBar } from './MasteryBar';
 
@@ -36,18 +37,7 @@ export function ActivePanel({ exercise, mastery, onSubmitAnswer, width }: Active
         </>
       )}
 
-      {tab === 'map' && (
-        // NC4 (ARCHITECTURE_LOCK.md, Remaining Unresolved): the Map tab's
-        // real content (journey DAG view) and its placement relative to
-        // the Tracks/Projects sidebar structure was never re-confirmed
-        // after the sidebar redesign. Placeholder only — per the handoff's
-        // explicit instruction not to invent the real DAG view here.
-        <div className="panel-map-placeholder">
-          <p className="panel-footnote">
-            Journey map view — not yet designed (see ARCHITECTURE_LOCK.md, NC4).
-          </p>
-        </div>
-      )}
+      {tab === 'map' && <Roadmap />}
     </aside>
   );
 }

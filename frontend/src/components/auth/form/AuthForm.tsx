@@ -1,7 +1,7 @@
 import { useState, type FormEvent } from 'react';
 import { Link } from 'react-router-dom';
-import { useAuth } from '../../hooks/useAuth';
-import { Button } from '../ui/Button/Button';
+import { useAuth } from '../../../hooks/useAuth';
+import { Button } from '../../ui/Button/Button';
 import './authForm.css';
 
 interface AuthFormProps {

@@ -1,0 +1,25 @@
+.roadmap-pulse-ring {
+  fill: none;
+  stroke: var(--glow);
+  stroke-width: 1.5;
+  opacity: 0.35;
+  transform-box: fill-box;
+  transform-origin: center;
+  animation: roadmap-pulse 2.4s ease-in-out infinite;
+}
+
+@keyframes roadmap-pulse {
+  0%,
+  100% {
+    transform: scale(1);
+    opacity: 0.35;
+  }
+  25% {
+    transform: scale(1.15);
+    opacity: 0.6;
+  }
+  75% {
+    transform: scale(0.85);
+    opacity: 0.1;
+  }
+}

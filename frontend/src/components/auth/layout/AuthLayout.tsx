@@ -1,6 +1,6 @@
 import { Outlet } from 'react-router-dom';
-import { Wordmark } from '../ui/WordMark/Wordmark';
-import { BigDipperCanvas } from '../ui/BigDipper/BigDipperCanvas';
+import { Wordmark } from '../../ui/WordMark/Wordmark';
+import { BigDipperCanvas } from '../../ui/BigDipper/BigDipperCanvas';
 import './authLayout.css';
 
 // Wraps both /signin and /signup as a React Router layout route (see
