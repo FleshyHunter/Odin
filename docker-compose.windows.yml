@@ -1,0 +1,68 @@
+# Windows-side compose — the services Hardware Distribution assigns to
+# the Windows RTX PC: postgres, chromadb, ai_service, ollama. This is a
+# DIFFERENT scope from the root docker-compose.yml, which is Mac-only
+# local-dev convenience for the app-layer services (backend, frontend)
+# that normally run natively per Hardware Distribution.
+#
+# Redis is deliberately NOT included here — it's currently running
+# natively via Memurai on Windows, not containerized. Revisit separately
+# if that changes.
+#
+# Requires a .env file alongside this one (gitignored, Windows-side
+# only) with at least POSTGRES_PASSWORD set for the admin/bootstrap
+# "odin" role — never commit a real value into this file. Note this
+# only bootstraps that one admin role; the restricted odin_app role
+# (used by DATABASE_URL in backend/.env) still has to be created
+# separately, the same manual step already done on the real Windows
+# Postgres instance — not yet automated here.
+services:
+  postgres:
+    image: postgres:17
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: odin
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      POSTGRES_DB: odin
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+
+  chromadb:
+    image: chromadb/chroma
+    ports:
+      # Host 8001, not 8000 — 8000 is the FastAPI AI service's locked
+      # port (ARCHITECTURE.md Ports table); this only avoids a host-port
+      # collision between the two containers, not a locked value itself.
+      - "8001:8000"
+    volumes:
+      - chromadb_data:/chroma/chroma
+
+  ai_service:
+    build:
+      context: ./ai_service
+    ports:
+      - "8000:8000"
+
+  ollama:
+    image: ollama/ollama
+    ports:
+      - "11434:11434"
+    volumes:
+      - ollama_data:/root/.ollama
+    # Requires the NVIDIA Container Toolkit (and, on Windows, Docker
+    # Desktop's WSL2 GPU passthrough) already set up on the host —
+    # without it this silently falls back to CPU-only inference on the
+    # RTX 3060 sitting right there, defeating the point of this hardware.
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]
+
+volumes:
+  postgres_data:
+  chromadb_data:
+  ollama_data:
