@@ -26,8 +26,11 @@ pub fn router() -> Router<AppState> {
         .route("/auth/login/password", post(handlers::login_password))
         .route("/auth/login/request-otp", post(handlers::login_request_otp))
         .route("/auth/login/verify-otp", post(handlers::login_verify_otp))
-        .route("/auth/refresh", post(handlers::refresh))
-        .route("/auth/logout", post(handlers::logout))
+        // Same path as the refresh cookie's locked narrow scope (Rule
+        // 49: "/auth/refresh") for both — logout is DELETE on that same
+        // path rather than a separate /auth/logout route, since a
+        // browser matches a cookie's Path regardless of HTTP method.
+        .route("/auth/refresh", post(handlers::refresh).delete(handlers::logout))
         .route("/auth/password-reset/request", post(handlers::password_reset_request))
         .route("/auth/password-reset/confirm", post(handlers::password_reset_confirm))
         .route("/auth/me", get(me))

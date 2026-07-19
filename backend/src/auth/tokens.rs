@@ -9,6 +9,7 @@ use uuid::Uuid;
 use super::errors::AuthError;
 use super::hash_utils::sha256_hex;
 use super::jwt;
+use super::middleware::begin_rls_transaction;
 
 pub struct IssuedTokens {
     pub access_token: String,
@@ -33,14 +34,23 @@ pub async fn issue_tokens(
     let token_hash = sha256_hex(&refresh_token);
     let expires_at = chrono::Utc::now() + chrono::Duration::days(refresh_days);
 
+    // refresh_tokens is RLS-protected like everything else — inserting
+    // through a plain pool connection (no app.current_user_id set)
+    // fails the same policy every other table enforces. This is the one
+    // place that policy has to be satisfied "bootstrapping" a session
+    // rather than operating inside an already-authenticated request, so
+    // it scopes its own short-lived transaction to the user it just
+    // confirmed, the same way every other RLS-scoped write does.
+    let mut tx = begin_rls_transaction(pool, user_id).await?;
     sqlx::query(
         "INSERT INTO refresh_tokens (user_id, token_hash, expires_at) VALUES ($1, $2, $3)",
     )
     .bind(user_id)
     .bind(&token_hash)
     .bind(expires_at)
-    .execute(pool)
+    .execute(&mut *tx)
     .await?;
+    tx.commit().await?;
 
     Ok(IssuedTokens { access_token, refresh_token })
 }

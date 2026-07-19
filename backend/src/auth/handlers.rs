@@ -38,6 +38,13 @@ pub struct AuthResponse {
     user: UserPublic,
 }
 
+// Rule 49 locks this to the narrow path (/auth/refresh) — logout lives
+// at the SAME path via a different HTTP method (DELETE /auth/refresh,
+// see router()) rather than widening this, since a browser matches
+// cookies by path, not method. That keeps the cookie's exposure exactly
+// as narrow as the rule requires while still letting logout read it.
+const REFRESH_COOKIE_PATH: &str = "/auth/refresh";
+
 fn refresh_cookie(token: &str, days: i64) -> Cookie<'static> {
     // Secure(true) omitted deliberately for now — this is plain HTTP in
     // local dev (see Rule 49's "Secure in production"); flip on once
@@ -45,7 +52,7 @@ fn refresh_cookie(token: &str, days: i64) -> Cookie<'static> {
     Cookie::build(("refresh_token", token.to_string()))
         .http_only(true)
         .same_site(SameSite::Lax)
-        .path("/auth/refresh")
+        .path(REFRESH_COOKIE_PATH)
         .max_age(CookieDuration::days(days))
         .build()
 }
@@ -243,6 +250,11 @@ pub async fn refresh(
     let user_id = Uuid::parse_str(&claims.sub).map_err(|_| AuthError::InvalidRefreshToken)?;
 
     let token_hash = sha256_hex(&raw_token);
+    // refresh_tokens is RLS-protected — a plain pool query here would
+    // silently see zero rows (no app.current_user_id set), rejecting
+    // every refresh regardless of validity. We already have user_id
+    // from the verified JWT, so scope the read to it.
+    let mut tx = super::middleware::begin_rls_transaction(&state.pool, user_id).await?;
     let valid: bool = sqlx::query_scalar(
         "SELECT EXISTS(
             SELECT 1 FROM refresh_tokens
@@ -252,8 +264,9 @@ pub async fn refresh(
     )
     .bind(user_id)
     .bind(&token_hash)
-    .fetch_one(&state.pool)
+    .fetch_one(&mut *tx)
     .await?;
+    tx.commit().await?;
 
     if !valid {
         return Err(AuthError::InvalidRefreshToken);
@@ -265,13 +278,32 @@ pub async fn refresh(
 
 pub async fn logout(State(state): State<AppState>, jar: CookieJar) -> Result<(CookieJar, StatusCode), AuthError> {
     if let Some(raw_token) = jar.get("refresh_token").map(|c| c.value().to_string()) {
-        let token_hash = sha256_hex(&raw_token);
-        sqlx::query("UPDATE refresh_tokens SET revoked_at = NOW() WHERE token_hash = $1 AND revoked_at IS NULL")
-            .bind(&token_hash)
-            .execute(&state.pool)
-            .await?;
+        // Best-effort revoke: an already-expired/garbage refresh token
+        // has nothing meaningful left to revoke server-side, so logout
+        // still succeeds and clears the cookie either way — only a
+        // token that still parses gets its DB row revoked.
+        if let Ok(claims) = jwt::verify(&raw_token, TokenType::Refresh, &state.jwt_secret)
+            && let Ok(user_id) = Uuid::parse_str(&claims.sub)
+        {
+            let token_hash = sha256_hex(&raw_token);
+            // Same RLS scoping issue as refresh/issue_tokens — this
+            // UPDATE has to run inside a transaction with
+            // app.current_user_id set, or it silently revokes zero
+            // rows against the RLS-protected refresh_tokens table.
+            let mut tx = super::middleware::begin_rls_transaction(&state.pool, user_id).await?;
+            sqlx::query("UPDATE refresh_tokens SET revoked_at = NOW() WHERE token_hash = $1 AND revoked_at IS NULL")
+                .bind(&token_hash)
+                .execute(&mut *tx)
+                .await?;
+            tx.commit().await?;
+        }
     }
-    let cleared = jar.remove(Cookie::from("refresh_token"));
+    // A removal Set-Cookie only actually overwrites the original in a
+    // real browser if its Path matches exactly — explicit here rather
+    // than relying on this handler's own request path (which now is
+    // /auth/refresh too, see router(), but that's an implementation
+    // detail this shouldn't depend on).
+    let cleared = jar.remove(Cookie::build("refresh_token").path(REFRESH_COOKIE_PATH).build());
     Ok((cleared, StatusCode::NO_CONTENT))
 }
 
@@ -349,7 +381,11 @@ pub async fn password_reset_confirm(
     }
 
     let new_hash = password::hash_password(&req.new_password)?;
-    let mut tx = state.pool.begin().await?;
+    // users has no RLS (queryable by email pre-session, per
+    // migrations/0002's own note), but refresh_tokens below does — this
+    // transaction needs app.current_user_id set for that UPDATE to
+    // actually revoke anything instead of silently affecting zero rows.
+    let mut tx = super::middleware::begin_rls_transaction(&state.pool, user.user_id).await?;
 
     sqlx::query(
         "UPDATE users
