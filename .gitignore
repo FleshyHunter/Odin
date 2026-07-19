@@ -1,3 +1,6 @@
+# Root-level env (Postgres/Redis credentials for docker-compose)
+/.env
+
 # Logs
 logs
 *.log
