@@ -1,6 +1,6 @@
 import { useState } from 'react';
 import { Navigate, Route, Routes, useNavigate } from 'react-router-dom';
-import { AuthLayout } from './components/auth/AuthLayout';
+import { AuthLayout } from './components/auth/layout/AuthLayout';
 import { Login } from './pages/Login/Login';
 import { Signup } from './pages/Signup/Signup';
 import { SessionLayout } from './pages/Session/SessionLayout';

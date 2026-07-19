@@ -1,9 +1,9 @@
 /* Shared page shell for both auth pages (Login, Signup) — nav, wordmark,
    and the split layout/signin-pane wrapper. Both pages wrap their JSX in
    the same `.auth-page` root class so this one file covers both, rather
-   than each page duplicating it. Form content styles live in AuthForm's
-   own authForm.css; the constellation canvas's styles live in
-   BigDipperCanvas's own bigDipperCanvas.css. */
+   than each page duplicating it. Form content styles live in
+   components/auth/form/authForm.css; the constellation canvas's styles
+   live in BigDipperCanvas's own bigDipperCanvas.css. */
 
 .auth-page nav {
   display: flex;

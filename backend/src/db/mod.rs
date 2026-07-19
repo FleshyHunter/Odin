@@ -24,3 +24,16 @@ pub fn connect(database_url: &str, pool_size: u32) -> Result<PgPool, sqlx::Error
         .acquire_timeout(Duration::from_secs(5))
         .connect_lazy(database_url)
 }
+
+// Redis runs on the same Windows RTX PC as Postgres (Hardware
+// Distribution). Client::open only parses the URL — it never touches
+// the network, so this can never block or fail because Redis happens
+// to be unreachable right now. (redis::aio::ConnectionManager was
+// tried first here and rejected: it eagerly connects at construction
+// and panicked the whole process after a long timeout when Redis
+// wasn't up — the exact failure mode the lazy Postgres pool above was
+// built to avoid. Actual connections now happen per-request, bounded
+// by a short timeout — see state.rs's AppState::get_redis.)
+pub fn connect_redis(redis_url: &str) -> Result<redis::Client, redis::RedisError> {
+    redis::Client::open(redis_url)
+}

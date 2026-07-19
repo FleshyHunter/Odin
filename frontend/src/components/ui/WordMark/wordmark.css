@@ -1,6 +1,6 @@
 /* Base layout for .wordmark — this component's own root class. Genuinely
    missing until now: only the two per-consumer modifier classes existed
-   (.nav-wordmark in components/auth/authLayout.css, .sidebar-wordmark in
+   (.nav-wordmark in components/auth/layout/authLayout.css, .sidebar-wordmark in
    pages/Session/Session.css, both intentionally kept separate to avoid
    the two pages' differing font-size/margin colliding), but neither ever
    set display/gap. It only ever looked right by accident — the icon

@@ -1,14 +1,28 @@
 use std::env;
 
-// Block 1 only needs enough config to boot the server and connect to
-// Postgres — DATABASE_URL and DB_POOL_SIZE, per the locked
-// Environment Variables list (Combined_Architecture_File.md). Later
-// blocks (auth, Redis, Dify, etc.) add their own env vars to this
-// struct as those blocks are built — not pulled in ahead of need.
+// Block 1 only needed DATABASE_URL/DB_POOL_SIZE/PORT. Block 3 (auth)
+// adds Redis + JWT + OTP + password config — all per the locked
+// Environment Variables list, not invented here.
 pub struct Config {
     pub database_url: String,
     pub db_pool_size: u32,
     pub port: u16,
+    pub redis_url: String,
+    pub jwt_secret: String,
+    pub access_token_expiry_minutes: i64,
+    pub refresh_token_expiry_days: i64,
+    pub otp_expiry_minutes: i64,
+    pub verified_signup_token_ttl_minutes: i64,
+    pub password_min_length: usize,
+    pub password_reset_token_expiry_hours: i64,
+    // None until Resend is actually set up — auth still works, using
+    // EmailSender's console-log stub instead of a real send (see
+    // auth/email.rs). Not a blocker per the Auth section's own
+    // "ordering note": auth details aren't tightly sequenced against
+    // external service availability. Not read yet — will be, the
+    // moment a ResendEmailSender impl exists to consume it.
+    #[allow(dead_code)]
+    pub resend_api_key: Option<String>,
 }
 
 impl Config {
@@ -32,6 +46,48 @@ impl Config {
             .and_then(|v| v.parse().ok())
             .unwrap_or(8080);
 
-        Self { database_url, db_pool_size, port }
+        let redis_url = env::var("REDIS_URL").expect("REDIS_URL must be set");
+        let jwt_secret = env::var("JWT_SECRET").expect("JWT_SECRET must be set");
+
+        let access_token_expiry_minutes = env::var("ACCESS_TOKEN_EXPIRY_MINUTES")
+            .ok()
+            .and_then(|v| v.parse().ok())
+            .unwrap_or(15);
+        let refresh_token_expiry_days = env::var("REFRESH_TOKEN_EXPIRY_DAYS")
+            .ok()
+            .and_then(|v| v.parse().ok())
+            .unwrap_or(30);
+        let otp_expiry_minutes = env::var("OTP_EXPIRY_MINUTES")
+            .ok()
+            .and_then(|v| v.parse().ok())
+            .unwrap_or(10);
+        let verified_signup_token_ttl_minutes = env::var("VERIFIED_SIGNUP_TOKEN_TTL_MINUTES")
+            .ok()
+            .and_then(|v| v.parse().ok())
+            .unwrap_or(30);
+        let password_min_length = env::var("PASSWORD_MIN_LENGTH")
+            .ok()
+            .and_then(|v| v.parse().ok())
+            .unwrap_or(12);
+        let password_reset_token_expiry_hours = env::var("PASSWORD_RESET_TOKEN_EXPIRY_HOURS")
+            .ok()
+            .and_then(|v| v.parse().ok())
+            .unwrap_or(1);
+        let resend_api_key = env::var("RESEND_API_KEY").ok();
+
+        Self {
+            database_url,
+            db_pool_size,
+            port,
+            redis_url,
+            jwt_secret,
+            access_token_expiry_minutes,
+            refresh_token_expiry_days,
+            otp_expiry_minutes,
+            verified_signup_token_ttl_minutes,
+            password_min_length,
+            password_reset_token_expiry_hours,
+            resend_api_key,
+        }
     }
 }

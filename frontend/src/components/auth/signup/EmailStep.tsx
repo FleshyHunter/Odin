@@ -1,7 +1,7 @@
 import type { FormEvent } from 'react';
 import { Link } from 'react-router-dom';
 import { Button } from '../../ui/Button/Button';
-import '../authForm.css';
+import '../form/authForm.css';
 
 interface EmailStepProps {
   email: string;

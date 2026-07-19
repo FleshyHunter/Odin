@@ -1,6 +1,6 @@
 /* New pieces needed for the multi-step signup wizard, on top of the
    shared headline/subhead/field/button.primary/switch-line rules already
-   in components/auth/authForm.css (both scoped under .signin-pane-content,
+   in components/auth/form/authForm.css (both scoped under .signin-pane-content,
    so they apply here too). */
 
 .signin-pane-content .field input[readonly] {

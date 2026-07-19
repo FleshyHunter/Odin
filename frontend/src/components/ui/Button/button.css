@@ -1,5 +1,5 @@
 /* Consolidates the two previously-duplicated CTA button classes:
-   .primary (components/auth/authForm.css) and .submit-btn
+   .primary (components/auth/form/authForm.css) and .submit-btn
    (pages/Session/Session.css, used by ExerciseCard). They had already
    drifted slightly (0.75rem/0.92rem padding+font-size vs 0.65rem/0.87rem,
    only .primary had cursor/active-press styling) — this picks the more

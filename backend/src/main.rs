@@ -1,8 +1,15 @@
+mod auth;
 mod config;
 mod db;
+mod models;
 mod routes;
+mod state;
 
+use std::sync::Arc;
+
+use axum::Router;
 use config::Config;
+use state::AppState;
 
 #[tokio::main]
 async fn main() {
@@ -18,7 +25,16 @@ async fn main() {
     let pool = db::connect(&config.database_url, config.db_pool_size)
         .expect("failed to create Postgres pool");
 
-    let app = routes::router(pool);
+    // Infallible in practice for any well-formed URL — see db::connect_redis.
+    let redis = db::connect_redis(&config.redis_url).expect("invalid REDIS_URL");
+
+    let email_sender: Arc<dyn auth::email::EmailSender> = Arc::new(auth::email::ConsoleEmailSender);
+    let app_state = AppState::new(pool, redis, &config, email_sender);
+
+    let app = Router::new()
+        .merge(routes::router())
+        .merge(auth::router())
+        .with_state(app_state);
 
     let listener = tokio::net::TcpListener::bind(("0.0.0.0", config.port))
         .await

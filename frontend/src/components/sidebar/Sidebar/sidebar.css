@@ -39,7 +39,7 @@ aside.sidebar.sidebar-collapsed {
    contexts styled it differently — scoped via this modifier class
    (Sidebar.tsx is the only place that ever passes
    <Wordmark className="sidebar-wordmark">) to avoid colliding with
-   .nav-wordmark in components/auth/authLayout.css. */
+   .nav-wordmark in components/auth/layout/authLayout.css. */
 .sidebar-wordmark {
   font-size: 1rem;
   overflow: hidden; white-space: nowrap;

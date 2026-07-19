@@ -1,7 +1,7 @@
 import { useState, type FormEvent } from 'react';
 import { useAuth } from '../../../hooks/useAuth';
 import { Button } from '../../ui/Button/Button';
-import '../authForm.css';
+import '../form/authForm.css';
 import './signupFlow.css';
 
 interface CompleteStepProps {

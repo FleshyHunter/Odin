@@ -1,7 +1,7 @@
 /* Moved out of pages/Login/Login.css. .graph-pane is this component's
    own root class, so no extra scoping prefix is needed. flex: 0 0 50%
    assumes it's a direct child of a `display: flex` row (the auth pages'
-   `main.split`) — see components/auth/authLayout.css. */
+   `main.split`) — see components/auth/layout/authLayout.css. */
 
 .graph-pane {
   flex: 0 0 50%;
