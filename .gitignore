@@ -33,8 +33,10 @@ dist-ssr
 /backend/target/
 /backend/.env
 
-# Python AI service
-/ai_service/__pycache__/
+# Python AI service — unanchored so this matches at any depth
+# (ai_service/app/__pycache__/, ai_service/app/embedding/__pycache__/,
+# etc.), not just directly under ai_service/ itself.
+ai_service/**/__pycache__/
 /ai_service/.venv/
-/ai_service/*.pyc
+ai_service/**/*.pyc
 /ai_service/.env
