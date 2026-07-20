@@ -41,6 +41,14 @@ services:
   ai_service:
     build:
       context: ./ai_service
+    environment:
+      # Ollama is currently running natively on Windows (this compose
+      # file's own `ollama` service below is unused while that's true)
+      # — from inside this container, `localhost` means the container
+      # itself, not the Windows host, so reaching a natively-running
+      # service requires host.docker.internal (Docker Desktop's bridge
+      # back to the host), not a plain localhost/127.0.0.1 URL.
+      OLLAMA_HOST: http://host.docker.internal:11434
     ports:
       - "8000:8000"
 
