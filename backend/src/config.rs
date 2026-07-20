@@ -23,6 +23,10 @@ pub struct Config {
     // moment a ResendEmailSender impl exists to consume it.
     #[allow(dead_code)]
     pub resend_api_key: Option<String>,
+    // Block 5: FastAPI AI service, on the Windows RTX PC (locked env
+    // var name and value shape, ARCHITECTURE.md's Environment
+    // Variables list — e.g. http://100.125.58.90:8000).
+    pub ai_service_url: String,
 }
 
 impl Config {
@@ -74,6 +78,7 @@ impl Config {
             .and_then(|v| v.parse().ok())
             .unwrap_or(1);
         let resend_api_key = env::var("RESEND_API_KEY").ok();
+        let ai_service_url = env::var("AI_SERVICE_URL").expect("AI_SERVICE_URL must be set");
 
         Self {
             database_url,
@@ -88,6 +93,7 @@ impl Config {
             password_min_length,
             password_reset_token_expiry_hours,
             resend_api_key,
+            ai_service_url,
         }
     }
 }

@@ -32,6 +32,15 @@ pub struct AppState {
     pub verified_signup_token_ttl_minutes: i64,
     pub password_min_length: usize,
     pub password_reset_token_expiry_hours: i64,
+    // Block 5: shared across every ai_client call — reqwest::Client
+    // pools connections internally, so this is built once here rather
+    // than per-call, same reasoning as reusing the Postgres pool. Not
+    // read anywhere yet — no route calls ai_client::embed() until a
+    // later block gives it something real to do.
+    #[allow(dead_code)]
+    pub http_client: reqwest::Client,
+    #[allow(dead_code)]
+    pub ai_service_url: Arc<str>,
 }
 
 impl AppState {
@@ -40,6 +49,7 @@ impl AppState {
         redis_client: redis::Client,
         config: &Config,
         email_sender: Arc<dyn EmailSender>,
+        http_client: reqwest::Client,
     ) -> Self {
         Self {
             pool,
@@ -52,6 +62,8 @@ impl AppState {
             verified_signup_token_ttl_minutes: config.verified_signup_token_ttl_minutes,
             password_min_length: config.password_min_length,
             password_reset_token_expiry_hours: config.password_reset_token_expiry_hours,
+            http_client,
+            ai_service_url: Arc::from(config.ai_service_url.as_str()),
         }
     }
 

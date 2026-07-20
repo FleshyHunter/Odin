@@ -1,3 +1,9 @@
+// Block 5 builds the client; nothing calls embed() yet since there's no
+// real feature needing embeddings until a much later block (ingestion/
+// chunking) — verification of the actual live call is deferred too, per
+// this pass's explicit scope (code only, not yet wired to a route).
+#[allow(dead_code)]
+mod ai_client;
 mod auth;
 mod config;
 mod db;
@@ -6,6 +12,7 @@ mod routes;
 mod state;
 
 use std::sync::Arc;
+use std::time::Duration;
 
 use axum::Router;
 use config::Config;
@@ -29,7 +36,18 @@ async fn main() {
     let redis = db::connect_redis(&config.redis_url).expect("invalid REDIS_URL");
 
     let email_sender: Arc<dyn auth::email::EmailSender> = Arc::new(auth::email::ConsoleEmailSender);
-    let app_state = AppState::new(pool, redis, &config, email_sender);
+
+    // 30s, not the 5s used for Redis/Postgres — ML inference (embedding
+    // a batch of texts, later a full generation) is legitimately slower
+    // than a connection ping, but this is still a bound, not "wait
+    // forever": an unreachable/stalled FastAPI still fails clearly
+    // rather than hanging (Rule 29's "no offline mode" philosophy).
+    let http_client = reqwest::Client::builder()
+        .timeout(Duration::from_secs(30))
+        .build()
+        .expect("failed to build reqwest client");
+
+    let app_state = AppState::new(pool, redis, &config, email_sender, http_client);
 
     let app = Router::new()
         .merge(routes::router())

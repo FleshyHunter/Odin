@@ -2,10 +2,12 @@ from fastapi import FastAPI
 
 from app.embedding.router import router as embedding_router
 from app.embedding.service import get_model
+from app.generation.router import router as generation_router
 
 app = FastAPI(title="Odin AI Service")
 
 app.include_router(embedding_router)
+app.include_router(generation_router)
 
 
 @app.get("/health")
