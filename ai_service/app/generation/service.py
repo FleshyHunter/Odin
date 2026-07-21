@@ -16,6 +16,16 @@ MODEL_NAME = "qwen3.5:9b"
 # Rust side.
 OLLAMA_HOST = os.environ["OLLAMA_HOST"]
 
+# Ollama's own default (4096, confirmed via server logs) is too small
+# for this model's reasoning phase — live testing reproduced the exact
+# pre-/api/chat-fix failure (empty response, reasoning truncated
+# mid-thought) purely from running out of context room, not from the
+# turn-boundary problem that fix already solved. Configurable, not
+# hardcoded, so it can be tuned later without a code change — same
+# pattern as OLLAMA_HOST, but with a sensible default since (unlike the
+# host) there's a reasonable value to fall back to.
+OLLAMA_NUM_CTX = int(os.environ.get("OLLAMA_NUM_CTX", "8192"))
+
 
 @lru_cache(maxsize=1)
 def get_client() -> Client:
@@ -44,5 +54,6 @@ def generate_text(prompt: str, think: bool = True) -> str:
         model=MODEL_NAME,
         messages=[{"role": "user", "content": prompt}],
         think=think,
+        options={"num_ctx": OLLAMA_NUM_CTX},
     )
     return response.message.content
