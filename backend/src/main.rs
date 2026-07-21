@@ -37,13 +37,16 @@ async fn main() {
 
     let email_sender: Arc<dyn auth::email::EmailSender> = Arc::new(auth::email::ConsoleEmailSender);
 
-    // 30s, not the 5s used for Redis/Postgres — ML inference (embedding
-    // a batch of texts, later a full generation) is legitimately slower
-    // than a connection ping, but this is still a bound, not "wait
-    // forever": an unreachable/stalled FastAPI still fails clearly
-    // rather than hanging (Rule 29's "no offline mode" philosophy).
+    // 120s, not the 5s used for Redis/Postgres — ML inference is
+    // legitimately slower than a connection ping, and a reasoning model
+    // (qwen3.5:9b, thinking on by default) can take real time even once
+    // the chat-template/turn-boundary fix is in place. Still a bound,
+    // not "wait forever": an unreachable/stalled FastAPI still fails
+    // clearly rather than hanging (Rule 29's "no offline mode"
+    // philosophy) — no streaming yet, so this has to cover a whole
+    // response, not just an idle gap between chunks.
     let http_client = reqwest::Client::builder()
-        .timeout(Duration::from_secs(30))
+        .timeout(Duration::from_secs(120))
         .build()
         .expect("failed to build reqwest client");
 

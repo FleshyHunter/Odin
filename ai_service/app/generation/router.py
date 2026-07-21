@@ -8,6 +8,7 @@ router = APIRouter()
 
 class GenerateRequest(BaseModel):
     prompt: str
+    think: bool = True
 
 
 class GenerateResponse(BaseModel):
@@ -16,4 +17,4 @@ class GenerateResponse(BaseModel):
 
 @router.post("/generate", response_model=GenerateResponse)
 def generate(request: GenerateRequest) -> GenerateResponse:
-    return GenerateResponse(response=generate_text(request.prompt))
+    return GenerateResponse(response=generate_text(request.prompt, request.think))

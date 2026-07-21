@@ -26,7 +26,23 @@ def get_client() -> Client:
     return Client(host=OLLAMA_HOST)
 
 
-def generate_text(prompt: str) -> str:
+def generate_text(prompt: str, think: bool = True) -> str:
+    # /api/chat, not /api/generate — the model's Modelfile TEMPLATE is a
+    # bare `{{ .Prompt }}` with no chat-role wrapping, so /api/generate
+    # gives it no turn-boundary/stop signal at all. /api/chat applies
+    # the model's real chat template (confirmed present in its own
+    # server logs), so it knows where a turn is supposed to end instead
+    # of rambling until it's forcibly truncated at the context limit.
+    #
+    # think defaults True: qwen3.5:9b is a reasoning model, and the
+    # whole point of adopting it over qwen2.5:7b was reasoning depth
+    # (Fine-Tuning Roadmap) — defaulting it off to save time would
+    # quietly undo that. Once Block 8's intent classification exists,
+    # callers can pass a per-message decision instead of this default.
     client = get_client()
-    response = client.generate(model=MODEL_NAME, prompt=prompt)
-    return response.response
+    response = client.chat(
+        model=MODEL_NAME,
+        messages=[{"role": "user", "content": prompt}],
+        think=think,
+    )
+    return response.message.content

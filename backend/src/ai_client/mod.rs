@@ -64,6 +64,7 @@ pub async fn embed(
 #[derive(Serialize)]
 struct GenerateRequest {
     prompt: String,
+    think: bool,
 }
 
 #[derive(Deserialize)]
@@ -72,17 +73,21 @@ struct GenerateResponse {
 }
 
 /// Calls FastAPI's POST /generate (Block 6) with a prompt and returns
-/// qwen's generated response text.
+/// qwen's generated response text. `think` defaults to `true` at call
+/// sites for now (reasoning depth was the actual point of adopting this
+/// model) — once Block 8's intent classification exists, callers can
+/// pass a per-message decision instead of a blanket default.
 pub async fn generate(
     client: &reqwest::Client,
     ai_service_url: &str,
     prompt: String,
+    think: bool,
 ) -> Result<String, AiClientError> {
     let url = format!("{ai_service_url}/generate");
 
     let response = client
         .post(&url)
-        .json(&GenerateRequest { prompt })
+        .json(&GenerateRequest { prompt, think })
         .send()
         .await
         .map_err(|_| AiClientError::ServiceUnavailable)?;
@@ -100,4 +105,62 @@ pub async fn generate(
         .map_err(|err| AiClientError::UnexpectedResponse(err.to_string()))?;
 
     Ok(body.response)
+}
+
+#[cfg(test)]
+mod tests {
+    // Real end-to-end proof against the actual Windows-hosted FastAPI —
+    // not a mock, no test server. #[ignore] so a routine `cargo test`
+    // (e.g. Windows asleep) doesn't fail on an external dependency;
+    // run explicitly with `cargo test -- --ignored --nocapture`.
+    use std::time::Duration;
+
+    use super::*;
+
+    const AI_SERVICE_URL: &str = "http://100.125.58.90:8000";
+
+    // Identical construction to main.rs's real AppState.http_client —
+    // not reqwest::Client::new(), so this exercises the same
+    // configuration production code actually runs with, not a
+    // differently-configured stand-in.
+    fn production_client() -> reqwest::Client {
+        reqwest::Client::builder()
+            .timeout(Duration::from_secs(120))
+            .build()
+            .expect("failed to build reqwest client")
+    }
+
+    #[tokio::test]
+    #[ignore]
+    async fn embed_real_end_to_end() {
+        let client = production_client();
+        let result = embed(&client, AI_SERVICE_URL, vec!["hello world".to_string()])
+            .await
+            .expect("embed() call failed");
+
+        println!("embed() returned {} vector(s)", result.len());
+        println!("first vector length: {}", result[0].len());
+        println!("first 5 values: {:?}", &result[0][..5]);
+
+        assert_eq!(result.len(), 1);
+        assert_eq!(result[0].len(), 384);
+    }
+
+    #[tokio::test]
+    #[ignore]
+    async fn generate_real_end_to_end() {
+        let client = production_client();
+        let result = generate(
+            &client,
+            AI_SERVICE_URL,
+            "Say hello in one sentence.".to_string(),
+            true,
+        )
+        .await
+        .expect("generate() call failed");
+
+        println!("generate() returned: {result}");
+
+        assert!(!result.is_empty());
+    }
 }
