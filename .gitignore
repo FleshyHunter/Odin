@@ -43,3 +43,7 @@ ai_service/**/__pycache__/
 /ai_service/.venv/
 ai_service/**/*.pyc
 /ai_service/.env
+
+
+#temp entries
+/icons/

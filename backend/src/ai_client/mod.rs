@@ -107,6 +107,48 @@ pub async fn generate(
     Ok(body.response)
 }
 
+#[derive(Deserialize)]
+struct TranscribeResponse {
+    text: String,
+}
+
+/// Calls FastAPI's POST /transcribe (Block 7) with raw audio bytes
+/// (WebM/Opus, per PRD.md's Voice Input section) and returns the
+/// transcribed text. First non-JSON request this module makes — a
+/// multipart file upload, not a JSON body, since that's what Whisper's
+/// wrapping endpoint expects on the other end.
+pub async fn transcribe(
+    client: &reqwest::Client,
+    ai_service_url: &str,
+    audio_bytes: Vec<u8>,
+) -> Result<String, AiClientError> {
+    let url = format!("{ai_service_url}/transcribe");
+
+    let part = reqwest::multipart::Part::bytes(audio_bytes).file_name("audio.webm");
+    let form = reqwest::multipart::Form::new().part("file", part);
+
+    let response = client
+        .post(&url)
+        .multipart(form)
+        .send()
+        .await
+        .map_err(|_| AiClientError::ServiceUnavailable)?;
+
+    if !response.status().is_success() {
+        return Err(AiClientError::UnexpectedResponse(format!(
+            "status {}",
+            response.status()
+        )));
+    }
+
+    let body: TranscribeResponse = response
+        .json()
+        .await
+        .map_err(|err| AiClientError::UnexpectedResponse(err.to_string()))?;
+
+    Ok(body.text)
+}
+
 #[cfg(test)]
 mod tests {
     // Real end-to-end proof against the actual Windows-hosted FastAPI —
