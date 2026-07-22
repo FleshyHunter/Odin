@@ -20,14 +20,12 @@ export async function listProjects(): Promise<Project[]> {
   return simulateDelay([...projects]);
 }
 
-// Real contract: POST /projects { title } -> Project
-// description stays null — there's no creation flow that collects one
-// (matches createTrack's title-only prompt() stand-in).
-export async function createProject(title: string): Promise<Project> {
+// Real contract: POST /projects { title, description } -> Project
+export async function createProject(title: string, description: string | null): Promise<Project> {
   const project: Project = {
     id: `project-${Date.now()}`,
     title,
-    description: null,
+    description,
     updatedAt: new Date().toISOString(),
   };
   projects.push(project);

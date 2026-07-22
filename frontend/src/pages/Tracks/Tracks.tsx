@@ -11,15 +11,9 @@ import './tracks.css';
 // outlet context rather than calling useTracks() again itself, so this
 // page and the Sidebar's Recents/Pinned lists always show the same data.
 export function Tracks() {
-  const { tracks, createTrack, setActiveTrackId } = useOutletContext<SessionOutletContext>();
+  const { tracks, setActiveTrackId, openCreateTrackModal } = useOutletContext<SessionOutletContext>();
   const [search, setSearch] = useState('');
   const navigate = useNavigate();
-
-  const handleNewTrack = async () => {
-    const title = window.prompt('What do you want to call this track?');
-    if (!title || !title.trim()) return;
-    await createTrack(title.trim());
-  };
 
   const handleOpenTrack = (trackId: string) => {
     setActiveTrackId(trackId);
@@ -32,7 +26,7 @@ export function Tracks() {
     <main className="tracks-page">
       <div className="tracks-page-header">
         <h1 className="display">Tracks</h1>
-        <Button onClick={handleNewTrack}>+ New track</Button>
+        <Button onClick={openCreateTrackModal}>+ New track</Button>
       </div>
 
       <SearchBar value={search} onChange={setSearch} placeholder="Search tracks..." />

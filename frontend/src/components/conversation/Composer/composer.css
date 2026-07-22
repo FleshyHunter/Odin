@@ -20,9 +20,14 @@
   display: flex; flex-direction: column;
   background: var(--surface); border: 1px solid var(--border);
   border-radius: 14px;
-  transition: border-color 0.15s ease;
+  transition: border-color 0.15s ease, box-shadow 0.15s ease;
 }
-.composer .composer-box:focus-within { border-color: var(--glow); }
+.composer .composer-box:focus-within {
+  border-color: var(--glow);
+  box-shadow:
+    0 0 0 1px rgb(232 183 106 / 0.08),
+    0 0 28px rgb(232 183 106 / 0.18);
+}
 
 .composer .composer-textarea {
   resize: none;

@@ -12,6 +12,12 @@
   display: flex; align-items: center; justify-content: center;
 }
 
+.msg.tutor .bubble-avatar img {
+  width: 21px;
+  height: 21px;
+  object-fit: contain;
+}
+
 .msg.student { margin-left: auto; flex-direction: row-reverse; }
 .msg.student .bubble {
   background: var(--surface); border: 1px solid var(--border);

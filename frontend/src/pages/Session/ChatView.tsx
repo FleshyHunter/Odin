@@ -14,7 +14,7 @@ import type { SessionOutletContext } from './SessionLayout';
 // The /chat route's content — rendered inside SessionLayout's <Outlet />.
 // Shows the active track's conversation, or EmptyLanding if none is active.
 export function ChatView() {
-  const { activeTrackId, activeTrack, setActiveTrackId, removeTrack, togglePin } =
+  const { activeTrackId, activeTrack, setActiveTrackId, removeTrack, togglePin, openCreateTrackModal } =
     useOutletContext<SessionOutletContext>();
   const { messages, isSending, send } = useTrackMessages(activeTrackId);
   const { width: panelWidth, setWidth: setPanelWidth, isOpen: isPanelOpen, toggle: togglePanel } = useActivePanel();
@@ -86,7 +86,7 @@ export function ChatView() {
   };
 
   if (!activeTrack) {
-    return <EmptyLanding />;
+    return <EmptyLanding onStartTrack={openCreateTrackModal} />;
   }
 
   return (
@@ -105,12 +105,14 @@ export function ChatView() {
         <Composer onSend={send} isSending={isSending} />
       </main>
 
-      {isPanelOpen && (
+      <div
+        className={isPanelOpen ? 'active-panel-shell active-panel-shell-open' : 'active-panel-shell'}
+        style={{ width: isPanelOpen ? panelWidth + 5 : 0 }}
+        aria-hidden={!isPanelOpen}
+      >
         <div ref={resizeHandleRef} className="active-panel-resize-handle" onMouseDown={handleResizeStart} />
-      )}
-      {isPanelOpen && (
         <ActivePanel exercise={exercise} mastery={mastery} onSubmitAnswer={handleSubmitAnswer} width={panelWidth} />
-      )}
+      </div>
     </>
   );
 }

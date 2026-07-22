@@ -65,6 +65,23 @@
   background: var(--glow);
 }
 
+/* Matches the sidebar's width timing exactly. Keeping the panel mounted
+   gives CSS both an open and closed width to interpolate between, so the
+   right side can slide out as smoothly as it slides in. */
+.session-page .active-panel-shell {
+  display: flex;
+  min-width: 0;
+  flex-shrink: 1;
+  overflow: hidden;
+  visibility: hidden;
+  transition: width 0.2s ease, visibility 0s linear 0.2s;
+}
+
+.session-page .active-panel-shell-open {
+  visibility: visible;
+  transition: width 0.2s ease;
+}
+
 /* ---------------- Empty landing (no active track yet) ---------------- */
 
 .session-page .empty-main {
@@ -130,6 +147,8 @@
 }
 .session-page .menu-trigger:hover { color: var(--text-secondary); background: var(--surface); }
 .session-page .menu-trigger:focus-visible { outline: 2px solid var(--focus); outline-offset: 1px; }
+.session-page .menu-trigger.panel-toggle,
+.session-page .menu-trigger.panel-toggle:hover { color: var(--text); }
 
 .session-page .track-menu {
   display: none; position: absolute; top: calc(100% + 6px); left: 0;

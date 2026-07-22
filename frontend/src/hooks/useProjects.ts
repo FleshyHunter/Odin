@@ -26,9 +26,9 @@ export function useProjects() {
     };
   }, []);
 
-  const createProject = useCallback(async (title: string) => {
+  const createProject = useCallback(async (title: string, description: string | null) => {
     await initialLoadRef.current;
-    const project = await projectsApi.createProject(title);
+    const project = await projectsApi.createProject(title, description);
     setProjects((prev) => [...prev, project]);
     return project;
   }, []);

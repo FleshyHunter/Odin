@@ -5,11 +5,9 @@
    only .primary had cursor/active-press styling) — this picks the more
    complete of the two as the single canonical style. */
 
-.btn-primary {
+.btn-primary,
+.btn-secondary {
   width: 100%;
-  background: var(--glow);
-  color: #1A1206;
-  border: none;
   border-radius: 8px;
   padding: 0.75rem;
   font-size: 0.92rem;
@@ -18,13 +16,35 @@
   cursor: pointer;
   transition: filter 0.15s ease, transform 0.1s ease;
 }
+
+.btn-primary {
+  background: var(--glow);
+  color: #1A1206;
+  border: 1px solid var(--glow);
+}
+
+.btn-secondary {
+  background: transparent;
+  color: var(--text-secondary);
+  border: 1px solid var(--border-strong);
+  transition: background 0.15s ease, border-color 0.15s ease, color 0.15s ease, transform 0.1s ease;
+}
+
 .btn-primary:hover { filter: brightness(1.08); }
-.btn-primary:active { transform: scale(0.99); }
-.btn-primary:focus-visible {
+.btn-secondary:hover {
+  background: var(--surface);
+  color: var(--text);
+  border-color: var(--text-muted);
+}
+.btn-primary:active,
+.btn-secondary:active { transform: scale(0.99); }
+.btn-primary:focus-visible,
+.btn-secondary:focus-visible {
   outline: 2px solid var(--glow);
   outline-offset: 3px;
 }
-.btn-primary:disabled {
+.btn-primary:disabled,
+.btn-secondary:disabled {
   opacity: 0.6;
   cursor: default;
 }

@@ -36,7 +36,7 @@ export function TrackHeader({
       <div className="track-meta">
         {conceptTitle && <span className="concept-pill">{conceptTitle}</span>}
         <button
-          className="menu-trigger"
+          className="menu-trigger panel-toggle"
           onClick={onTogglePanel}
           aria-label={isPanelOpen ? 'Hide panel' : 'Show panel'}
           aria-pressed={isPanelOpen}

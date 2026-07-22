@@ -2,6 +2,7 @@ import { useState } from 'react';
 import { Outlet, useLocation, useNavigate } from 'react-router-dom';
 import { Sidebar, type SidebarSection } from '../../components/sidebar/Sidebar/Sidebar';
 import { useTracks } from '../../hooks/useTracks';
+import { TrackModal } from '../../components/tracks/TrackModal/TrackModal';
 import type { Track } from '../../types';
 import './Session.css';
 
@@ -17,6 +18,7 @@ export interface SessionOutletContext {
   createTrack: (title: string) => Promise<Track>;
   removeTrack: (id: string) => Promise<void>;
   togglePin: (id: string) => Promise<void>;
+  openCreateTrackModal: () => void;
 }
 
 // Layout route for /chat, /projects and /tracks (see App.tsx) — mirrors
@@ -33,6 +35,7 @@ export function SessionLayout({ profileName }: SessionLayoutProps) {
   const { tracks, removeTrack, createTrack, togglePin } = useTracks();
   const [activeTrackId, setActiveTrackId] = useState('');
   const [pinnedActive, setPinnedActive] = useState(false);
+  const [isTrackModalOpen, setIsTrackModalOpen] = useState(false);
   const location = useLocation();
   const navigate = useNavigate();
 
@@ -57,14 +60,16 @@ export function SessionLayout({ profileName }: SessionLayoutProps) {
     setActiveTrackId(trackId);
   };
 
-  const handleNewTrack = async () => {
-    // No "create track" design exists yet (no prototype markup, no
-    // ARCHITECTURE_LOCK.md flow for it) — a native prompt() is the same
-    // minimal stand-in already used for TrackMenu's delete confirm(),
-    // not a designed modal.
-    const title = window.prompt('What do you want to call this track?');
-    if (!title || !title.trim()) return;
-    const track = await createTrack(title.trim());
+  const handleHome = () => {
+    setPinnedActive(false);
+    setActiveTrackId('');
+    navigate('/chat');
+  };
+
+  const openCreateTrackModal = () => setIsTrackModalOpen(true);
+
+  const handleCreateTrack = async (title: string) => {
+    const track = await createTrack(title);
     setPinnedActive(false);
     navigate('/chat');
     setActiveTrackId(track.id);
@@ -84,10 +89,11 @@ export function SessionLayout({ profileName }: SessionLayoutProps) {
           tracks={tracks}
           activeTrackId={activeTrackId}
           onSelectTrack={handleSelectTrack}
-          onNewTrack={handleNewTrack}
+          onNewTrack={openCreateTrackModal}
           profileName={profileName}
           activeSection={activeSection}
           onSectionChange={handleSectionChange}
+          onHome={handleHome}
         />
 
         <Outlet
@@ -100,10 +106,17 @@ export function SessionLayout({ profileName }: SessionLayoutProps) {
               createTrack,
               removeTrack,
               togglePin,
+              openCreateTrackModal,
             } satisfies SessionOutletContext
           }
         />
       </div>
+
+      <TrackModal
+        open={isTrackModalOpen}
+        onClose={() => setIsTrackModalOpen(false)}
+        onCreate={handleCreateTrack}
+      />
     </div>
   );
 }

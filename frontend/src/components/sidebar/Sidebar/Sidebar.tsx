@@ -16,6 +16,7 @@ interface SidebarProps {
   profileName: string;
   activeSection: SidebarSection;
   onSectionChange: (section: SidebarSection) => void;
+  onHome: () => void;
 }
 
 const TRACKS_ICON = (
@@ -65,13 +66,14 @@ export function Sidebar({
   profileName,
   activeSection,
   onSectionChange,
+  onHome,
 }: SidebarProps) {
   const { collapsed, toggle } = useSidebarCollapsed();
 
   return (
     <aside className={collapsed ? 'sidebar sidebar-collapsed' : 'sidebar'}>
       <div className="sidebar-top-row">
-        <Wordmark showIcon={false} className="sidebar-wordmark" />
+        <Wordmark showIcon={false} className="sidebar-wordmark" onClick={onHome} />
         <button
           className="sidebar-toggle"
           onClick={toggle}

@@ -8,12 +8,7 @@ interface MessageBubbleProps {
 
 const TUTOR_AVATAR = (
   <div className="bubble-avatar">
-    <svg width="13" height="13" viewBox="0 0 24 24" fill="#E8B76A" aria-hidden="true">
-      <path d="M16.5 14 L22.5 9.5 L19.5 17.5 Z" />
-      <ellipse cx="12" cy="14" rx="6" ry="4.6" transform="rotate(-12 12 14)" />
-      <circle cx="6.8" cy="8.6" r="3.2" />
-      <path d="M4 8.7 L7.6 6.8 L7.6 10.6 Z" />
-    </svg>
+    <img src="/assets/odin-icon-large.png" alt="" aria-hidden="true" />
   </div>
 );
 

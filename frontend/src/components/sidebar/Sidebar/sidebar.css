@@ -41,7 +41,7 @@ aside.sidebar.sidebar-collapsed {
    <Wordmark className="sidebar-wordmark">) to avoid colliding with
    .nav-wordmark in components/auth/layout/authLayout.css. */
 .sidebar-wordmark {
-  font-size: 1rem;
+  font-size: 1.5rem;
   overflow: hidden; white-space: nowrap;
   max-width: 140px; opacity: 1;
   transition: opacity 0.15s ease, max-width 0.2s ease;
