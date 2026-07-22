@@ -30,6 +30,7 @@ services:
 
   chromadb:
     image: chromadb/chroma
+    restart: unless-stopped
     ports:
       # Host 8001, not 8000 — 8000 is the FastAPI AI service's locked
       # port (ARCHITECTURE.md Ports table); this only avoids a host-port
@@ -41,6 +42,7 @@ services:
   ai_service:
     build:
       context: ./ai_service
+    restart: unless-stopped
     environment:
       # Ollama is currently running natively on Windows (this compose
       # file's own `ollama` service below is unused while that's true)
@@ -54,6 +56,7 @@ services:
 
   ollama:
     image: ollama/ollama
+    restart: unless-stopped
     ports:
       - "11434:11434"
     volumes:

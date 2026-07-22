@@ -112,19 +112,23 @@ struct TranscribeResponse {
     text: String,
 }
 
-/// Calls FastAPI's POST /transcribe (Block 7) with raw audio bytes
-/// (WebM/Opus, per PRD.md's Voice Input section) and returns the
-/// transcribed text. First non-JSON request this module makes — a
-/// multipart file upload, not a JSON body, since that's what Whisper's
-/// wrapping endpoint expects on the other end.
+/// Calls FastAPI's POST /transcribe (Block 7) with raw audio bytes and
+/// returns the transcribed text. First non-JSON request this module
+/// makes — a multipart file upload, not a JSON body. `filename` is
+/// forwarded as-is (not hardcoded to "audio.webm") — the FastAPI side
+/// derives its temp-file suffix from this, and a mismatched extension
+/// on real (non-WebM) audio is exactly the bug already found and fixed
+/// once on that side; hardcoding it here would silently reintroduce
+/// the same class of bug from the Rust side instead.
 pub async fn transcribe(
     client: &reqwest::Client,
     ai_service_url: &str,
     audio_bytes: Vec<u8>,
+    filename: &str,
 ) -> Result<String, AiClientError> {
     let url = format!("{ai_service_url}/transcribe");
 
-    let part = reqwest::multipart::Part::bytes(audio_bytes).file_name("audio.webm");
+    let part = reqwest::multipart::Part::bytes(audio_bytes).file_name(filename.to_string());
     let form = reqwest::multipart::Form::new().part("file", part);
 
     let response = client
@@ -202,6 +206,27 @@ mod tests {
         .expect("generate() call failed");
 
         println!("generate() returned: {result}");
+
+        assert!(!result.is_empty());
+    }
+
+    #[tokio::test]
+    #[ignore]
+    async fn transcribe_real_end_to_end() {
+        // Real recorded speech (icons/test.m4a — a repo asset, borrowed
+        // here rather than duplicated into a dedicated fixtures dir),
+        // already confirmed via direct curl to transcribe accurately.
+        // This is the first time it's gone through the actual Rust
+        // ai_client::transcribe() code path, not just FastAPI directly.
+        let audio_bytes = std::fs::read("../icons/test.m4a")
+            .expect("failed to read ../icons/test.m4a — run from the backend/ crate root");
+
+        let client = production_client();
+        let result = transcribe(&client, AI_SERVICE_URL, audio_bytes, "test.m4a")
+            .await
+            .expect("transcribe() call failed");
+
+        println!("transcribe() returned: {result}");
 
         assert!(!result.is_empty());
     }
