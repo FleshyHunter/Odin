@@ -7,6 +7,7 @@
 // added /embed, Block 6 adds /generate.
 
 use serde::{Deserialize, Serialize};
+use uuid::Uuid;
 
 #[derive(Debug, thiserror::Error)]
 pub enum AiClientError {
@@ -153,6 +154,76 @@ pub async fn transcribe(
     Ok(body.text)
 }
 
+#[derive(Serialize)]
+struct AnalyzeInputRequest {
+    text: String,
+    known_terms: Vec<String>,
+    current_concept_id: Option<Uuid>,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct AnalyzeInputResponse {
+    pub raw_input: String,
+    pub cleaned_query: String,
+    pub lemmas: Vec<String>,
+    pub keywords: Vec<String>,
+    pub is_on_topic: bool,
+    pub matched_concepts: Vec<String>,
+    pub detected_intent: String,
+}
+
+/// Calls FastAPI's POST /analyze_input (Block 8) — the 6-step
+/// normalization/intent pipeline (shorthand expansion, spellcheck,
+/// domain fuzzy-match, spaCy, intent classification) — and returns the
+/// full result. Unlike embed()/generate()/transcribe(), which each
+/// return one scalar, this returns the whole response struct: the
+/// pipeline's response has 7 fields and callers will generally need
+/// more than one of them.
+///
+/// known_terms must already be subject-scoped (the current journey's
+/// subject's concepts only, not the full cross-subject vocabulary
+/// bank) — this function does not query the database itself, matching
+/// the thin-wrapper shape of the other three; resolving known_terms
+/// from canonical_concepts/concept_aliases is the caller's job.
+/// current_concept_id is presence-only from ai_service's side (it's
+/// never parsed or validated there) — Some(_) signals "mid-journey"
+/// for the TANGENT vs OUT_OF_SCOPE split, None signals no journey
+/// context.
+pub async fn analyze_input(
+    client: &reqwest::Client,
+    ai_service_url: &str,
+    text: String,
+    known_terms: Vec<String>,
+    current_concept_id: Option<Uuid>,
+) -> Result<AnalyzeInputResponse, AiClientError> {
+    let url = format!("{ai_service_url}/analyze_input");
+
+    let response = client
+        .post(&url)
+        .json(&AnalyzeInputRequest {
+            text,
+            known_terms,
+            current_concept_id,
+        })
+        .send()
+        .await
+        .map_err(|_| AiClientError::ServiceUnavailable)?;
+
+    if !response.status().is_success() {
+        return Err(AiClientError::UnexpectedResponse(format!(
+            "status {}",
+            response.status()
+        )));
+    }
+
+    let body: AnalyzeInputResponse = response
+        .json()
+        .await
+        .map_err(|err| AiClientError::UnexpectedResponse(err.to_string()))?;
+
+    Ok(body)
+}
+
 #[cfg(test)]
 mod tests {
     // Real end-to-end proof against the actual Windows-hosted FastAPI —
@@ -229,5 +300,31 @@ mod tests {
         println!("transcribe() returned: {result}");
 
         assert!(!result.is_empty());
+    }
+
+    #[tokio::test]
+    #[ignore]
+    async fn analyze_input_real_end_to_end() {
+        let client = production_client();
+        let result = analyze_input(
+            &client,
+            AI_SERVICE_URL,
+            "what is a matrix".to_string(),
+            vec!["matrix".to_string()],
+            None,
+        )
+        .await
+        .expect("analyze_input() call failed");
+
+        println!("analyze_input() returned: {result:?}");
+
+        // Deliberately a message that hits a Step 2 rule ("what is X"
+        // -> DEFINITION) rather than one needing the qwen fallback —
+        // the fallback's output is model-generated and non-
+        // deterministic, which would make an exact-match assertion
+        // flaky in a way the rule path doesn't.
+        assert_eq!(result.detected_intent, "DEFINITION");
+        assert!(result.is_on_topic);
+        assert_eq!(result.matched_concepts, vec!["matrix".to_string()]);
     }
 }

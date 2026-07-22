@@ -1,5 +1,6 @@
 from fastapi import FastAPI
 
+from app.analyze_input.router import router as analyze_input_router
 from app.embedding.router import router as embedding_router
 from app.embedding.service import get_model
 from app.generation.router import router as generation_router
@@ -10,6 +11,7 @@ app = FastAPI(title="Odin AI Service")
 app.include_router(embedding_router)
 app.include_router(generation_router)
 app.include_router(voice_router)
+app.include_router(analyze_input_router)
 
 
 @app.get("/health")

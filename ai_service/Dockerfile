@@ -11,6 +11,10 @@ RUN apt-get update && apt-get install -y --no-install-recommends ffmpeg \
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
+# spaCy's model is a separate download, not part of the `spacy` pip
+# package itself (Block 8, Step 5 — nlp/spacy_pipe.py).
+RUN python -m spacy download en_core_web_sm
+
 COPY app ./app
 
 EXPOSE 8000

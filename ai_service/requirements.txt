@@ -4,3 +4,6 @@ sentence-transformers>=3.3
 ollama>=0.4
 python-multipart>=0.0.9
 openai-whisper>=20240930
+symspellpy>=6.7
+rapidfuzz>=3.9
+spacy>=3.7
