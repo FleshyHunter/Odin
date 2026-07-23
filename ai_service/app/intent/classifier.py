@@ -1,7 +1,10 @@
+import logging
 import re
 from enum import Enum
 
 from app.generation.service import generate_text
+
+logger = logging.getLogger(__name__)
 
 
 class Intent(str, Enum):
@@ -46,6 +49,7 @@ Reply with only the category name, nothing else."""
 def _classify_by_rules(text: str) -> Intent | None:
     for pattern, intent in _RULES:
         if pattern.search(text):
+            logger.info("Step 6: rule match — pattern=%r -> %s", pattern.pattern, intent.value)
             return intent
     return None
 
@@ -90,4 +94,11 @@ def classify_intent(text: str, is_on_topic: bool, current_concept_id: str | None
     rule_match = _classify_by_rules(text)
     if rule_match is not None:
         return rule_match
+    # No other signal (short of this) makes it observable, even after
+    # the fact, that this path ran at all — timing alone is a guess,
+    # this is definitive. Visible in `docker logs` for the ai_service
+    # container, same as uvicorn's own request-logging output. Same
+    # "Step 6: " prefix as the rule-match log above — both greppable
+    # together to see which path any given call actually took.
+    logger.info("Step 6: qwen fallback triggered — %r", text)
     return _classify_by_model(text)

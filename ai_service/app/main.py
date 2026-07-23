@@ -1,3 +1,5 @@
+import logging
+
 from fastapi import FastAPI
 
 from app.analyze_input.router import router as analyze_input_router
@@ -5,6 +7,15 @@ from app.embedding.router import router as embedding_router
 from app.embedding.service import get_model
 from app.generation.router import router as generation_router
 from app.voice.router import router as voice_router
+
+# Root logger defaults to WARNING with no handler attached — verified
+# live that intent/classifier.py's logger.info() call was silently
+# dropped without this, in both a bare logging call and a real request
+# that reached it. uvicorn configures its OWN uvicorn/uvicorn.access/
+# uvicorn.error loggers, but never touches the root logger or any
+# app-namespaced one, so this is the actual, necessary fix — not just
+# where the one call site lives.
+logging.basicConfig(level=logging.INFO)
 
 app = FastAPI(title="Odin AI Service")
 
