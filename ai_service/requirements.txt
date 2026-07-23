@@ -7,3 +7,5 @@ openai-whisper>=20240930
 symspellpy>=6.7
 rapidfuzz>=3.9
 spacy>=3.7
+sympy>=1.14
+asteval>=1.0.9

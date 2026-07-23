@@ -7,6 +7,7 @@
 // added /embed, Block 6 adds /generate.
 
 use serde::{Deserialize, Serialize};
+use serde_json::Value as Json;
 use uuid::Uuid;
 
 #[derive(Debug, thiserror::Error)]
@@ -224,6 +225,75 @@ pub async fn analyze_input(
     Ok(body)
 }
 
+#[derive(Serialize)]
+struct GradeRequest {
+    exercise_type: String,
+    student_answer: String,
+    correct_answer: Option<String>,
+    tolerance: Option<f32>,
+    grader_config: Option<Json>,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct GradeResponse {
+    pub is_correct: bool,
+    pub score: f32,
+    pub feedback: Option<String>,
+}
+
+/// Calls FastAPI's POST /grade (Block 9) — deterministic grading for
+/// all 5 exercise types (mcq/numeric/symbolic_math/fill_blank/
+/// short_answer). No LLM call anywhere in this path (Rule 2/Rule 50) —
+/// unlike analyze_input's qwen fallback, this has no network
+/// dependency beyond FastAPI itself, so its real end-to-end test below
+/// is fully deterministic.
+///
+/// correct_answer/tolerance/grader_config map directly onto the
+/// existing Exercise model's own fields (models/assessment.rs) — the
+/// caller's job is reading these off the exercises row (or
+/// quiz_attempts.expected_answer for the per-instance correct value)
+/// and forwarding them; this function does not query the database
+/// itself, same thin-wrapper shape as the other four ai_client
+/// functions.
+pub async fn grade(
+    client: &reqwest::Client,
+    ai_service_url: &str,
+    exercise_type: String,
+    student_answer: String,
+    correct_answer: Option<String>,
+    tolerance: Option<f32>,
+    grader_config: Option<Json>,
+) -> Result<GradeResponse, AiClientError> {
+    let url = format!("{ai_service_url}/grade");
+
+    let response = client
+        .post(&url)
+        .json(&GradeRequest {
+            exercise_type,
+            student_answer,
+            correct_answer,
+            tolerance,
+            grader_config,
+        })
+        .send()
+        .await
+        .map_err(|_| AiClientError::ServiceUnavailable)?;
+
+    if !response.status().is_success() {
+        return Err(AiClientError::UnexpectedResponse(format!(
+            "status {}",
+            response.status()
+        )));
+    }
+
+    let body: GradeResponse = response
+        .json()
+        .await
+        .map_err(|err| AiClientError::UnexpectedResponse(err.to_string()))?;
+
+    Ok(body)
+}
+
 #[cfg(test)]
 mod tests {
     // Real end-to-end proof against the actual Windows-hosted FastAPI —
@@ -326,5 +396,31 @@ mod tests {
         assert_eq!(result.detected_intent, "DEFINITION");
         assert!(result.is_on_topic);
         assert_eq!(result.matched_concepts, vec!["matrix".to_string()]);
+    }
+
+    #[tokio::test]
+    #[ignore]
+    async fn grade_real_end_to_end() {
+        // Unlike the other three real end-to-end tests, /grade has NO
+        // LLM call anywhere in its path (Rule 2/Rule 50) — fully
+        // deterministic, so this can assert an exact result rather
+        // than just "non-empty".
+        let client = production_client();
+        let result = grade(
+            &client,
+            AI_SERVICE_URL,
+            "symbolic_math".to_string(),
+            "2*x + 3*x".to_string(),
+            Some("5*x".to_string()),
+            None,
+            None,
+        )
+        .await
+        .expect("grade() call failed");
+
+        println!("grade() returned: {result:?}");
+
+        assert!(result.is_correct);
+        assert_eq!(result.score, 1.0);
     }
 }
