@@ -2,6 +2,7 @@ import logging
 
 from fastapi import FastAPI
 
+from app.acquisition.router import router as acquisition_router
 from app.analyze_input.router import router as analyze_input_router
 from app.embedding.router import router as embedding_router
 from app.embedding.service import get_model
@@ -25,6 +26,7 @@ app.include_router(generation_router)
 app.include_router(voice_router)
 app.include_router(analyze_input_router)
 app.include_router(grading_router)
+app.include_router(acquisition_router)
 
 
 @app.get("/health")

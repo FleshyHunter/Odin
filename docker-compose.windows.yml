@@ -15,6 +15,13 @@
 # (used by DATABASE_URL in backend/.env) still has to be created
 # separately, the same manual step already done on the real Windows
 # Postgres instance — not yet automated here.
+#
+# Block 10 (Dify): that same .env also needs DIFY_ACQUIRE_API_KEY,
+# DIFY_DAG_API_KEY, DIFY_EXERCISE_TEMPLATE_API_KEY (one per Dify app —
+# see ai_service/app/acquisition/ and its setup notes), plus optionally
+# DIFY_BASE_URL if self-hosting instead of Dify Cloud. Until these are
+# set, /acquire, /generate_dag, /generate_exercise_template each return
+# a clean 503 rather than failing to boot — see .env.example.
 services:
   postgres:
     image: postgres:17
@@ -51,6 +58,16 @@ services:
       # service requires host.docker.internal (Docker Desktop's bridge
       # back to the host), not a plain localhost/127.0.0.1 URL.
       OLLAMA_HOST: http://host.docker.internal:11434
+      # Block 10 (Dify) — all optional at the compose level: unset
+      # means the corresponding env var is simply absent inside the
+      # container, which ai_service already handles as "not configured
+      # yet" (503), not a crash. DIFY_BASE_URL only needs setting if
+      # self-hosting Dify rather than using Dify Cloud (defaults to
+      # https://api.dify.ai in code if left unset here).
+      DIFY_BASE_URL: ${DIFY_BASE_URL:-}
+      DIFY_ACQUIRE_API_KEY: ${DIFY_ACQUIRE_API_KEY:-}
+      DIFY_DAG_API_KEY: ${DIFY_DAG_API_KEY:-}
+      DIFY_EXERCISE_TEMPLATE_API_KEY: ${DIFY_EXERCISE_TEMPLATE_API_KEY:-}
     ports:
       - "8000:8000"
 

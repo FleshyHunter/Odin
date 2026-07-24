@@ -294,6 +294,231 @@ pub async fn grade(
     Ok(body)
 }
 
+// ===== Block 10: AcquisitionProvider (Dify) =====
+//
+// UNVERIFIED against a real Dify instance as of this build — no Dify
+// account exists yet (confirmed with the user, who asked for this to
+// be built ahead of setup rather than blocked on it). Every function
+// below compiles, type-checks, and its request/response shape matches
+// ai_service's real Pydantic models — but the actual Dify workflow
+// contract (ai_service/app/acquisition/dify_client.py's own
+// documented assumption) has never been exercised against a live
+// Dify app. Re-verify this whole section first once Dify is set up
+// (see setup instructions) — same AI-gateway boundary as everywhere
+// else: Rust never calls Dify directly, only through these three
+// ai_service endpoints.
+
+#[derive(Serialize, Deserialize, Debug, Clone)]
+pub struct Resource {
+    pub title: String,
+    pub url: Option<String>,
+    pub author_org: Option<String>,
+    pub content: String,
+    pub license_status: Option<String>,
+}
+
+#[derive(Serialize)]
+struct AcquireRequest {
+    topic: String,
+}
+
+#[derive(Deserialize)]
+struct AcquireResponse {
+    resources: Vec<Resource>,
+}
+
+/// Calls FastAPI's POST /acquire (Block 10) — Dify -> Gemini, web
+/// search + retrieval grounding (Flow 5's acquisition fallback).
+/// Returns RAW acquired content, not yet chunked/embedded — the
+/// caller reuses Flow 1's existing ingestion pipeline (chunk + POST
+/// /embed) for that, same as any other web_fetch source.
+pub async fn acquire(
+    client: &reqwest::Client,
+    ai_service_url: &str,
+    topic: String,
+) -> Result<Vec<Resource>, AiClientError> {
+    let url = format!("{ai_service_url}/acquire");
+
+    let response = client
+        .post(&url)
+        .json(&AcquireRequest { topic })
+        .send()
+        .await
+        .map_err(|_| AiClientError::ServiceUnavailable)?;
+
+    if !response.status().is_success() {
+        return Err(AiClientError::UnexpectedResponse(format!(
+            "status {}",
+            response.status()
+        )));
+    }
+
+    let body: AcquireResponse = response
+        .json()
+        .await
+        .map_err(|err| AiClientError::UnexpectedResponse(err.to_string()))?;
+
+    Ok(body.resources)
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone)]
+pub struct IntakeContext {
+    pub level: String,
+    pub goal: String,
+    pub background: Option<String>,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone)]
+pub struct ConceptNode {
+    pub title: String,
+    pub description: String,
+    pub difficulty_level: i32,
+    pub learning_objective: Option<String>,
+    #[serde(default)]
+    pub prerequisites: Vec<String>,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone)]
+pub struct ExerciseTemplate {
+    pub exercise_type: String,
+    pub difficulty: String,
+    pub template_body: Json,
+    pub template_params: Option<Json>,
+    pub correct_answer: Option<String>,
+    pub grader_type: Option<String>,
+    pub grader_config: Option<Json>,
+    pub tolerance: Option<f32>,
+}
+
+#[derive(Serialize)]
+struct GenerateDagRequest {
+    topic: String,
+    intake_context: Option<IntakeContext>,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct DAGResult {
+    pub concepts: Vec<ConceptNode>,
+    pub entry_concept: String,
+    pub diagnostic_primary: Option<ExerciseTemplate>,
+    pub diagnostic_backup: Option<ExerciseTemplate>,
+}
+
+/// Calls FastAPI's POST /generate_dag (Block 10) — Dify -> Claude
+/// (pedagogical concept ordering/prerequisite reasoning). When
+/// intake_context is Some (Onboarding Diagnostic, new-subject
+/// branch), the SAME call also returns diagnostic_primary/
+/// diagnostic_backup — one combined Dify call, not two.
+pub async fn generate_dag(
+    client: &reqwest::Client,
+    ai_service_url: &str,
+    topic: String,
+    intake_context: Option<IntakeContext>,
+) -> Result<DAGResult, AiClientError> {
+    let url = format!("{ai_service_url}/generate_dag");
+
+    let response = client
+        .post(&url)
+        .json(&GenerateDagRequest {
+            topic,
+            intake_context,
+        })
+        .send()
+        .await
+        .map_err(|_| AiClientError::ServiceUnavailable)?;
+
+    if !response.status().is_success() {
+        return Err(AiClientError::UnexpectedResponse(format!(
+            "status {}",
+            response.status()
+        )));
+    }
+
+    let body: DAGResult = response
+        .json()
+        .await
+        .map_err(|err| AiClientError::UnexpectedResponse(err.to_string()))?;
+
+    Ok(body)
+}
+
+#[derive(Serialize, Debug, Clone)]
+pub struct ConceptMeta {
+    pub title: String,
+    pub description: String,
+}
+
+#[derive(Serialize, Debug, Clone)]
+pub struct Chunk {
+    pub text: String,
+    pub chunk_type: Option<String>,
+    pub difficulty: Option<String>,
+}
+
+#[derive(Serialize)]
+struct GenerateExerciseTemplateRequest {
+    concept_id: Uuid,
+    concept_meta: ConceptMeta,
+    top_chunks: Vec<Chunk>,
+    batch_children: Vec<Uuid>,
+}
+
+#[derive(Deserialize)]
+struct GenerateExerciseTemplateResponse {
+    templates: Vec<ExerciseTemplate>,
+}
+
+/// Calls FastAPI's POST /generate_exercise_template (Block 10) — Dify
+/// -> Claude (qwen NEVER authors templates). Batches the entry concept
+/// along with up to 3 immediate children in ONE call. Returns an EMPTY
+/// Vec on validation failure after ai_service's one retry (fail-open,
+/// PRD.md: "Never block the teaching loop on a failed template
+/// generation") — not an error; the caller is expected to mark the
+/// concept template-pending and continue, not treat an empty result as
+/// this function having failed.
+///
+/// Race prevention (the DB unique index + Redis lock,
+/// generating_template:{concept_id}) is the CALLER's responsibility —
+/// ai_service has no DB/Redis access, so deciding whether to call this
+/// at all, and holding the lock around that decision, happens here in
+/// Rust, not inside ai_service.
+pub async fn generate_exercise_template(
+    client: &reqwest::Client,
+    ai_service_url: &str,
+    concept_id: Uuid,
+    concept_meta: ConceptMeta,
+    top_chunks: Vec<Chunk>,
+    batch_children: Vec<Uuid>,
+) -> Result<Vec<ExerciseTemplate>, AiClientError> {
+    let url = format!("{ai_service_url}/generate_exercise_template");
+
+    let response = client
+        .post(&url)
+        .json(&GenerateExerciseTemplateRequest {
+            concept_id,
+            concept_meta,
+            top_chunks,
+            batch_children,
+        })
+        .send()
+        .await
+        .map_err(|_| AiClientError::ServiceUnavailable)?;
+
+    if !response.status().is_success() {
+        return Err(AiClientError::UnexpectedResponse(format!(
+            "status {}",
+            response.status()
+        )));
+    }
+
+    let body: GenerateExerciseTemplateResponse = response
+        .json()
+        .await
+        .map_err(|err| AiClientError::UnexpectedResponse(err.to_string()))?;
+
+    Ok(body.templates)
+}
+
 #[cfg(test)]
 mod tests {
     // Real end-to-end proof against the actual Windows-hosted FastAPI —
@@ -422,5 +647,61 @@ mod tests {
 
         assert!(result.is_correct);
         assert_eq!(result.score, 1.0);
+    }
+
+    // The three tests below are genuinely different from the five
+    // above: those are blocked only on Windows being awake and
+    // reachable. These are ALSO blocked on Dify not being configured
+    // at all yet — a real, currently-true gap, not a hypothetical one.
+    // So rather than write a "real_end_to_end" test that would just
+    // fail for an uninteresting reason (no Dify app exists to call),
+    // each of these currently verifies the ONE thing that actually is
+    // true today: the endpoint exists, is reachable, and correctly
+    // reports "not configured" (503) instead of crashing. Once Dify is
+    // set up (see setup instructions), EACH of these must be rewritten
+    // to assert real success instead — that rewrite is the actual
+    // verification this section still needs.
+
+    #[tokio::test]
+    #[ignore]
+    async fn acquire_reports_not_configured_before_dify_setup() {
+        let client = production_client();
+        let err = acquire(&client, AI_SERVICE_URL, "linear algebra".to_string())
+            .await
+            .expect_err("acquire() should fail until Dify is configured");
+
+        println!("acquire() failed as expected (pre-Dify-setup): {err:?}");
+    }
+
+    #[tokio::test]
+    #[ignore]
+    async fn generate_dag_reports_not_configured_before_dify_setup() {
+        let client = production_client();
+        let err = generate_dag(&client, AI_SERVICE_URL, "linear algebra".to_string(), None)
+            .await
+            .expect_err("generate_dag() should fail until Dify is configured");
+
+        println!("generate_dag() failed as expected (pre-Dify-setup): {err:?}");
+    }
+
+    #[tokio::test]
+    #[ignore]
+    async fn generate_exercise_template_reports_not_configured_before_dify_setup() {
+        let client = production_client();
+        let err = generate_exercise_template(
+            &client,
+            AI_SERVICE_URL,
+            Uuid::new_v4(),
+            ConceptMeta {
+                title: "Vectors".to_string(),
+                description: "Introduction to vectors".to_string(),
+            },
+            vec![],
+            vec![],
+        )
+        .await
+        .expect_err("generate_exercise_template() should fail until Dify is configured");
+
+        println!("generate_exercise_template() failed as expected (pre-Dify-setup): {err:?}");
     }
 }
