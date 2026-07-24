@@ -103,11 +103,36 @@ Respond with ONLY a single valid JSON object, no other text, no markdown fences:
   "diagnostic_backup": { ...exercise object... } or null
 }"""
 
-_DIAGNOSTIC_INSTRUCTIONS = """
-Also generate two diagnostic exercises to check whether the student's self-reported level is accurate: a "primary" exercise at their claimed level, and a "backup" one level down. Each exercise object needs: exercise_type (mcq | numeric | symbolic_math | fill_blank | short_answer), difficulty (basic | intermediate | advanced), template_body (object with question_template and answer_template strings -- use {name} placeholders for anything randomized, plus choices_template for mcq), template_params (object mapping each {name} to {"min": x, "max": y}, or null if nothing is randomized), correct_answer, grader_type, grader_config, tolerance."""
+# Shared between generate_dag()'s diagnostic-exercise instructions and
+# generate_exercise_template()'s main instructions below — both ask
+# Claude for the identical exercise-object shape with the identical
+# constraints, so this is written once, not duplicated per caller.
+# All three IMPORTANT notes were added after live testing surfaced
+# these EXACT failure modes for real (problems.md #32, #33): a literal
+# "x = " prefix breaking SymPy evaluation; placeholders used in
+# answer_template/choices_template with no matching template_params
+# entry; and "lambda" as a symbolic_math variable name — the standard
+# notation for eigenvalues, and exactly what this app was tested on —
+# breaking SymPy parsing because it's a reserved Python keyword
+# (confirmed: sympify("lambda - 1") raises SyntaxError, sympify("x - 1")
+# does not). The retry loop recovered on its own that time, but that's
+# luck, not guidance — worth stating up front given how common "lambda"
+# is for exactly the topics (eigenvalues) this endpoint will often cover.
+_EXERCISE_OBJECT_SPEC = """Each exercise object needs: exercise_type (mcq | numeric | symbolic_math | fill_blank | short_answer), difficulty (basic | intermediate | advanced), template_body (object with question_template and answer_template strings -- use {name} placeholders for anything randomized, plus choices_template for mcq), template_params (object mapping each {name} to {"min": x, "max": y}, or null if nothing is randomized), correct_answer, grader_type, grader_config, tolerance.
+IMPORTANT: every {name} placeholder used ANYWHERE in template_body (question_template, answer_template, AND choices_template) MUST have a matching entry in template_params -- do not introduce a placeholder (e.g. {answer}, {wrong1}) that template_params doesn't define a range for.
+IMPORTANT: for numeric/symbolic_math exercises, answer_template must be a BARE evaluable expression or value once filled in (e.g. "({c} - {b}) / {a}") -- never prefix it with "x =", "answer:", or similar text.
+IMPORTANT: never use "lambda" as a placeholder/variable name in symbolic_math or numeric expressions (e.g. for eigenvalue problems) -- it is a reserved word that breaks evaluation. Use an alternative such as "lam" or "ev" instead."""
+
+_DIAGNOSTIC_INSTRUCTIONS = (
+    """
+Also generate two diagnostic exercises to check whether the student's self-reported level is accurate: a "primary" exercise at their claimed level, and a "backup" one level down. """
+    + _EXERCISE_OBJECT_SPEC
+)
 
 
-def _build_generate_dag_prompt(topic: str, intake_context: IntakeContext | None) -> str:
+def _build_generate_dag_prompt(
+    topic: str, intake_context: IntakeContext | None, validation_error: str = ""
+) -> str:
     if intake_context is not None:
         intake_block = (
             f"\nStudent's self-reported level: {intake_context.level}\n"
@@ -120,7 +145,15 @@ def _build_generate_dag_prompt(topic: str, intake_context: IntakeContext | None)
         diagnostic_block = "\nSet diagnostic_primary and diagnostic_backup to null — no diagnostic exercises are needed this time."
 
     task = _GENERATE_DAG_TASK_TEMPLATE.format(topic=topic, intake_block=intake_block, diagnostic_block=diagnostic_block)
-    return task + _GENERATE_DAG_OUTPUT_FORMAT
+    prompt = task + _GENERATE_DAG_OUTPUT_FORMAT
+
+    if validation_error:
+        prompt += (
+            f"\n\nYour previous attempt's diagnostic exercise failed validation: {validation_error}\n"
+            "Fix this specific issue in your new response."
+        )
+
+    return prompt
 
 
 async def generate_dag(topic: str, intake_context: IntakeContext | None = None) -> DAGResult:
@@ -146,20 +179,62 @@ async def generate_dag(topic: str, intake_context: IntakeContext | None = None) 
     multiple named Dify outputs would need an extra Code node. Parsing
     the one blob into its parts happens here instead, keeping the
     actual Dify workflow to just Start -> LLM -> End.
+
+    Diagnostic exercises get the SAME schema + sanity-instantiation
+    validation as generate_exercise_template() (reused, not
+    duplicated) — live testing found real, concrete defects
+    generate_dag() previously never checked for at all: an
+    answer_template with a literal "x = " prefix that broke SymPy
+    evaluation, and a template referencing {answer}/{wrong1..3}
+    placeholders with no matching template_params entries. On
+    validation failure: ONE retry, the WHOLE prompt re-sent (not just
+    the diagnostic portion — this is one combined generation, matching
+    PRD.md's "one call, not two" framing) with the specific error fed
+    back. If the retry also fails: fail open on the diagnostics ONLY
+    (set to None), keeping the concepts/entry_concept from that last
+    attempt — this matches the already-locked "skip diagnostic ->
+    trust the self-report as-is" fallback (PRD.md, Onboarding
+    Diagnostic Step 1), not a new behavior invented here.
     """
-    prompt = _build_generate_dag_prompt(topic, intake_context)
-    outputs = await call_dify_workflow(DIFY_DAG_API_KEY_ENV, {"prompt": prompt})
-    result = parse_json_output(outputs.get("result", "{}"))
+    validation_error = ""
+    result: dict = {}
+    diagnostic_primary_raw = None
+    diagnostic_backup_raw = None
+
+    for attempt in range(MAX_VALIDATION_RETRIES + 1):
+        prompt = _build_generate_dag_prompt(topic, intake_context, validation_error)
+        outputs = await call_dify_workflow(DIFY_DAG_API_KEY_ENV, {"prompt": prompt})
+        result = parse_json_output(outputs.get("result", "{}"))
+
+        diagnostic_primary_raw = result.get("diagnostic_primary") if intake_context is not None else None
+        diagnostic_backup_raw = result.get("diagnostic_backup") if intake_context is not None else None
+
+        try:
+            if diagnostic_primary_raw:
+                _validate_schema(diagnostic_primary_raw)
+                _sanity_check_instantiation(diagnostic_primary_raw)
+            if diagnostic_backup_raw:
+                _validate_schema(diagnostic_backup_raw)
+                _sanity_check_instantiation(diagnostic_backup_raw)
+            break
+        except TemplateValidationError as e:
+            validation_error = str(e)
+            logger.info(
+                "generate_dag: diagnostic exercise validation failed (attempt %d): %s",
+                attempt + 1,
+                validation_error,
+            )
+            if attempt >= MAX_VALIDATION_RETRIES:
+                diagnostic_primary_raw = None
+                diagnostic_backup_raw = None
+                logger.info(
+                    "generate_dag: fail-open on diagnostics after %d attempt(s) — DAG itself is unaffected",
+                    MAX_VALIDATION_RETRIES + 1,
+                )
 
     concepts = [ConceptNode(**c) for c in result.get("concepts", [])]
-
-    diagnostic_primary = None
-    diagnostic_backup = None
-    if intake_context is not None:
-        if result.get("diagnostic_primary"):
-            diagnostic_primary = ExerciseTemplate(**result["diagnostic_primary"])
-        if result.get("diagnostic_backup"):
-            diagnostic_backup = ExerciseTemplate(**result["diagnostic_backup"])
+    diagnostic_primary = ExerciseTemplate(**diagnostic_primary_raw) if diagnostic_primary_raw else None
+    diagnostic_backup = ExerciseTemplate(**diagnostic_backup_raw) if diagnostic_backup_raw else None
 
     return DAGResult(
         concepts=concepts,
@@ -254,6 +329,49 @@ def _sanity_check_instantiation(template: dict) -> None:
             _try_evaluate_answer(filled_answer)
 
 
+# Same prompt-in-code pattern as acquire()/generate_dag() — see
+# _ACQUIRE_PROMPT's comment for why. Reuses _EXERCISE_OBJECT_SPEC
+# rather than restating the same field/constraint list a third time.
+_EXERCISE_TEMPLATE_TASK_TEMPLATE = """Write exercise templates for this concept: {concept_title}
+Description: {concept_description}
+
+Ground your questions in this retrieved material (JSON array of text chunks):
+{chunks}
+{batch_children_block}"""
+
+
+def _build_generate_exercise_template_prompt(
+    concept_meta: ConceptMeta,
+    top_chunks: list[Chunk],
+    batch_children: list[str],
+    validation_error: str = "",
+) -> str:
+    batch_children_block = ""
+    if batch_children:
+        batch_children_block = (
+            f"\nAlso write templates for these related child concept IDs in the same call: "
+            f"{json.dumps(batch_children)}"
+        )
+
+    task = _EXERCISE_TEMPLATE_TASK_TEMPLATE.format(
+        concept_title=concept_meta.title,
+        concept_description=concept_meta.description,
+        chunks=json.dumps([c.model_dump() for c in top_chunks]),
+        batch_children_block=batch_children_block,
+    )
+    prompt = (
+        task
+        + "\n"
+        + _EXERCISE_OBJECT_SPEC
+        + "\n\nRespond with ONLY a valid JSON array, no other text, no markdown fences."
+    )
+
+    if validation_error:
+        prompt += f"\n\nYour previous attempt failed validation: {validation_error}\nFix this specific issue in your new response."
+
+    return prompt
+
+
 async def generate_exercise_template(
     concept_id: str,
     concept_meta: ConceptMeta,
@@ -281,26 +399,20 @@ async def generate_exercise_template(
     and keep teaching (PRD.md: "Never block the teaching loop on a
     failed template generation").
 
-    Dify workflow contract assumed (UNVERIFIED): input variables, ALL
-    plain text — "concept_title", "concept_description", "chunks"
-    (JSON-encoded array of {text, chunk_type, difficulty}),
-    "batch_children" (JSON-encoded array of concept_ids),
-    "validation_error" (empty string on the first attempt). Output
-    variable "templates" — plain text containing a JSON array matching
-    ExerciseTemplate.
+    Prompt built entirely in code (_build_generate_exercise_template_prompt),
+    same pattern as acquire()/generate_dag() — see _ACQUIRE_PROMPT's
+    comment for why.
+
+    Dify workflow contract assumed (UNVERIFIED): ONE input variable,
+    "prompt" (plain text). Output variable "templates" — plain text
+    containing a JSON array matching ExerciseTemplate.
     """
     batch_children = batch_children or []
-    inputs: dict = {
-        "concept_title": concept_meta.title,
-        "concept_description": concept_meta.description,
-        "chunks": json.dumps([c.model_dump() for c in top_chunks]),
-        "batch_children": json.dumps(batch_children),
-    }
 
     validation_error = ""
     for attempt in range(MAX_VALIDATION_RETRIES + 1):
-        inputs["validation_error"] = validation_error
-        outputs = await call_dify_workflow(DIFY_EXERCISE_TEMPLATE_API_KEY_ENV, inputs)
+        prompt = _build_generate_exercise_template_prompt(concept_meta, top_chunks, batch_children, validation_error)
+        outputs = await call_dify_workflow(DIFY_EXERCISE_TEMPLATE_API_KEY_ENV, {"prompt": prompt})
         raw_templates = parse_json_output(outputs.get("templates", "[]"))
 
         try:
