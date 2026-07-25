@@ -653,55 +653,78 @@ mod tests {
     // above: those are blocked only on Windows being awake and
     // reachable. These are ALSO blocked on Dify not being configured
     // at all yet — a real, currently-true gap, not a hypothetical one.
-    // So rather than write a "real_end_to_end" test that would just
-    // fail for an uninteresting reason (no Dify app exists to call),
-    // each of these currently verifies the ONE thing that actually is
-    // true today: the endpoint exists, is reachable, and correctly
-    // reports "not configured" (503) instead of crashing. Once Dify is
-    // set up (see setup instructions), EACH of these must be rewritten
-    // to assert real success instead — that rewrite is the actual
-    // verification this section still needs.
+    // UPDATED: all three Dify apps are now built and confirmed working
+    // (verified via direct curl against a local ai_service instance —
+    // see problems.md #32/#33). These tests now assert real success,
+    // matching the other *_real_end_to_end tests in this file. Kept as
+    // #[ignore] for the same reason as the others: needs the real
+    // service reachable, not something a routine `cargo test` should
+    // depend on. NOTE: AI_SERVICE_URL below points at the
+    // Windows-hosted container, not the local Mac venv instance the
+    // curl verification actually used — this is the first time these
+    // three functions run against Windows specifically, and Windows
+    // needs its own .env with the real Dify keys (gitignored, never
+    // transferred by git) for this to succeed there.
 
     #[tokio::test]
     #[ignore]
-    async fn acquire_reports_not_configured_before_dify_setup() {
+    async fn acquire_real_end_to_end() {
         let client = production_client();
-        let err = acquire(&client, AI_SERVICE_URL, "linear algebra".to_string())
+        let result = acquire(&client, AI_SERVICE_URL, "linear algebra".to_string())
             .await
-            .expect_err("acquire() should fail until Dify is configured");
+            .expect("acquire() call failed");
 
-        println!("acquire() failed as expected (pre-Dify-setup): {err:?}");
+        println!("acquire() returned {} resource(s)", result.len());
+        for r in &result {
+            println!("  - {}", r.title);
+        }
+
+        assert!(!result.is_empty());
+        assert!(result.iter().all(|r| !r.title.is_empty() && !r.content.is_empty()));
     }
 
     #[tokio::test]
     #[ignore]
-    async fn generate_dag_reports_not_configured_before_dify_setup() {
+    async fn generate_dag_real_end_to_end() {
         let client = production_client();
-        let err = generate_dag(&client, AI_SERVICE_URL, "linear algebra".to_string(), None)
+        let result = generate_dag(&client, AI_SERVICE_URL, "linear algebra".to_string(), None)
             .await
-            .expect_err("generate_dag() should fail until Dify is configured");
+            .expect("generate_dag() call failed");
 
-        println!("generate_dag() failed as expected (pre-Dify-setup): {err:?}");
+        println!(
+            "generate_dag() returned {} concept(s), entry_concept: {}",
+            result.concepts.len(),
+            result.entry_concept
+        );
+
+        assert!(!result.concepts.is_empty());
+        assert!(!result.entry_concept.is_empty());
     }
 
     #[tokio::test]
     #[ignore]
-    async fn generate_exercise_template_reports_not_configured_before_dify_setup() {
+    async fn generate_exercise_template_real_end_to_end() {
         let client = production_client();
-        let err = generate_exercise_template(
+        let result = generate_exercise_template(
             &client,
             AI_SERVICE_URL,
             Uuid::new_v4(),
             ConceptMeta {
-                title: "Vectors".to_string(),
-                description: "Introduction to vectors".to_string(),
+                title: "Eigenvalues and Eigenvectors".to_string(),
+                description: "An eigenvalue of a square matrix A is a scalar lambda such that Av = lambda*v for some nonzero vector v (the eigenvector).".to_string(),
             },
-            vec![],
+            vec![Chunk {
+                text: "For a 2x2 matrix, the characteristic equation det(A - lambda*I) = 0 gives a quadratic in lambda.".to_string(),
+                chunk_type: Some("explanation".to_string()),
+                difficulty: Some("intermediate".to_string()),
+            }],
             vec![],
         )
         .await
-        .expect_err("generate_exercise_template() should fail until Dify is configured");
+        .expect("generate_exercise_template() call failed");
 
-        println!("generate_exercise_template() failed as expected (pre-Dify-setup): {err:?}");
+        println!("generate_exercise_template() returned {} template(s)", result.len());
+
+        assert!(!result.is_empty());
     }
 }
