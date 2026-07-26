@@ -1,8 +1,18 @@
 # Windows-side compose — the services Hardware Distribution assigns to
-# the Windows RTX PC: postgres, chromadb, ai_service, ollama. This is a
+# the Windows RTX PC: postgres, chromadb, ai_service. This is a
 # DIFFERENT scope from the root docker-compose.yml, which is Mac-only
 # local-dev convenience for the app-layer services (backend, frontend)
 # that normally run natively per Hardware Distribution.
+#
+# Ollama was originally assigned here too (Hardware Distribution), but
+# actually runs NATIVELY on Windows instead — containerized GPU
+# inference needs the NVIDIA Container Toolkit + Docker Desktop's WSL2
+# GPU passthrough properly set up, and without it silently falls back
+# to CPU-only, defeating the point of the RTX 3060. A native install
+# sidesteps that. Removed the unused `ollama` service definition
+# entirely rather than keep dead config around — revisit if GPU
+# passthrough is ever properly set up and containerizing it becomes
+# worthwhile.
 #
 # Redis is deliberately NOT included here — it's currently running
 # natively via Memurai on Windows, not containerized. Revisit separately
@@ -51,12 +61,12 @@ services:
       context: ./ai_service
     restart: unless-stopped
     environment:
-      # Ollama is currently running natively on Windows (this compose
-      # file's own `ollama` service below is unused while that's true)
-      # — from inside this container, `localhost` means the container
-      # itself, not the Windows host, so reaching a natively-running
-      # service requires host.docker.internal (Docker Desktop's bridge
-      # back to the host), not a plain localhost/127.0.0.1 URL.
+      # Ollama runs natively on Windows, not in this compose file (see
+      # header comment) — from inside this container, `localhost` means
+      # the container itself, not the Windows host, so reaching a
+      # natively-running service requires host.docker.internal (Docker
+      # Desktop's bridge back to the host), not a plain
+      # localhost/127.0.0.1 URL.
       OLLAMA_HOST: http://host.docker.internal:11434
       # Block 10 (Dify) — all optional at the compose level: unset
       # means the corresponding env var is simply absent inside the
@@ -71,26 +81,6 @@ services:
     ports:
       - "8000:8000"
 
-  ollama:
-    image: ollama/ollama
-    restart: unless-stopped
-    ports:
-      - "11434:11434"
-    volumes:
-      - ollama_data:/root/.ollama
-    # Requires the NVIDIA Container Toolkit (and, on Windows, Docker
-    # Desktop's WSL2 GPU passthrough) already set up on the host —
-    # without it this silently falls back to CPU-only inference on the
-    # RTX 3060 sitting right there, defeating the point of this hardware.
-    deploy:
-      resources:
-        reservations:
-          devices:
-            - driver: nvidia
-              count: all
-              capabilities: [gpu]
-
 volumes:
   postgres_data:
   chromadb_data:
-  ollama_data:
