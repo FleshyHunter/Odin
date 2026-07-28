@@ -8,6 +8,7 @@ from app.embedding.router import router as embedding_router
 from app.embedding.service import get_model
 from app.generation.router import router as generation_router
 from app.grading.router import router as grading_router
+from app.ingestion.router import router as ingestion_router
 from app.voice.router import router as voice_router
 
 # Root logger defaults to WARNING with no handler attached — verified
@@ -27,6 +28,7 @@ app.include_router(voice_router)
 app.include_router(analyze_input_router)
 app.include_router(grading_router)
 app.include_router(acquisition_router)
+app.include_router(ingestion_router)
 
 
 @app.get("/health")

@@ -9,7 +9,10 @@ mod handlers;
 // same as ai_client's own not-yet-wired functions (see main.rs).
 #[allow(dead_code)]
 mod similarity;
-mod staging;
+// pub: uploads:: (Block 12) shares StagedThread/StagedUpload and
+// load_owned/save with memoryless::handlers — a staged upload lives
+// inside the SAME Redis-staged thread blob, not a separate store.
+pub mod staging;
 mod turn;
 
 use axum::{

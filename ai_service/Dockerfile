@@ -5,7 +5,10 @@ WORKDIR /app
 # out to it internally to decode uploaded audio before transcribing.
 # python:3.12-slim doesn't include it; without this, transcription fails
 # deep inside Whisper's decode step, not at boot.
-RUN apt-get update && apt-get install -y --no-install-recommends ffmpeg \
+# tesseract-ocr (Block 12): pytesseract only wraps this binary, the OCR
+# engine itself is not a pip package either. English-only language data
+# is all that's needed (Rule: v1 supports English only).
+RUN apt-get update && apt-get install -y --no-install-recommends ffmpeg tesseract-ocr \
     && rm -rf /var/lib/apt/lists/*
 
 COPY requirements.txt .

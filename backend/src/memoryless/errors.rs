@@ -47,6 +47,15 @@ impl IntoResponse for MemorylessError {
 
 impl From<sqlx::Error> for MemorylessError {
     fn from(err: sqlx::Error) -> Self {
+        // PoolTimedOut/Io mean Postgres itself is unreachable (found via
+        // real testing during Block 12: a genuinely-down Postgres was
+        // surfacing as a misleading 500 "internal error" instead of the
+        // more honest 503 this already gets right for Redis, below) —
+        // any other sqlx::Error is a real query/logic problem.
+        if matches!(err, sqlx::Error::PoolTimedOut | sqlx::Error::Io(_)) {
+            tracing::warn!(?err, "database unreachable in memoryless handler");
+            return MemorylessError::ServiceUnavailable("Database unreachable");
+        }
         tracing::error!(?err, "database error in memoryless handler");
         MemorylessError::Internal
     }

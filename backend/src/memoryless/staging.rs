@@ -52,18 +52,56 @@ pub struct StagedAuditEvent {
     pub timestamp: DateTime<Utc>,
 }
 
+// Block 12 (markdown/deferred.md #21/#23): a chunk of an ingestion-tier
+// upload (prompt_upload/material_upload only — ephemeral is never
+// staged/chunked/embedded at all, per its own definition), already
+// extracted+chunked+embedded by ai_service's POST /ingest. Mirrors the
+// `chunks` table's shape closely enough that conversion can insert
+// these near-verbatim once a real destination (Postgres now, ChromaDB
+// once #25 exists) is available.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct StagedChunk {
+    pub text: String,
+    pub token_count: i32,
+    pub embedding: Vec<f32>,
+}
+
+// One staged, deduped upload. `content_hash` is stored so a LATER
+// upload in the same session can be checked against this one too
+// (Duplicate Upload Prevention's third scope: "this session's own
+// Redis-staged uploads") without re-deriving it from raw bytes again.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct StagedUpload {
+    pub content_hash: String,
+    pub filename: String,
+    // "prompt_upload" | "material_upload" — matches sources.upload_role's
+    // CHECK constraint (migrations/0001_initial_schema.sql).
+    pub upload_role: String,
+    pub extracted_text: String,
+    pub chunks: Vec<StagedChunk>,
+    pub created_at: DateTime<Utc>,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct StagedThread {
     pub thread_id: Uuid,
     pub user_id: Uuid,
     pub messages: Vec<StagedMessage>,
     pub audit_events: Vec<StagedAuditEvent>,
+    pub staged_uploads: Vec<StagedUpload>,
     pub created_at: DateTime<Utc>,
 }
 
 impl StagedThread {
     pub fn new(thread_id: Uuid, user_id: Uuid) -> Self {
-        Self { thread_id, user_id, messages: Vec::new(), audit_events: Vec::new(), created_at: Utc::now() }
+        Self {
+            thread_id,
+            user_id,
+            messages: Vec::new(),
+            audit_events: Vec::new(),
+            staged_uploads: Vec::new(),
+            created_at: Utc::now(),
+        }
     }
 }
 
@@ -110,4 +148,21 @@ pub async fn delete(state: &AppState, thread_id: Uuid) -> Result<(), MemorylessE
     let mut conn = state.get_redis_connection().await?;
     conn.del::<_, ()>(thread_key(thread_id)).await?;
     Ok(())
+}
+
+/// Loads a staged thread and enforces ownership (Rule 34): `None` from
+/// Redis is a clean 410 (expired or never existed — Rule 11 makes no
+/// distinction meaningful), a thread owned by someone else is a 404
+/// (never confirm existence to a non-owner). Shared by both
+/// memoryless::handlers (chat turns) and uploads::handlers (Block 12) —
+/// both need the identical "load this thread_id, only if it's really
+/// mine" check.
+pub async fn load_owned(state: &AppState, thread_id: Uuid, user_id: Uuid) -> Result<StagedThread, MemorylessError> {
+    let thread = load(state, thread_id)
+        .await?
+        .ok_or(MemorylessError::ThreadExpiredOrNotFound)?;
+    if thread.user_id != user_id {
+        return Err(MemorylessError::NotFound);
+    }
+    Ok(thread)
 }

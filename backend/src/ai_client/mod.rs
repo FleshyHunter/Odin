@@ -528,13 +528,13 @@ pub async fn generate_dag(
     Ok(body)
 }
 
-#[derive(Serialize, Debug, Clone)]
+#[derive(Serialize, Deserialize, Debug, Clone)]
 pub struct ConceptMeta {
     pub title: String,
     pub description: String,
 }
 
-#[derive(Serialize, Debug, Clone)]
+#[derive(Serialize, Deserialize, Debug, Clone)]
 pub struct Chunk {
     pub text: String,
     pub chunk_type: Option<String>,
@@ -603,6 +603,65 @@ pub async fn generate_exercise_template(
         .map_err(|err| AiClientError::UnexpectedResponse(err.to_string()))?;
 
     Ok(body.templates)
+}
+
+#[derive(Debug, Deserialize, Clone)]
+pub struct IngestChunk {
+    pub text: String,
+    pub token_count: i32,
+    pub embedding: Vec<f32>,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct IngestResponse {
+    pub extracted_text: String,
+    pub rejected: bool,
+    pub rejection_reason: Option<String>,
+    pub chunks: Vec<IngestChunk>,
+}
+
+/// Calls FastAPI's POST /ingest (Block 12 — markdown/deferred.md #21/
+/// #23) with a raw uploaded file and the caller-chosen role. A
+/// multipart request, same shape as transcribe() — `filename` forwarded
+/// as-is so ai_service can branch on its extension (PDF/DOCX/TXT/PNG/
+/// HEIC). Ephemeral role returns extracted_text only (empty chunks);
+/// prompt_upload/material_upload additionally return chunked +
+/// embedded content, ready to persist. content_hash/dedup is NOT this
+/// function's concern — that runs in Rust, BEFORE this is ever called
+/// (Duplicate Upload Prevention), so a caller only reaches this once a
+/// hash-match has already been ruled out.
+pub async fn ingest(
+    client: &reqwest::Client,
+    ai_service_url: &str,
+    file_bytes: Vec<u8>,
+    filename: &str,
+    role: &str,
+) -> Result<IngestResponse, AiClientError> {
+    let url = format!("{ai_service_url}/ingest");
+
+    let part = reqwest::multipart::Part::bytes(file_bytes).file_name(filename.to_string());
+    let form = reqwest::multipart::Form::new()
+        .part("file", part)
+        .text("role", role.to_string());
+
+    let response = client
+        .post(&url)
+        .multipart(form)
+        .send()
+        .await
+        .map_err(|_| AiClientError::ServiceUnavailable)?;
+
+    if !response.status().is_success() {
+        return Err(AiClientError::UnexpectedResponse(format!(
+            "status {}",
+            response.status()
+        )));
+    }
+
+    response
+        .json()
+        .await
+        .map_err(|err| AiClientError::UnexpectedResponse(err.to_string()))
 }
 
 #[cfg(test)]

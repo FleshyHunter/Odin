@@ -14,22 +14,8 @@ use crate::auth::middleware::{begin_rls_transaction, AuthUser};
 use crate::state::AppState;
 
 use super::errors::MemorylessError;
-use super::staging::{self, StagedThread};
+use super::staging::{self, load_owned, StagedThread};
 use super::turn;
-
-/// Loads a staged thread and enforces ownership (Rule 34): `None` from
-/// Redis is a clean 410 (expired or never existed — Rule 11 makes no
-/// distinction meaningful), a thread owned by someone else is a 404
-/// (never confirm existence to a non-owner).
-async fn load_owned(state: &AppState, thread_id: Uuid, user_id: Uuid) -> Result<StagedThread, MemorylessError> {
-    let thread = staging::load(state, thread_id)
-        .await?
-        .ok_or(MemorylessError::ThreadExpiredOrNotFound)?;
-    if thread.user_id != user_id {
-        return Err(MemorylessError::NotFound);
-    }
-    Ok(thread)
-}
 
 #[derive(Deserialize)]
 pub struct SendMessageRequest {
@@ -167,6 +153,17 @@ pub async fn convert(
     }
 
     tx.commit().await?;
+
+    // thread.staged_uploads is deliberately NOT committed here (Block
+    // 12 — markdown/deferred.md #17/#25/#27): material_upload has no
+    // real ChromaDB destination yet, and prompt_upload can't pass RLS
+    // at all without a real journey_id to attach to (neither exists —
+    // both are Milestone 9/10 dependencies). Stated plainly, not
+    // softened: any staged_uploads on this thread are LOST at this
+    // point, not merely delayed — they live in the SAME Redis key
+    // being deleted below, so a successfully deduped/chunked/embedded
+    // upload does not survive its thread's conversion in this pass. A
+    // real gap, tracked rather than hidden.
 
     // Only remove the Redis entry once Postgres durably has it.
     staging::delete(&state, thread_id).await?;
