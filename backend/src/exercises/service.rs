@@ -50,18 +50,46 @@ pub async fn get_or_generate(
         // Someone else is already generating for this concept — don't
         // call Claude a second time for a result that would just be
         // discarded; wait for theirs and hand back whatever they save.
-        return poll_for_canonical(&state.pool, concept_id, LOCK_TTL_SECONDS).await;
+        return poll_for_canonical(state, concept_id, LOCK_TTL_SECONDS).await;
     }
     conn.expire::<_, ()>(&key, LOCK_TTL_SECONDS as i64).await?;
 
-    let generation_result = ai_client::generate_exercise_template(
-        &state.http_client,
-        &state.ai_service_url,
-        concept_id,
-        concept_meta,
-        top_chunks,
-        batch_children,
-    )
+    // The lock's lifetime must cover generation AND persistence, not
+    // just the Dify call — found live (Block 12 verification, a real
+    // concurrent-request test): releasing it right after the call
+    // returned let a poller observe a PARTIAL insert (some but not all
+    // of a multi-template batch already written) and return that
+    // incomplete set as if it were the final answer. Held via a
+    // closure so every exit path (including `?` on a failed
+    // generation) still releases it exactly once, in the right place.
+    let outcome = async {
+        let templates = ai_client::generate_exercise_template(
+            &state.http_client,
+            &state.ai_service_url,
+            concept_id,
+            concept_meta,
+            top_chunks,
+            batch_children,
+        )
+        .await?;
+
+        // Discovered live (Block 12 verification): Dify/Claude can
+        // propose more than one template for the SAME difficulty in a
+        // single batch (e.g. three "basic" candidates) — the DB's
+        // unique index correctly keeps only the first as canonical,
+        // but looping insert_or_fetch_existing() per ATTEMPT and
+        // returning that raw vector meant the response repeated the
+        // same canonical row multiple times (one per attempt), while a
+        // polling loser's response (fetch_canonical_templates, below)
+        // was already the clean, deduplicated set. Re-fetching fresh
+        // here instead of returning the per-attempt vector makes both
+        // code paths return byte-for-byte the same shape — the actual
+        // canonical set, not an attempt log.
+        for template in &templates {
+            insert_or_fetch_existing(&state.pool, concept_id, template).await?;
+        }
+        fetch_canonical_templates(&state.pool, concept_id).await
+    }
     .await;
 
     // Best-effort release regardless of outcome — a held lock past its
@@ -69,26 +97,37 @@ pub async fn get_or_generate(
     // never causes incorrect data (the DB constraint still holds).
     let _: Result<(), _> = conn.del(&key).await;
 
-    let templates = generation_result?;
-    let mut persisted = Vec::with_capacity(templates.len());
-    for template in &templates {
-        persisted.push(insert_or_fetch_existing(&state.pool, concept_id, template).await?);
-    }
-    Ok(persisted)
+    outcome
 }
 
-/// The "losing" request's path: no real generation call, just watches
-/// the database for whatever the lock-holder ends up saving.
+/// The "losing" request's path: no real generation call — waits for
+/// the LOCK to be released (signaling the whole batch, not just part
+/// of it, is done) before ever reading the database, then hands back
+/// whatever the winner saved.
 async fn poll_for_canonical(
-    pool: &PgPool,
+    state: &AppState,
     concept_id: Uuid,
     timeout_seconds: u64,
 ) -> Result<Vec<ExerciseTemplate>, ExerciseError> {
+    let key = lock_key(concept_id);
     let deadline = tokio::time::Instant::now() + Duration::from_secs(timeout_seconds);
     loop {
-        let existing = fetch_canonical_templates(pool, concept_id).await?;
-        if !existing.is_empty() {
-            return Ok(existing);
+        let mut conn = state.get_redis_connection().await?;
+        let lock_still_held: bool = conn.exists(&key).await?;
+        if !lock_still_held {
+            // Winner released it (finished, one way or another) — only
+            // NOW is it safe to read, since a released lock is the
+            // signal the whole batch (not just part of it) landed.
+            let existing = fetch_canonical_templates(&state.pool, concept_id).await?;
+            if !existing.is_empty() {
+                return Ok(existing);
+            }
+            // Lock's gone but nothing was ever saved — the winner's
+            // own generation failed rather than validation-passed, so
+            // there is nothing left to wait for.
+            return Err(ExerciseError::GenerationFailed(
+                "concurrent generation finished without producing any templates".to_string(),
+            ));
         }
         if tokio::time::Instant::now() >= deadline {
             // Fail-open per PRD.md's Validation section — never block

@@ -278,6 +278,19 @@ def _instantiate_params(template_params: dict) -> dict:
     """
     values = {}
     for name, spec in (template_params or {}).items():
+        # Found live (Block 12 verification, real Dify call on an
+        # eigenvalues concept): Claude sometimes emits a malformed
+        # param spec (e.g. null) instead of {"min":x,"max":y} — without
+        # this check, subscripting it raises a raw TypeError that
+        # escapes _sanity_check_instantiation's caller entirely
+        # (neither SympifyError/TypeError/ValueError/ZeroDivisionError
+        # nor TemplateValidationError), crashing the whole request with
+        # an unhandled 500 instead of triggering the retry-with-
+        # feedback loop this validation layer exists to drive.
+        if not isinstance(spec, dict) or "min" not in spec or "max" not in spec:
+            raise TemplateValidationError(
+                f"template_params[{name!r}] must be an object with min/max, got {spec!r}"
+            )
         lo, hi = spec["min"], spec["max"]
         values[name] = random.randint(lo, hi) if isinstance(lo, int) and isinstance(hi, int) else random.uniform(lo, hi)
     return values
