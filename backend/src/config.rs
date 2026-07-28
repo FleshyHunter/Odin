@@ -27,6 +27,14 @@ pub struct Config {
     // var name and value shape, ARCHITECTURE.md's Environment
     // Variables list — e.g. http://100.125.58.90:8000).
     pub ai_service_url: String,
+    // Block 11: Memoryless Mode's Redis-staged thread TTL (PRD.md,
+    // Memoryless Mode). Sliding — reset on every new message, not a
+    // fixed expiry from creation. Deliberately its own env var, not
+    // shared with MEMORYLESS_STAGED_UPLOAD_TTL_MINUTES (that one's
+    // Block-12+ territory and can legitimately differ — a large staged
+    // upload arguably deserves a shorter, more deliberate window than
+    // casual message history).
+    pub memoryless_thread_ttl_minutes: i64,
 }
 
 impl Config {
@@ -80,6 +88,11 @@ impl Config {
         let resend_api_key = env::var("RESEND_API_KEY").ok();
         let ai_service_url = env::var("AI_SERVICE_URL").expect("AI_SERVICE_URL must be set");
 
+        let memoryless_thread_ttl_minutes = env::var("MEMORYLESS_THREAD_TTL_MINUTES")
+            .ok()
+            .and_then(|v| v.parse().ok())
+            .unwrap_or(60);
+
         Self {
             database_url,
             db_pool_size,
@@ -94,6 +107,7 @@ impl Config {
             password_reset_token_expiry_hours,
             resend_api_key,
             ai_service_url,
+            memoryless_thread_ttl_minutes,
         }
     }
 }

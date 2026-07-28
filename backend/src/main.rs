@@ -2,11 +2,17 @@
 // real feature needing embeddings until a much later block (ingestion/
 // chunking) — verification of the actual live call is deferred too, per
 // this pass's explicit scope (code only, not yet wired to a route).
+// analyze_input()/generate() are now used (Block 11's memoryless chat
+// turn); embed()/transcribe()/acquire()/generate_dag()/
+// generate_exercise_template()/grade() still have no Rust caller until
+// later blocks wire ingestion/onboarding/grading routes, hence the
+// module-level allow still covers the rest.
 #[allow(dead_code)]
 mod ai_client;
 mod auth;
 mod config;
 mod db;
+mod memoryless;
 mod models;
 mod routes;
 mod state;
@@ -55,6 +61,7 @@ async fn main() {
     let app = Router::new()
         .merge(routes::router())
         .merge(auth::router())
+        .merge(memoryless::router())
         .with_state(app_state);
 
     let listener = tokio::net::TcpListener::bind(("0.0.0.0", config.port))

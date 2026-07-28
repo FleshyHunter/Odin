@@ -42,6 +42,19 @@ export interface ChatMessage {
   timestamp: string;
 }
 
+// A graceful, dismissible banner that attaches to the top of the
+// Composer (see ComposerNotice) — 'warning' for advisory/non-blocking
+// conditions (e.g. a future rate limit), 'error' for something that
+// actually failed (e.g. the tutoring engine being unreachable).
+export type ComposerNoticeTone = 'warning' | 'error';
+
+export interface ComposerNoticeData {
+  tone: ComposerNoticeTone;
+  message: string;
+  actionLabel?: string;
+  onAction?: () => void;
+}
+
 export type Difficulty = 'basic' | 'intermediate' | 'advanced';
 
 export interface MatrixValue {

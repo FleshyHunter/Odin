@@ -1,5 +1,5 @@
 import type { ChatMessage, Track } from '../types';
-import { simulateDelay } from './client';
+import { ApiError, simulateDelay } from './client';
 
 // In-memory only — stands in for a real backend/DB row set. Normally
 // starts empty (true empty state — no tracks until the user creates one);
@@ -54,7 +54,23 @@ export async function getMessages(_trackId: string): Promise<ChatMessage[]> {
 // Real contract: POST /tracks/:trackId/messages { text } -> ChatMessage (tutor reply)
 // study_threads are written to PostgreSQL only on first message (Rule 11) —
 // this stub doesn't model that distinction, it's a backend-side concern.
+//
+// The two branches below are dev-only triggers to preview ComposerNotice's
+// two tones without a real backend condition to fail against yet (frontend
+// is still fully mocked) — type "/error" or "/warning" as a message. Delete
+// both once real backend wiring replaces simulateDelay with an actual
+// fetch() that can fail for real (see ApiError's own doc comment).
 export async function sendMessage(_trackId: string, text: string): Promise<ChatMessage> {
+  const trimmed = text.trim().toLowerCase();
+  if (trimmed === '/error') {
+    await simulateDelay(null, 500);
+    throw new ApiError('error', "Couldn't reach Odin's tutoring engine. Check your connection and try again.");
+  }
+  if (trimmed === '/warning') {
+    await simulateDelay(null, 500);
+    throw new ApiError('warning', "You're sending messages quickly — slow down a little.");
+  }
+
   return simulateDelay(
     {
       id: `tutor-${Date.now()}`,

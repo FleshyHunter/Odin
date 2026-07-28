@@ -34,13 +34,13 @@ pub struct AppState {
     pub password_reset_token_expiry_hours: i64,
     // Block 5: shared across every ai_client call — reqwest::Client
     // pools connections internally, so this is built once here rather
-    // than per-call, same reasoning as reusing the Postgres pool. Not
-    // read anywhere yet — no route calls ai_client::embed() until a
-    // later block gives it something real to do.
-    #[allow(dead_code)]
+    // than per-call, same reasoning as reusing the Postgres pool. Read
+    // by the memoryless chat-turn handler (Block 11) via ai_client::
+    // analyze_input/generate.
     pub http_client: reqwest::Client,
-    #[allow(dead_code)]
     pub ai_service_url: Arc<str>,
+    // Block 11: sliding TTL for Redis-staged memoryless threads.
+    pub memoryless_thread_ttl_minutes: i64,
 }
 
 impl AppState {
@@ -64,17 +64,41 @@ impl AppState {
             password_reset_token_expiry_hours: config.password_reset_token_expiry_hours,
             http_client,
             ai_service_url: Arc::from(config.ai_service_url.as_str()),
+            memoryless_thread_ttl_minutes: config.memoryless_thread_ttl_minutes,
         }
     }
 
     /// A fresh connection per call, bounded to 5s so an unreachable
-    /// Redis fails a single request clearly (503-mapped via
-    /// AuthError::ServiceUnavailable) instead of hanging or, worse,
-    /// taking the whole process down with it.
-    pub async fn get_redis(&self) -> Result<MultiplexedConnection, AuthError> {
+    /// Redis fails a single request clearly instead of hanging or,
+    /// worse, taking the whole process down with it. Error type is
+    /// generic (not AuthError) so non-auth callers (Block 11's
+    /// memoryless module) can map it to their own error enum via
+    /// `From<RedisConnectError>` rather than borrowing auth's type.
+    pub async fn get_redis_connection(&self) -> Result<MultiplexedConnection, RedisConnectError> {
         tokio::time::timeout(Duration::from_secs(5), self.redis_client.get_multiplexed_async_connection())
             .await
-            .map_err(|_| AuthError::ServiceUnavailable("Redis unreachable"))?
-            .map_err(AuthError::from)
+            .map_err(|_| RedisConnectError::Timeout)?
+            .map_err(RedisConnectError::Redis)
+    }
+
+    pub async fn get_redis(&self) -> Result<MultiplexedConnection, AuthError> {
+        self.get_redis_connection().await.map_err(AuthError::from)
+    }
+}
+
+#[derive(Debug, thiserror::Error)]
+pub enum RedisConnectError {
+    #[error("Redis connection timed out")]
+    Timeout,
+    #[error(transparent)]
+    Redis(#[from] redis::RedisError),
+}
+
+impl From<RedisConnectError> for AuthError {
+    fn from(err: RedisConnectError) -> Self {
+        match err {
+            RedisConnectError::Timeout => AuthError::ServiceUnavailable("Redis unreachable"),
+            RedisConnectError::Redis(e) => AuthError::from(e),
+        }
     }
 }

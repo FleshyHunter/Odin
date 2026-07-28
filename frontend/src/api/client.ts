@@ -13,3 +13,20 @@ export const API_BASE_URL = import.meta.env.VITE_API_BASE_URL ?? 'http://localho
 export function simulateDelay<T>(value: T, ms = 500): Promise<T> {
   return new Promise((resolve) => setTimeout(() => resolve(value), ms));
 }
+
+// Thrown by a stub instead of a plain Error when it wants to simulate a
+// REAL failure a caller should show gracefully (see ComposerNotice) —
+// `tone` maps directly onto ComposerNoticeTone so a catch site doesn't
+// need its own translation table. Once a stub is swapped for a real
+// fetch(), a non-2xx response should be turned into this same shape
+// (tone from the status code, message from the response body) so
+// every caller's error handling keeps working unchanged.
+export class ApiError extends Error {
+  constructor(
+    public tone: 'warning' | 'error',
+    message: string,
+  ) {
+    super(message);
+    this.name = 'ApiError';
+  }
+}

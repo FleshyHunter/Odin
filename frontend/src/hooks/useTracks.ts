@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import * as tracksApi from '../api/tracks';
-import type { ChatMessage, Track } from '../types';
+import { ApiError } from '../api/client';
+import type { ChatMessage, ComposerNoticeData, Track } from '../types';
 
 export function useTracks() {
   const [tracks, setTracks] = useState<Track[]>([]);
@@ -56,6 +57,10 @@ export function useTrackMessages(trackId: string) {
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [isLoading, setIsLoading] = useState(true);
   const [isSending, setIsSending] = useState(false);
+  // Surfaced via Composer's ComposerNotice banner rather than swallowed —
+  // previously this catch didn't exist at all (a rejected sendMessage()
+  // just vanished into an unhandled promise rejection).
+  const [composerNotice, setComposerNotice] = useState<ComposerNoticeData | null>(null);
 
   useEffect(() => {
     let cancelled = false;
@@ -72,6 +77,7 @@ export function useTrackMessages(trackId: string) {
 
   const send = useCallback(
     async (text: string) => {
+      setComposerNotice(null);
       const studentMessage: ChatMessage = {
         id: `local-${Date.now()}`,
         role: 'student',
@@ -83,6 +89,13 @@ export function useTrackMessages(trackId: string) {
       try {
         const tutorReply = await tracksApi.sendMessage(trackId, text);
         setMessages((prev) => [...prev, tutorReply]);
+      } catch (err) {
+        setComposerNotice({
+          tone: err instanceof ApiError ? err.tone : 'error',
+          message: err instanceof ApiError ? err.message : 'Something went wrong. Try again.',
+          actionLabel: 'Retry',
+          onAction: () => send(text),
+        });
       } finally {
         setIsSending(false);
       }
@@ -90,5 +103,7 @@ export function useTrackMessages(trackId: string) {
     [trackId],
   );
 
-  return { messages, isLoading, isSending, send };
+  const dismissComposerNotice = useCallback(() => setComposerNotice(null), []);
+
+  return { messages, isLoading, isSending, send, composerNotice, dismissComposerNotice };
 }

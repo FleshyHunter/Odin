@@ -70,6 +70,9 @@
   --error: #E08585;      /* already used inline for destructive actions
                              (TrackMenu delete) — promoted to a token here
                              so it's not hand-typed hex in component CSS */
+  --error-dim: #3D2626;  /* muted background behind red text/icons —
+                             same relationship --glow-dim has to --glow,
+                             used by ComposerNotice's error tone */
 
   /* ---- Focus ring ---- */
   --focus: #E8B76A;

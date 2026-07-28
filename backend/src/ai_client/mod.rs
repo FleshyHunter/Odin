@@ -6,6 +6,7 @@
 // endpoint as later blocks add them (transcribe, acquire, ...); Block 5
 // added /embed, Block 6 adds /generate.
 
+use futures_util::{Stream, StreamExt};
 use serde::{Deserialize, Serialize};
 use serde_json::Value as Json;
 use uuid::Uuid;
@@ -107,6 +108,91 @@ pub async fn generate(
         .map_err(|err| AiClientError::UnexpectedResponse(err.to_string()))?;
 
     Ok(body.response)
+}
+
+// One line of ai_service's POST /generate/stream NDJSON body — either a
+// text delta or (as the last line, if generation fails partway) an
+// error message. Untagged: the two variants have no shared discriminator
+// field, so serde picks whichever one actually matches the JSON shape.
+#[derive(Deserialize)]
+#[serde(untagged)]
+enum GenerateStreamLine {
+    Delta { delta: String },
+    Error { error: String },
+}
+
+/// Calls FastAPI's POST /generate/stream (Block 11 follow-up,
+/// markdown/deferred.md #20) and returns a stream of text deltas as
+/// qwen produces them, instead of blocking for the full response like
+/// generate() does. The OUTER Result covers "could the request even be
+/// started" (mirrors generate()'s own error handling, checked BEFORE
+/// any streaming begins, so an unreachable ai_service still surfaces as
+/// a normal, immediate error rather than a stream that opens then
+/// immediately fails). The INNER per-item Result covers a failure
+/// DURING streaming — a transport error reading the body, or
+/// ai_service's own {"error": ...} sentinel line.
+///
+/// Callers own deciding what "the stream ended early" means (client
+/// disconnect, a stalled-too-long gap, an inner Err) — this function
+/// only relays what ai_service sent, it doesn't interpret it.
+pub async fn generate_stream(
+    client: &reqwest::Client,
+    ai_service_url: &str,
+    prompt: String,
+    think: bool,
+) -> Result<impl Stream<Item = Result<String, AiClientError>> + Send + 'static, AiClientError> {
+    let url = format!("{ai_service_url}/generate/stream");
+
+    let response = client
+        .post(&url)
+        .json(&GenerateRequest { prompt, think })
+        .send()
+        .await
+        .map_err(|_| AiClientError::ServiceUnavailable)?;
+
+    if !response.status().is_success() {
+        return Err(AiClientError::UnexpectedResponse(format!(
+            "status {}",
+            response.status()
+        )));
+    }
+
+    // bytes_stream() -> io::Read adapter -> buffered line reader, so
+    // NDJSON lines can be pulled one at a time regardless of how the
+    // underlying TCP chunks happen to align with them.
+    let byte_stream = response
+        .bytes_stream()
+        .map(|result| result.map_err(std::io::Error::other));
+    let reader = tokio_util::io::StreamReader::new(byte_stream);
+    let mut lines = tokio::io::AsyncBufReadExt::lines(tokio::io::BufReader::new(reader));
+
+    Ok(async_stream::stream! {
+        loop {
+            match lines.next_line().await {
+                Ok(Some(line)) => {
+                    if line.trim().is_empty() {
+                        continue;
+                    }
+                    match serde_json::from_str::<GenerateStreamLine>(&line) {
+                        Ok(GenerateStreamLine::Delta { delta }) => yield Ok(delta),
+                        Ok(GenerateStreamLine::Error { error }) => {
+                            yield Err(AiClientError::UnexpectedResponse(error));
+                            break;
+                        }
+                        Err(err) => {
+                            yield Err(AiClientError::UnexpectedResponse(err.to_string()));
+                            break;
+                        }
+                    }
+                }
+                Ok(None) => break,
+                Err(_) => {
+                    yield Err(AiClientError::ServiceUnavailable);
+                    break;
+                }
+            }
+        }
+    })
 }
 
 #[derive(Deserialize)]

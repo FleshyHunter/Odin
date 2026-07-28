@@ -16,7 +16,7 @@ import type { SessionOutletContext } from './SessionLayout';
 export function ChatView() {
   const { activeTrackId, activeTrack, setActiveTrackId, removeTrack, togglePin, openCreateTrackModal } =
     useOutletContext<SessionOutletContext>();
-  const { messages, isSending, send } = useTrackMessages(activeTrackId);
+  const { messages, isSending, send, composerNotice, dismissComposerNotice } = useTrackMessages(activeTrackId);
   const { width: panelWidth, setWidth: setPanelWidth, isOpen: isPanelOpen, toggle: togglePanel } = useActivePanel();
   const resizeHandleRef = useRef<HTMLDivElement>(null);
 
@@ -102,7 +102,12 @@ export function ChatView() {
           onTogglePanel={togglePanel}
         />
         <MessageList messages={messages} />
-        <Composer onSend={send} isSending={isSending} />
+        <Composer
+          onSend={send}
+          isSending={isSending}
+          notice={composerNotice}
+          onDismissNotice={dismissComposerNotice}
+        />
       </main>
 
       <div

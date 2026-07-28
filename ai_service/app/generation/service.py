@@ -1,5 +1,6 @@
 import os
 from functools import lru_cache
+from typing import Iterator
 
 from ollama import Client
 
@@ -57,3 +58,28 @@ def generate_text(prompt: str, think: bool = True) -> str:
         options={"num_ctx": OLLAMA_NUM_CTX},
     )
     return response.message.content
+
+
+# Backend follow-up to Block 11 (markdown/deferred.md #20): qwen3.5:9b's
+# "thinking" mode has load-dependent generation time, confirmed live
+# during Block 11's own verification (one /generate call took 22s,
+# another exceeded 120s). Streaming lets a caller start showing output
+# long before the full response is done, instead of one long blocking
+# wait. ollama's own client already supports stream=True natively —
+# each yielded chunk carries the same Message shape as the blocking
+# call, just with `content` holding an incremental delta rather than
+# the full text. The empty-content guard skips ollama's own boundary
+# chunks (e.g. the final done=True chunk often carries no new text).
+def generate_text_stream(prompt: str, think: bool = True) -> Iterator[str]:
+    client = get_client()
+    stream = client.chat(
+        model=MODEL_NAME,
+        messages=[{"role": "user", "content": prompt}],
+        think=think,
+        options={"num_ctx": OLLAMA_NUM_CTX},
+        stream=True,
+    )
+    for chunk in stream:
+        content = chunk.message.content
+        if content:
+            yield content
