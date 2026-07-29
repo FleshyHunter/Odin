@@ -1,6 +1,5 @@
 use axum::{extract::State, http::StatusCode, Json};
 use axum_extra::extract::cookie::{Cookie, CookieJar, SameSite};
-use chrono::Utc;
 use serde::{Deserialize, Serialize};
 use time::Duration as CookieDuration;
 use uuid::Uuid;
@@ -236,10 +235,20 @@ pub struct RefreshResponse {
     access_token: String,
 }
 
+// Rotation + sliding expiry (what actually makes normal use "never see
+// a login screen," per Auth section — a single fixed-length refresh
+// token, even at 30 days, would still eventually force a re-login
+// regardless of activity). Every successful refresh: 1) revokes the
+// refresh token that was just used (so a stolen/replayed copy of THIS
+// exact cookie fails from this point on), 2) mints a brand-new
+// access+refresh pair with a full fresh 30-day window, same as a fresh
+// login. Normal regular use therefore keeps extending the window
+// faster than it can expire; only real, sustained inactivity (not
+// opening the app for a full window) ever forces a real sign-in again.
 pub async fn refresh(
     State(state): State<AppState>,
     jar: CookieJar,
-) -> Result<Json<RefreshResponse>, AuthError> {
+) -> Result<(CookieJar, Json<RefreshResponse>), AuthError> {
     let raw_token = jar
         .get("refresh_token")
         .map(|c| c.value().to_string())
@@ -266,14 +275,29 @@ pub async fn refresh(
     .bind(&token_hash)
     .fetch_one(&mut *tx)
     .await?;
-    tx.commit().await?;
 
     if !valid {
         return Err(AuthError::InvalidRefreshToken);
     }
 
-    let access_token = jwt::issue_access_token(user_id, state.access_token_expiry_minutes, &state.jwt_secret)?;
-    Ok(Json(RefreshResponse { access_token }))
+    sqlx::query("UPDATE refresh_tokens SET revoked_at = NOW() WHERE user_id = $1 AND token_hash = $2")
+        .bind(user_id)
+        .bind(&token_hash)
+        .execute(&mut *tx)
+        .await?;
+    tx.commit().await?;
+
+    let issued = issue_tokens(
+        &state.pool,
+        user_id,
+        &state.jwt_secret,
+        state.access_token_expiry_minutes,
+        state.refresh_token_expiry_days,
+    )
+    .await?;
+
+    let jar = CookieJar::new().add(refresh_cookie(&issued.refresh_token, state.refresh_token_expiry_days));
+    Ok((jar, Json(RefreshResponse { access_token: issued.access_token })))
 }
 
 pub async fn logout(State(state): State<AppState>, jar: CookieJar) -> Result<(CookieJar, StatusCode), AuthError> {
@@ -307,95 +331,98 @@ pub async fn logout(State(state): State<AppState>, jar: CookieJar) -> Result<(Co
     Ok((cleared, StatusCode::NO_CONTENT))
 }
 
-// ---------------- Password reset ----------------
+// ---------------- Password reset (OTP-based — same mechanism as
+// signup/login, not the earlier link+token design; see Auth section's
+// "Frontend Wiring"/password-reset note for why this changed) ----------------
 
-pub async fn password_reset_request(
+pub async fn password_reset_request_otp(
     State(state): State<AppState>,
     Json(req): Json<EmailRequest>,
 ) -> Result<StatusCode, AuthError> {
     let email = normalize_email(&req.email);
 
     // Same anti-enumeration shape as login_request_otp — always 200,
-    // only actually issues a token when the account is real.
-    let user_id: Option<Uuid> = sqlx::query_scalar("SELECT user_id FROM users WHERE email_normalized = $1")
+    // only actually stages/sends a code when the account is real.
+    let exists: bool = sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM users WHERE email_normalized = $1)")
         .bind(&email)
-        .fetch_optional(&state.pool)
+        .fetch_one(&state.pool)
         .await?;
 
-    if let Some(user_id) = user_id {
-        let raw_token = Uuid::new_v4().to_string();
-        let token_hash = sha256_hex(&raw_token);
-        let expires_at = Utc::now() + chrono::Duration::hours(state.password_reset_token_expiry_hours);
-
-        sqlx::query(
-            "UPDATE users
-             SET password_reset_token_hash = $1, password_reset_expires_at = $2, password_reset_used_at = NULL
-             WHERE user_id = $3",
-        )
-        .bind(&token_hash)
-        .bind(expires_at)
-        .bind(user_id)
-        .execute(&state.pool)
-        .await?;
-
-        // Real link shape (frontend route, real domain) is a later
-        // concern — the token itself is the real artifact here.
-        let reset_link = format!("https://odin.app/reset-password?email={email}&token={raw_token}");
-        state.email_sender.send_password_reset(&email, &reset_link).await;
+    if exists {
+        let mut conn = state.get_redis().await?;
+        let code = otp::stage_password_reset_otp(&mut conn, &email, state.otp_expiry_minutes).await?;
+        state.email_sender.send_otp(&email, &code).await;
     }
 
     Ok(StatusCode::OK)
 }
 
+#[derive(Serialize)]
+pub struct PasswordResetVerifyResponse {
+    display_name: String,
+}
+
+pub async fn password_reset_verify_otp(
+    State(state): State<AppState>,
+    Json(req): Json<VerifyOtpRequest>,
+) -> Result<Json<PasswordResetVerifyResponse>, AuthError> {
+    let email = normalize_email(&req.email);
+    let mut conn = state.get_redis().await?;
+    let matched = otp::verify_password_reset_otp(&mut conn, &email, &req.code).await?;
+    if !matched {
+        return Err(AuthError::InvalidOtp);
+    }
+    otp::mark_password_reset_verified(&mut conn, &email, state.verified_signup_token_ttl_minutes).await?;
+
+    // Safe to reveal here (unlike request_otp above): a matching code
+    // could only ever have been staged for a real, existing account, so
+    // this doesn't leak anything a successful OTP match hasn't already
+    // proven.
+    let display_name: String = sqlx::query_scalar("SELECT display_name FROM users WHERE email_normalized = $1")
+        .bind(&email)
+        .fetch_one(&state.pool)
+        .await?;
+
+    Ok(Json(PasswordResetVerifyResponse { display_name }))
+}
+
 #[derive(Deserialize)]
-pub struct PasswordResetConfirmRequest {
+pub struct PasswordResetCompleteRequest {
     email: String,
-    token: String,
     new_password: String,
 }
 
-pub async fn password_reset_confirm(
+pub async fn password_reset_complete(
     State(state): State<AppState>,
-    Json(req): Json<PasswordResetConfirmRequest>,
-) -> Result<StatusCode, AuthError> {
+    Json(req): Json<PasswordResetCompleteRequest>,
+) -> Result<(CookieJar, Json<AuthResponse>), AuthError> {
     let email = normalize_email(&req.email);
+    let mut conn = state.get_redis().await?;
+
+    // Same "step 3 only proceeds if step 2 actually succeeded recently
+    // for THIS email" guard as signup_complete.
+    if !otp::consume_password_reset_verified(&mut conn, &email).await? {
+        return Err(AuthError::VerificationRequired);
+    }
+
     password::validate_password(&req.new_password, state.password_min_length)
         .map_err(AuthError::Validation)?;
+    let new_hash = password::hash_password(&req.new_password)?;
 
     let user = sqlx::query_as::<_, User>(
-        "SELECT * FROM users WHERE email_normalized = $1
-           AND password_reset_token_hash IS NOT NULL
-           AND password_reset_used_at IS NULL
-           AND password_reset_expires_at > NOW()",
+        "UPDATE users SET password_hash = $1 WHERE email_normalized = $2 RETURNING *",
     )
+    .bind(&new_hash)
     .bind(&email)
     .fetch_optional(&state.pool)
     .await?
-    .ok_or(AuthError::InvalidResetToken)?;
+    .ok_or(AuthError::InvalidCredentials)?;
 
-    let stored_hash = user.password_reset_token_hash.as_deref().unwrap_or_default();
-    let submitted_hash = sha256_hex(&req.token);
-    use subtle::ConstantTimeEq;
-    if stored_hash.as_bytes().ct_eq(submitted_hash.as_bytes()).unwrap_u8() != 1 {
-        return Err(AuthError::InvalidResetToken);
-    }
-
-    let new_hash = password::hash_password(&req.new_password)?;
     // users has no RLS (queryable by email pre-session, per
     // migrations/0002's own note), but refresh_tokens below does — this
     // transaction needs app.current_user_id set for that UPDATE to
     // actually revoke anything instead of silently affecting zero rows.
     let mut tx = super::middleware::begin_rls_transaction(&state.pool, user.user_id).await?;
-
-    sqlx::query(
-        "UPDATE users
-         SET password_hash = $1, password_reset_used_at = NOW()
-         WHERE user_id = $2",
-    )
-    .bind(&new_hash)
-    .bind(user.user_id)
-    .execute(&mut *tx)
-    .await?;
 
     // schema.rs's own comment on refresh_tokens.revoked_at: "set on
     // logout, password reset, or detected compromise" — a password
@@ -406,5 +433,9 @@ pub async fn password_reset_confirm(
         .await?;
 
     tx.commit().await?;
-    Ok(StatusCode::OK)
+
+    // Auto-login: the caller already proved mailbox ownership via OTP
+    // AND just set fresh credentials, so a third "now log in again"
+    // step would be pure friction, not extra security.
+    respond_with_tokens(&state, user).await
 }

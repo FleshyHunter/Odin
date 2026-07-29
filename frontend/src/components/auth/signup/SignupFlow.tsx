@@ -16,8 +16,9 @@ interface SignupFlowProps {
 // so there's no need for each step to be independently linkable, and
 // internal state avoids threading the in-progress email through URL params.
 //
-// No real verification happens anywhere in here — every "Continue" is
-// pure navigation to the next step, per instruction.
+// Each step now calls the real backend (POST /auth/signup/request-otp,
+// verify-otp, complete) — "Continue" only advances once that step's
+// call actually succeeds.
 export function SignupFlow({ onAuthenticated }: SignupFlowProps) {
   const [step, setStep] = useState<SignupStep>('email');
   const [email, setEmail] = useState('');
@@ -27,13 +28,7 @@ export function SignupFlow({ onAuthenticated }: SignupFlowProps) {
   }
 
   if (step === 'verify') {
-    return (
-      <VerifyStep
-        email={email}
-        onContinue={() => setStep('complete')}
-        onContinueWithPassword={() => setStep('complete')}
-      />
-    );
+    return <VerifyStep email={email} onContinue={() => setStep('complete')} />;
   }
 
   return <CompleteStep email={email} onComplete={() => onAuthenticated?.()} />;

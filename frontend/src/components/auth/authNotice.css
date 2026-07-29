@@ -1,0 +1,9 @@
+.auth-notice {
+  margin-top: 1rem;
+  padding: 0.55rem 0.9rem;
+  border-radius: 8px;
+  background: var(--error-dim);
+  color: var(--error);
+  font-size: 0.82rem;
+  line-height: 1.4;
+}

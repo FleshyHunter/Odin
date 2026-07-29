@@ -31,8 +31,9 @@ pub fn router() -> Router<AppState> {
         // path rather than a separate /auth/logout route, since a
         // browser matches a cookie's Path regardless of HTTP method.
         .route("/auth/refresh", post(handlers::refresh).delete(handlers::logout))
-        .route("/auth/password-reset/request", post(handlers::password_reset_request))
-        .route("/auth/password-reset/confirm", post(handlers::password_reset_confirm))
+        .route("/auth/password-reset/request-otp", post(handlers::password_reset_request_otp))
+        .route("/auth/password-reset/verify-otp", post(handlers::password_reset_verify_otp))
+        .route("/auth/password-reset/complete", post(handlers::password_reset_complete))
         .route("/auth/me", get(me))
 }
 

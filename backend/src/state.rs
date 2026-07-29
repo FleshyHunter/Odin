@@ -31,7 +31,6 @@ pub struct AppState {
     pub otp_expiry_minutes: i64,
     pub verified_signup_token_ttl_minutes: i64,
     pub password_min_length: usize,
-    pub password_reset_token_expiry_hours: i64,
     // Block 5: shared across every ai_client call — reqwest::Client
     // pools connections internally, so this is built once here rather
     // than per-call, same reasoning as reusing the Postgres pool. Read
@@ -61,7 +60,6 @@ impl AppState {
             otp_expiry_minutes: config.otp_expiry_minutes,
             verified_signup_token_ttl_minutes: config.verified_signup_token_ttl_minutes,
             password_min_length: config.password_min_length,
-            password_reset_token_expiry_hours: config.password_reset_token_expiry_hours,
             http_client,
             ai_service_url: Arc::from(config.ai_service_url.as_str()),
             memoryless_thread_ttl_minutes: config.memoryless_thread_ttl_minutes,

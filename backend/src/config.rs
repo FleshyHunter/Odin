@@ -14,7 +14,6 @@ pub struct Config {
     pub otp_expiry_minutes: i64,
     pub verified_signup_token_ttl_minutes: i64,
     pub password_min_length: usize,
-    pub password_reset_token_expiry_hours: i64,
     // Real email delivery (auth/email.rs's SmtpEmailSender) — a
     // deliberate swap from the originally-locked "Resend" provider
     // (ARCHITECTURE.md) to plain SMTP through a real Gmail account,
@@ -27,6 +26,14 @@ pub struct Config {
     pub smtp_relay: Option<String>,
     pub smtp_username: Option<String>,
     pub smtp_password: Option<String>,
+    // The browser's own same-origin policy, not an auth/authorization
+    // layer (JWT + RLS already cover that) — needed the moment the
+    // frontend makes real cross-origin requests (5173 -> 8080) with
+    // credentials (the httpOnly refresh_token cookie). Deliberately one
+    // explicit origin, not a wildcard: allow_credentials(true) can't be
+    // combined with Any in tower-http anyway, and a real allow-list is
+    // the point, not an accident of the API.
+    pub frontend_origin: String,
     // Block 5: FastAPI AI service, on the Windows RTX PC (locked env
     // var name and value shape, ARCHITECTURE.md's Environment
     // Variables list — e.g. http://100.125.58.90:8000).
@@ -85,10 +92,6 @@ impl Config {
             .ok()
             .and_then(|v| v.parse().ok())
             .unwrap_or(12);
-        let password_reset_token_expiry_hours = env::var("PASSWORD_RESET_TOKEN_EXPIRY_HOURS")
-            .ok()
-            .and_then(|v| v.parse().ok())
-            .unwrap_or(1);
         let smtp_relay = env::var("SMTP_RELAY").ok();
         let smtp_username = env::var("SMTP_USERNAME").ok();
         // Google's own UI displays an App Password grouped in 4s with
@@ -101,6 +104,8 @@ impl Config {
         // fix in .env.example addresses, but this handles the value
         // itself regardless of quoting).
         let smtp_password = env::var("SMTP_PASSWORD").ok().map(|p| p.replace(' ', ""));
+        let frontend_origin =
+            env::var("FRONTEND_ORIGIN").unwrap_or_else(|_| "http://localhost:5173".to_string());
         let ai_service_url = env::var("AI_SERVICE_URL").expect("AI_SERVICE_URL must be set");
 
         let memoryless_thread_ttl_minutes = env::var("MEMORYLESS_THREAD_TTL_MINUTES")
@@ -119,10 +124,10 @@ impl Config {
             otp_expiry_minutes,
             verified_signup_token_ttl_minutes,
             password_min_length,
-            password_reset_token_expiry_hours,
             smtp_relay,
             smtp_username,
             smtp_password,
+            frontend_origin,
             ai_service_url,
             memoryless_thread_ttl_minutes,
         }

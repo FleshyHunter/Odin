@@ -18,8 +18,12 @@ use lettre::{AsyncSmtpTransport, AsyncTransport, Message, Tokio1Executor};
 
 #[async_trait]
 pub trait EmailSender: Send + Sync {
+    // One method covers signup verification, standing OTP login, AND
+    // password reset (see auth/otp.rs) — all three are "here's your
+    // one-time code" emails, just staged under different Redis key
+    // namespaces server-side. No separate reset-link email exists
+    // anymore (see Auth section's password-reset note for why).
     async fn send_otp(&self, email: &str, code: &str);
-    async fn send_password_reset(&self, email: &str, reset_link: &str);
 }
 
 pub struct ConsoleEmailSender;
@@ -31,10 +35,6 @@ impl EmailSender for ConsoleEmailSender {
         // logged at info level so it's visible in normal dev output,
         // not hidden behind a debug filter.
         tracing::info!(%email, %code, "OTP email (stub — not actually sent, SMTP not configured)");
-    }
-
-    async fn send_password_reset(&self, email: &str, reset_link: &str) {
-        tracing::info!(%email, %reset_link, "Password reset email (stub — not actually sent, SMTP not configured)");
     }
 }
 
@@ -99,18 +99,6 @@ impl EmailSender for SmtpEmailSender {
             format!(
                 "Your one-time code is: {code}\n\n\
                  This code expires shortly. If you didn't request this, you can ignore this email."
-            ),
-        )
-        .await;
-    }
-
-    async fn send_password_reset(&self, email: &str, reset_link: &str) {
-        self.send(
-            email,
-            "Reset your Odin password",
-            format!(
-                "Reset your password here: {reset_link}\n\n\
-                 If you didn't request this, you can ignore this email."
             ),
         )
         .await;

@@ -14,6 +14,8 @@ interface SidebarProps {
   onSelectTrack: (trackId: string) => void;
   onNewTrack?: () => void;
   profileName: string;
+  email: string;
+  onSignOut: () => void;
   activeSection: SidebarSection;
   onSectionChange: (section: SidebarSection) => void;
   onHome: () => void;
@@ -64,6 +66,8 @@ export function Sidebar({
   onSelectTrack,
   onNewTrack,
   profileName,
+  email,
+  onSignOut,
   activeSection,
   onSectionChange,
   onHome,
@@ -126,7 +130,7 @@ export function Sidebar({
 
       <div className="sidebar-spacer" />
 
-      <ProfileSwitcher displayName={profileName} />
+      <ProfileSwitcher displayName={profileName} email={email} onSignOut={onSignOut} />
     </aside>
   );
 }

@@ -1,8 +1,9 @@
 import { useState, type FormEvent } from 'react';
 import { useAuth } from '../../../hooks/useAuth';
 import { Button } from '../../ui/Button/Button';
+import { AuthNotice } from '../AuthNotice';
 import '../form/authForm.css';
-import './signupFlow.css';
+import '../authWizard.css';
 
 interface CompleteStepProps {
   email: string;
@@ -10,18 +11,21 @@ interface CompleteStepProps {
 }
 
 // Step 3 of 3: username + email (prefilled read-only from step 1) +
-// password. Still routes through the existing mock useAuth().signUp for
-// consistency with how AuthForm completes sign-in — that call is already
-// a stub (see api/auth.ts), so this doesn't add any new real checking.
+// password -> POST /auth/signup/complete. Only succeeds if step 2
+// actually verified an OTP for this email recently (Auth section).
 export function CompleteStep({ email, onComplete }: CompleteStepProps) {
   const [username, setUsername] = useState('');
   const [password, setPassword] = useState('');
-  const { isLoading, signUp } = useAuth();
+  const { isLoading, error, completeSignup } = useAuth();
 
   const handleSubmit = async (event: FormEvent) => {
     event.preventDefault();
-    await signUp(email, password);
-    onComplete();
+    try {
+      await completeSignup(email, username, password);
+      onComplete();
+    } catch {
+      // error already surfaced via useAuth's error state below
+    }
   };
 
   return (
@@ -59,6 +63,7 @@ export function CompleteStep({ email, onComplete }: CompleteStepProps) {
         <Button type="submit" disabled={isLoading}>
           {isLoading ? 'Please wait…' : 'Continue'}
         </Button>
+        {error && <AuthNotice message={error} />}
       </form>
     </div>
   );

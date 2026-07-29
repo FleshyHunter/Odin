@@ -11,16 +11,17 @@ interface EmailStepProps {
   onContinue: () => void;
 }
 
-// Step 1 of 3: collect the email and request a real signup OTP
-// (POST /auth/signup/request-otp) — advances to the verify step only
-// once the backend has actually staged and sent a code.
+// Step 1 of 3: collect the email and request a real reset OTP
+// (POST /auth/password-reset/request-otp) — this endpoint always
+// returns 200 regardless of whether the account exists (anti-
+// enumeration), so "Continue" always advances once the call succeeds.
 export function EmailStep({ email, onEmailChange, onContinue }: EmailStepProps) {
-  const { isLoading, error, requestSignupOtp } = useAuth();
+  const { isLoading, error, requestPasswordResetOtp } = useAuth();
 
   const handleSubmit = async (event: FormEvent) => {
     event.preventDefault();
     try {
-      await requestSignupOtp(email);
+      await requestPasswordResetOtp(email);
       onContinue();
     } catch {
       // error already surfaced via useAuth's error state below
@@ -29,15 +30,15 @@ export function EmailStep({ email, onEmailChange, onContinue }: EmailStepProps) 
 
   return (
     <div className="signin-pane-content">
-      <h1 className="headline display">Sign up</h1>
-      <p className="subhead">Start learning on your terms.</p>
+      <h1 className="headline display">Reset your password</h1>
+      <p className="subhead">Enter your email and we'll send you a verification code.</p>
 
       <form onSubmit={handleSubmit}>
         <div className="field">
-          <label htmlFor="signup-email">Email</label>
+          <label htmlFor="reset-email">Email</label>
           <input
             type="email"
-            id="signup-email"
+            id="reset-email"
             placeholder="you@example.com"
             autoComplete="email"
             value={email}
@@ -51,7 +52,7 @@ export function EmailStep({ email, onEmailChange, onContinue }: EmailStepProps) 
       </form>
 
       <p className="switch-line">
-        Already have an account? <Link className="link" to="/signin">Sign in</Link>
+        Remembered it? <Link className="link" to="/signin">Sign in</Link>
       </p>
     </div>
   );

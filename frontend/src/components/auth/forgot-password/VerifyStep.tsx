@@ -7,30 +7,30 @@ import '../authWizard.css';
 
 interface VerifyStepProps {
   email: string;
-  onContinue: () => void;
+  onVerified: (displayName: string) => void;
 }
 
-// Step 2 of 3: verify the code from step 1 (POST /auth/signup/verify-otp)
-// — advances only once the backend confirms a real match. There is no
-// password-skip alternative here: the Auth section explicitly removed
-// that path (OTP-first means no account can be created without a
-// verified email), so this step is the only way through.
-export function VerifyStep({ email, onContinue }: VerifyStepProps) {
+// Step 2 of 3: verify the code from step 1
+// (POST /auth/password-reset/verify-otp) — the response includes the
+// account's display name, passed up to the final step for a "Hi <name>"
+// prefill (safe to reveal only now: a matching code proves this is a
+// real account, unlike the anti-enumeration-guarded request step).
+export function VerifyStep({ email, onVerified }: VerifyStepProps) {
   const [code, setCode] = useState('');
-  const { isLoading, error, verifySignupOtp, requestSignupOtp } = useAuth();
+  const { isLoading, error, verifyPasswordResetOtp, requestPasswordResetOtp } = useAuth();
 
   const handleSubmit = async (event: FormEvent) => {
     event.preventDefault();
     try {
-      await verifySignupOtp(email, code);
-      onContinue();
+      const displayName = await verifyPasswordResetOtp(email, code);
+      onVerified(displayName);
     } catch {
       // error already surfaced via useAuth's error state below
     }
   };
 
   const handleResend = () => {
-    void requestSignupOtp(email);
+    void requestPasswordResetOtp(email);
   };
 
   return (
@@ -40,10 +40,10 @@ export function VerifyStep({ email, onContinue }: VerifyStepProps) {
 
       <form onSubmit={handleSubmit}>
         <div className="field">
-          <label htmlFor="signup-code">Code</label>
+          <label htmlFor="reset-code">Code</label>
           <input
             type="text"
-            id="signup-code"
+            id="reset-code"
             placeholder="123456"
             value={code}
             onChange={(event) => setCode(event.target.value)}

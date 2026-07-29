@@ -1,0 +1,30 @@
+/* Shared pieces for multi-step auth wizards (signup: email -> verify ->
+   complete; forgot-password: email -> verify -> new password), on top of
+   the shared headline/subhead/field/button.primary/switch-line rules
+   already in components/auth/form/authForm.css (both scoped under
+   .signin-pane-content, so they apply here too). */
+
+.signin-pane-content .field input[readonly] {
+  color: var(--text-secondary);
+  cursor: default;
+}
+
+.signin-pane-content .resend-link {
+  display: block;
+  width: 100%;
+  margin: 0.9rem 0 0;
+  background: none;
+  border: none;
+  color: var(--text-muted);
+  font-size: 0.85rem;
+  text-decoration: underline;
+  text-underline-offset: 2px;
+  cursor: pointer;
+  text-align: center;
+}
+.signin-pane-content .resend-link:hover { color: var(--text-secondary); }
+.signin-pane-content .resend-link:focus-visible {
+  outline: 2px solid var(--focus);
+  outline-offset: 2px;
+  border-radius: 3px;
+}

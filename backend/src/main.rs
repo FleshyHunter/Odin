@@ -23,9 +23,11 @@ mod uploads;
 use std::sync::Arc;
 use std::time::Duration;
 
+use axum::http::{header, HeaderValue, Method};
 use axum::Router;
 use config::Config;
 use state::AppState;
+use tower_http::cors::CorsLayer;
 
 #[tokio::main]
 async fn main() {
@@ -75,6 +77,22 @@ async fn main() {
         .build()
         .expect("failed to build reqwest client");
 
+    // Browser-only same-origin gate — separate from and unrelated to the
+    // JWT/RLS auth layers below. allow_credentials(true) is required so
+    // the browser will actually attach/accept the httpOnly refresh_token
+    // cookie cross-origin (5173 -> 8080 in local dev); that flag can't be
+    // paired with a wildcard origin (tower-http rejects it at runtime),
+    // so this is one explicit origin, not Any.
+    let cors_origin: HeaderValue = config
+        .frontend_origin
+        .parse()
+        .expect("FRONTEND_ORIGIN must be a valid header value (e.g. http://localhost:5173)");
+    let cors = CorsLayer::new()
+        .allow_origin(cors_origin)
+        .allow_credentials(true)
+        .allow_methods([Method::GET, Method::POST, Method::DELETE])
+        .allow_headers([header::CONTENT_TYPE, header::AUTHORIZATION]);
+
     let app_state = AppState::new(pool, redis, &config, email_sender, http_client);
 
     let app = Router::new()
@@ -83,6 +101,7 @@ async fn main() {
         .merge(memoryless::router())
         .merge(uploads::router())
         .merge(exercises::router())
+        .layer(cors)
         .with_state(app_state);
 
     let listener = tokio::net::TcpListener::bind(("0.0.0.0", config.port))

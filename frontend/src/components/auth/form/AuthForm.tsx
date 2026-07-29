@@ -2,6 +2,7 @@ import { useState, type FormEvent } from 'react';
 import { Link } from 'react-router-dom';
 import { useAuth } from '../../../hooks/useAuth';
 import { Button } from '../../ui/Button/Button';
+import { AuthNotice } from '../AuthNotice';
 import './authForm.css';
 
 interface AuthFormProps {
@@ -18,8 +19,12 @@ export function AuthForm({ onAuthenticated }: AuthFormProps) {
 
   const handleSubmit = async (event: FormEvent) => {
     event.preventDefault();
-    await signIn(email, password);
-    onAuthenticated?.();
+    try {
+      await signIn(email, password);
+      onAuthenticated?.();
+    } catch {
+      // error already surfaced via useAuth's error state below
+    }
   };
 
   return (
@@ -51,14 +56,14 @@ export function AuthForm({ onAuthenticated }: AuthFormProps) {
           />
         </div>
         <div className="row-between">
-          <a href="#" className="forgot-link" onClick={(event) => event.preventDefault()}>
+          <Link className="forgot-link" to="/forgot-password">
             Forgot password?
-          </a>
+          </Link>
         </div>
-        {error && <p className="switch-line">{error}</p>}
         <Button type="submit" disabled={isLoading}>
           {isLoading ? 'Please wait…' : 'Sign in'}
         </Button>
+        {error && <AuthNotice message={error} />}
       </form>
 
       <p className="switch-line">

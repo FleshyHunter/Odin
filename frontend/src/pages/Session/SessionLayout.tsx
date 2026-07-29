@@ -8,6 +8,8 @@ import './Session.css';
 
 interface SessionLayoutProps {
   profileName: string;
+  email: string;
+  onSignOut: () => void;
 }
 
 export interface SessionOutletContext {
@@ -31,7 +33,7 @@ export interface SessionOutletContext {
 // Section highlighting is derived from the URL itself now (real routes),
 // not local state — except "Pinned", which still has no route/content of
 // its own (out of scope so far), so it stays a harmless local-only toggle.
-export function SessionLayout({ profileName }: SessionLayoutProps) {
+export function SessionLayout({ profileName, email, onSignOut }: SessionLayoutProps) {
   const { tracks, removeTrack, createTrack, togglePin } = useTracks();
   const [activeTrackId, setActiveTrackId] = useState('');
   const [pinnedActive, setPinnedActive] = useState(false);
@@ -91,6 +93,8 @@ export function SessionLayout({ profileName }: SessionLayoutProps) {
           onSelectTrack={handleSelectTrack}
           onNewTrack={openCreateTrackModal}
           profileName={profileName}
+          email={email}
+          onSignOut={onSignOut}
           activeSection={activeSection}
           onSectionChange={handleSectionChange}
           onHome={handleHome}

@@ -13,9 +13,6 @@ pub struct User {
     pub email_normalized: String,
     pub password_hash: String,
     pub email_verified: bool,
-    pub password_reset_token_hash: Option<String>,
-    pub password_reset_expires_at: Option<DateTime<Utc>>,
-    pub password_reset_used_at: Option<DateTime<Utc>>,
     pub created_at: Option<DateTime<Utc>>,
 }
 

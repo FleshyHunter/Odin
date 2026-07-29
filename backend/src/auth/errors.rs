@@ -13,8 +13,6 @@ pub enum AuthError {
     Validation(String),
     #[error("an account with this email already exists")]
     AccountExists,
-    #[error("invalid or expired reset token")]
-    InvalidResetToken,
     #[error("invalid or expired refresh token")]
     InvalidRefreshToken,
     #[error("internal error")]
@@ -33,7 +31,6 @@ impl IntoResponse for AuthError {
             AuthError::InvalidCredentials
             | AuthError::InvalidOtp
             | AuthError::VerificationRequired
-            | AuthError::InvalidResetToken
             | AuthError::InvalidRefreshToken => StatusCode::UNAUTHORIZED,
             AuthError::Validation(_) => StatusCode::BAD_REQUEST,
             AuthError::AccountExists => StatusCode::CONFLICT,
