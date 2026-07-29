@@ -44,7 +44,23 @@ async fn main() {
     // Infallible in practice for any well-formed URL — see db::connect_redis.
     let redis = db::connect_redis(&config.redis_url).expect("invalid REDIS_URL");
 
-    let email_sender: Arc<dyn auth::email::EmailSender> = Arc::new(auth::email::ConsoleEmailSender);
+    // Real SMTP delivery when all three are configured (see
+    // auth/email.rs's own doc comment for why this is SMTP, not
+    // Resend); falls back to the console-log stub otherwise, same
+    // "optional, degrades to a stub" pattern as Dify's keys.
+    let email_sender: Arc<dyn auth::email::EmailSender> =
+        match (&config.smtp_relay, &config.smtp_username, &config.smtp_password) {
+            (Some(relay), Some(username), Some(password)) => {
+                let sender = auth::email::SmtpEmailSender::new(relay, username.clone(), password.clone())
+                    .expect("invalid SMTP configuration");
+                tracing::info!(%relay, %username, "SMTP email sender configured");
+                Arc::new(sender)
+            }
+            _ => {
+                tracing::warn!("SMTP not configured (SMTP_RELAY/SMTP_USERNAME/SMTP_PASSWORD) — using console-log stub for OTP/password-reset emails");
+                Arc::new(auth::email::ConsoleEmailSender)
+            }
+        };
 
     // 120s, not the 5s used for Redis/Postgres — ML inference is
     // legitimately slower than a connection ping, and a reasoning model

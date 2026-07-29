@@ -15,14 +15,18 @@ pub struct Config {
     pub verified_signup_token_ttl_minutes: i64,
     pub password_min_length: usize,
     pub password_reset_token_expiry_hours: i64,
-    // None until Resend is actually set up — auth still works, using
-    // EmailSender's console-log stub instead of a real send (see
-    // auth/email.rs). Not a blocker per the Auth section's own
-    // "ordering note": auth details aren't tightly sequenced against
-    // external service availability. Not read yet — will be, the
-    // moment a ResendEmailSender impl exists to consume it.
-    #[allow(dead_code)]
-    pub resend_api_key: Option<String>,
+    // Real email delivery (auth/email.rs's SmtpEmailSender) — a
+    // deliberate swap from the originally-locked "Resend" provider
+    // (ARCHITECTURE.md) to plain SMTP through a real Gmail account,
+    // made explicitly when setting this up for real. Generic SMTP
+    // config, not Gmail-specific, so a future swap to another provider
+    // is just different env var values, not a code change. All three
+    // optional together — auth still works via the console-log stub
+    // when unset, per the Auth section's own "ordering note" (auth
+    // isn't tightly sequenced against external service availability).
+    pub smtp_relay: Option<String>,
+    pub smtp_username: Option<String>,
+    pub smtp_password: Option<String>,
     // Block 5: FastAPI AI service, on the Windows RTX PC (locked env
     // var name and value shape, ARCHITECTURE.md's Environment
     // Variables list — e.g. http://100.125.58.90:8000).
@@ -85,7 +89,18 @@ impl Config {
             .ok()
             .and_then(|v| v.parse().ok())
             .unwrap_or(1);
-        let resend_api_key = env::var("RESEND_API_KEY").ok();
+        let smtp_relay = env::var("SMTP_RELAY").ok();
+        let smtp_username = env::var("SMTP_USERNAME").ok();
+        // Google's own UI displays an App Password grouped in 4s with
+        // spaces ("abcd efgh ijkl mnop") purely for readability — the
+        // real credential has none. Stripped defensively here so a
+        // direct copy-paste from that screen (the natural thing to do)
+        // doesn't silently fail SMTP auth; found live when this was
+        // first set up (a space in an UNQUOTED .env value also broke
+        // dotenvy's own parsing, a second, separate trap the quoting
+        // fix in .env.example addresses, but this handles the value
+        // itself regardless of quoting).
+        let smtp_password = env::var("SMTP_PASSWORD").ok().map(|p| p.replace(' ', ""));
         let ai_service_url = env::var("AI_SERVICE_URL").expect("AI_SERVICE_URL must be set");
 
         let memoryless_thread_ttl_minutes = env::var("MEMORYLESS_THREAD_TTL_MINUTES")
@@ -105,7 +120,9 @@ impl Config {
             verified_signup_token_ttl_minutes,
             password_min_length,
             password_reset_token_expiry_hours,
-            resend_api_key,
+            smtp_relay,
+            smtp_username,
+            smtp_password,
             ai_service_url,
             memoryless_thread_ttl_minutes,
         }
