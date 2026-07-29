@@ -9,6 +9,7 @@ from app.embedding.service import get_model
 from app.generation.router import router as generation_router
 from app.grading.router import router as grading_router
 from app.ingestion.router import router as ingestion_router
+from app.observability import get_active_generations
 from app.voice.router import router as voice_router
 
 # Root logger defaults to WARNING with no handler attached — verified
@@ -36,4 +37,12 @@ def health() -> dict:
     # cache_info() only introspects the lru_cache — it never triggers a
     # model load, so this stays a cheap liveness check either way.
     model_loaded = get_model.cache_info().currsize > 0
-    return {"status": "ok", "embedding_model_loaded": model_loaded}
+    return {
+        "status": "ok",
+        "embedding_model_loaded": model_loaded,
+        # Observability — GPU Queuing (ARCHITECTURE.md, locked): a live
+        # count of in-flight Ollama generation calls (/generate and
+        # /generate/stream specifically — the actual GPU-contention
+        # signal this exists for, not embed/transcribe/analyze_input).
+        "active_generations": get_active_generations(),
+    }

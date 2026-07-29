@@ -4,6 +4,8 @@ from typing import Iterator
 
 from ollama import Client
 
+from app.observability import track_generation
+
 # Currently-adopted operational model (ARCHITECTURE.md, Fine-Tuning
 # Roadmap — Qwen3.5-9B adopted ahead of the original evaluation plan,
 # see v4.26). A deliberate architecture decision, not a config knob.
@@ -50,14 +52,15 @@ def generate_text(prompt: str, think: bool = True) -> str:
     # (Fine-Tuning Roadmap) — defaulting it off to save time would
     # quietly undo that. Once Block 8's intent classification exists,
     # callers can pass a per-message decision instead of this default.
-    client = get_client()
-    response = client.chat(
-        model=MODEL_NAME,
-        messages=[{"role": "user", "content": prompt}],
-        think=think,
-        options={"num_ctx": OLLAMA_NUM_CTX},
-    )
-    return response.message.content
+    with track_generation():
+        client = get_client()
+        response = client.chat(
+            model=MODEL_NAME,
+            messages=[{"role": "user", "content": prompt}],
+            think=think,
+            options={"num_ctx": OLLAMA_NUM_CTX},
+        )
+        return response.message.content
 
 
 # Backend follow-up to Block 11 (markdown/deferred.md #20): qwen3.5:9b's
@@ -71,15 +74,16 @@ def generate_text(prompt: str, think: bool = True) -> str:
 # the full text. The empty-content guard skips ollama's own boundary
 # chunks (e.g. the final done=True chunk often carries no new text).
 def generate_text_stream(prompt: str, think: bool = True) -> Iterator[str]:
-    client = get_client()
-    stream = client.chat(
-        model=MODEL_NAME,
-        messages=[{"role": "user", "content": prompt}],
-        think=think,
-        options={"num_ctx": OLLAMA_NUM_CTX},
-        stream=True,
-    )
-    for chunk in stream:
-        content = chunk.message.content
-        if content:
-            yield content
+    with track_generation():
+        client = get_client()
+        stream = client.chat(
+            model=MODEL_NAME,
+            messages=[{"role": "user", "content": prompt}],
+            think=think,
+            options={"num_ctx": OLLAMA_NUM_CTX},
+            stream=True,
+        )
+        for chunk in stream:
+            content = chunk.message.content
+            if content:
+                yield content
