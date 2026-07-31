@@ -44,12 +44,16 @@ pub struct AuthResponse {
 // as narrow as the rule requires while still letting logout read it.
 const REFRESH_COOKIE_PATH: &str = "/auth/refresh";
 
-fn refresh_cookie(token: &str, days: i64) -> Cookie<'static> {
-    // Secure(true) omitted deliberately for now — this is plain HTTP in
-    // local dev (see Rule 49's "Secure in production"); flip on once
-    // this is ever actually served over HTTPS.
+// Secure driven by config (COOKIE_SECURE, defaults false) rather than a
+// hardcoded value — defaults off so local HTTP dev keeps working (a
+// Secure cookie is silently refused by the browser over plain HTTP,
+// which would break every auth flow, not just look insecure), but
+// deploying over real HTTPS is now a one env-var flip, not a
+// source-edit someone has to remember (deferred.md #16).
+fn refresh_cookie(token: &str, days: i64, secure: bool) -> Cookie<'static> {
     Cookie::build(("refresh_token", token.to_string()))
         .http_only(true)
+        .secure(secure)
         .same_site(SameSite::Lax)
         .path(REFRESH_COOKIE_PATH)
         .max_age(CookieDuration::days(days))
@@ -69,7 +73,11 @@ async fn respond_with_tokens(
     )
     .await?;
 
-    let jar = CookieJar::new().add(refresh_cookie(&issued.refresh_token, state.refresh_token_expiry_days));
+    let jar = CookieJar::new().add(refresh_cookie(
+        &issued.refresh_token,
+        state.refresh_token_expiry_days,
+        state.cookie_secure,
+    ));
     let response = AuthResponse { access_token: issued.access_token, user: user.into() };
     Ok((jar, Json(response)))
 }
@@ -296,7 +304,11 @@ pub async fn refresh(
     )
     .await?;
 
-    let jar = CookieJar::new().add(refresh_cookie(&issued.refresh_token, state.refresh_token_expiry_days));
+    let jar = CookieJar::new().add(refresh_cookie(
+        &issued.refresh_token,
+        state.refresh_token_expiry_days,
+        state.cookie_secure,
+    ));
     Ok((jar, Json(RefreshResponse { access_token: issued.access_token })))
 }
 

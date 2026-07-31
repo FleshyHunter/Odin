@@ -43,6 +43,15 @@ impl IntoResponse for AuthError {
 
 impl From<sqlx::Error> for AuthError {
     fn from(err: sqlx::Error) -> Self {
+        // PoolTimedOut/Io mean Postgres itself is unreachable — same
+        // distinction already made in memoryless/exercises (deferred.md
+        // #28): a clear 503 is more honest than a generic 500 here, and
+        // matches this file's own ServiceUnavailable handling for Redis
+        // just below.
+        if matches!(err, sqlx::Error::PoolTimedOut | sqlx::Error::Io(_)) {
+            tracing::warn!(?err, "database unreachable in auth handler");
+            return AuthError::ServiceUnavailable("Database unreachable");
+        }
         tracing::error!(?err, "database error in auth handler");
         AuthError::Internal
     }

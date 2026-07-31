@@ -34,6 +34,14 @@ pub struct Config {
     // combined with Any in tower-http anyway, and a real allow-list is
     // the point, not an accident of the API.
     pub frontend_origin: String,
+    // Refresh cookie's Secure attribute (RULES.md Rule 49: "Secure in
+    // production"). Defaults false so local HTTP dev keeps working — a
+    // Secure cookie is silently refused by the browser over plain HTTP,
+    // which would break every auth flow, not just look insecure. Set
+    // COOKIE_SECURE=true once this is ever actually served over HTTPS
+    // (deferred.md #16 — a one env-var flip now, not a source edit
+    // someone has to remember at deploy time).
+    pub cookie_secure: bool,
     // Block 5: FastAPI AI service, on the Windows RTX PC (locked env
     // var name and value shape, ARCHITECTURE.md's Environment
     // Variables list — e.g. http://100.125.58.90:8000).
@@ -106,6 +114,10 @@ impl Config {
         let smtp_password = env::var("SMTP_PASSWORD").ok().map(|p| p.replace(' ', ""));
         let frontend_origin =
             env::var("FRONTEND_ORIGIN").unwrap_or_else(|_| "http://localhost:5173".to_string());
+        let cookie_secure = env::var("COOKIE_SECURE")
+            .ok()
+            .map(|v| v == "true")
+            .unwrap_or(false);
         let ai_service_url = env::var("AI_SERVICE_URL").expect("AI_SERVICE_URL must be set");
 
         let memoryless_thread_ttl_minutes = env::var("MEMORYLESS_THREAD_TTL_MINUTES")
@@ -128,6 +140,7 @@ impl Config {
             smtp_username,
             smtp_password,
             frontend_origin,
+            cookie_secure,
             ai_service_url,
             memoryless_thread_ttl_minutes,
         }
