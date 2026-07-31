@@ -50,6 +50,36 @@ pub async fn create_flag(
     }
 
     let mut tx = begin_rls_transaction(&state.pool, user_id).await?;
+
+    // deferred.md #44: sources/chunks are RLS mixed-scope (a private
+    // prompt_upload row must never be confirmed to exist for a non-
+    // owner) — exercises has no RLS at all (canonical, globally
+    // visible), so only these two need an explicit pre-check here.
+    // Relying on the INSERT's own FK constraint for existence would
+    // bypass RLS entirely (Postgres FK checks always do, regardless of
+    // policy), turning "flag as wrong" into a cross-account existence
+    // oracle for private content. This SELECT runs inside the same
+    // RLS-scoped transaction as the insert below, so it sees exactly
+    // what this caller is allowed to see — nothing more.
+    if let Some(source_id) = req.source_id {
+        let visible: Option<(Uuid,)> = sqlx::query_as("SELECT source_id FROM sources WHERE source_id = $1")
+            .bind(source_id)
+            .fetch_optional(&mut *tx)
+            .await?;
+        if visible.is_none() {
+            return Err(ContentFlagError::NotFound);
+        }
+    }
+    if let Some(chunk_id) = req.chunk_id {
+        let visible: Option<(Uuid,)> = sqlx::query_as("SELECT chunk_id FROM chunks WHERE chunk_id = $1")
+            .bind(chunk_id)
+            .fetch_optional(&mut *tx)
+            .await?;
+        if visible.is_none() {
+            return Err(ContentFlagError::NotFound);
+        }
+    }
+
     let flag_id: Uuid = sqlx::query_scalar(
         "INSERT INTO content_flags (user_id, source_id, chunk_id, exercise_id, reason)
          VALUES ($1, $2, $3, $4, $5)

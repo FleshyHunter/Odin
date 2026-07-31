@@ -5,6 +5,15 @@ use serde_json::json;
 pub enum ContentFlagError {
     #[error("{0}")]
     Validation(String),
+    // 404, not 400/403 — deferred.md #44: a source_id/chunk_id that
+    // exists but isn't visible to this caller under sources/chunks'
+    // mixed-scope RLS must look IDENTICAL to one that doesn't exist at
+    // all, same "don't confirm existence to a non-owner" convention
+    // already used by staging::load_owned. Relying on the INSERT's own
+    // FK-violation error here would leak exactly that distinction,
+    // since Postgres FK checks always bypass RLS.
+    #[error("referenced content not found")]
+    NotFound,
     #[error("internal error")]
     Internal,
     // Distinct from Internal, matching the same fix already applied to
@@ -19,6 +28,7 @@ impl IntoResponse for ContentFlagError {
     fn into_response(self) -> axum::response::Response {
         let status = match &self {
             ContentFlagError::Validation(_) => StatusCode::BAD_REQUEST,
+            ContentFlagError::NotFound => StatusCode::NOT_FOUND,
             ContentFlagError::Internal => StatusCode::INTERNAL_SERVER_ERROR,
             ContentFlagError::ServiceUnavailable(_) => StatusCode::SERVICE_UNAVAILABLE,
         };

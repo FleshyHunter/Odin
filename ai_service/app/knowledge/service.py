@@ -90,6 +90,20 @@ class RetrievedChunk:
     metadata: dict
 
 
+def _build_where(filters: dict | None) -> dict | None:
+    """Chroma requires multi-condition filters explicitly wrapped in
+    {"$and": [...]} — a plain multi-key dict raises ValueError
+    ("Expected where to have exactly one operator...") (deferred.md
+    #46, reproduced live against the real server: one key works, two+
+    doesn't). Single-key filters pass through unwrapped since Chroma
+    accepts that form directly and it's simpler to read in logs/tests."""
+    if not filters:
+        return None
+    if len(filters) == 1:
+        return filters
+    return {"$and": [{key: value} for key, value in filters.items()]}
+
+
 def query_knowledge_global(
     embedding: list[float],
     *,
@@ -100,9 +114,10 @@ def query_knowledge_global(
     Rules: "Always filter metadata before/alongside similarity. Never
     raw cosine top-N alone." filters is any subset of {subject_id,
     concept_id, source_id, journey_id, upload_role, trust_score,
-    difficulty, chunk_type}, passed straight through as Chroma's `where`
-    clause (exact-match only — no locked caller needs range/comparison
-    filters yet). Returns similarity (1 - cosine distance), not raw
+    difficulty, chunk_type} — converted to Chroma's `where` clause via
+    _build_where (exact-match only — no locked caller needs range/
+    comparison filters yet; multi-key filters get $and-wrapped, see
+    _build_where's own docstring). Returns similarity (1 - cosine
     distance, so callers compare directly against RETRIEVAL_MIN_SCORE
     without re-deriving the conversion themselves; results already below
     that threshold are dropped here, since a sub-threshold result isn't
@@ -120,7 +135,7 @@ def query_knowledge_global(
     result = get_knowledge_global().query(
         query_embeddings=[embedding],
         n_results=top_k,
-        where=filters if filters else None,
+        where=_build_where(filters),
         include=["distances", "metadatas"],
     )
     ids = result["ids"][0]

@@ -55,11 +55,28 @@ def _get_or_create(name: str) -> Collection:
     #     distance 0.0, opposite vectors -> distance 2.0); the default
     #     L2 space would silently make every threshold comparison
     #     meaningless instead of erroring.
-    return get_client().get_or_create_collection(
+    collection = get_client().get_or_create_collection(
         name,
         metadata={"hnsw:space": "cosine"},
         embedding_function=None,
     )
+    # deferred.md #48: `metadata=` above only actually applies at TRUE
+    # creation time — if a collection under this name already existed
+    # (a reset Chroma volume, a race, anything created outside this
+    # module), get_or_create_collection silently returns it UNCHANGED,
+    # still on Chroma's default L2 space, no error. That would make
+    # every similarity/threshold comparison quietly wrong instead of
+    # loudly wrong — read the actually-configured value back and fail
+    # clearly rather than trust the create call did what was asked.
+    actual_space = collection.metadata.get("hnsw:space") if collection.metadata else None
+    if actual_space != "cosine":
+        raise RuntimeError(
+            f"ChromaDB collection {name!r} is configured with hnsw:space={actual_space!r}, "
+            'not "cosine" — RETRIEVAL_MIN_SCORE/CHUNK_CONCEPT_MIN_SIMILARITY assume cosine '
+            "distance and would silently compare against the wrong values otherwise. "
+            f"Delete and recreate the {name!r} collection."
+        )
+    return collection
 
 
 def get_knowledge_global() -> Collection:

@@ -150,6 +150,14 @@ pub async fn upload(
         }));
     }
     if dedup::find_committed(&state.pool, user_id, &content_hash).await?.is_some() {
+        // deferred.md #45: when parsed.thread_id was None, `thread` above
+        // is a brand-new StagedThread that has never been written to
+        // Redis — without this save, the thread_id handed back here is
+        // a "phantom" that any follow-up call (a message, another
+        // upload) would 410 on, even though it was never actually
+        // valid, not merely expired. Harmless no-op refresh for the
+        // already-existing-thread case.
+        staging::save(&state, &thread).await?;
         return Ok(Json(UploadResponse {
             thread_id: Some(thread.thread_id),
             extracted_text: String::new(),
