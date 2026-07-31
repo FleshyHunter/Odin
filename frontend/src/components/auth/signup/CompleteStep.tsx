@@ -16,15 +16,21 @@ interface CompleteStepProps {
 export function CompleteStep({ email, onComplete }: CompleteStepProps) {
   const [username, setUsername] = useState('');
   const [password, setPassword] = useState('');
-  const { isLoading, error, completeSignup } = useAuth();
+  const [isLoading, setIsLoading] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const { completeSignup } = useAuth();
 
   const handleSubmit = async (event: FormEvent) => {
     event.preventDefault();
+    setIsLoading(true);
+    setError(null);
     try {
       await completeSignup(email, username, password);
       onComplete();
-    } catch {
-      // error already surfaced via useAuth's error state below
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Sign up failed');
+    } finally {
+      setIsLoading(false);
     }
   };
 
@@ -41,6 +47,7 @@ export function CompleteStep({ email, onComplete }: CompleteStepProps) {
             id="signup-username"
             placeholder="yourname"
             autoComplete="username"
+            required
             value={username}
             onChange={(event) => setUsername(event.target.value)}
           />
@@ -56,6 +63,7 @@ export function CompleteStep({ email, onComplete }: CompleteStepProps) {
             id="signup-password"
             placeholder="••••••••"
             autoComplete="new-password"
+            required
             value={password}
             onChange={(event) => setPassword(event.target.value)}
           />

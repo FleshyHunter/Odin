@@ -15,15 +15,21 @@ interface AuthFormProps {
 export function AuthForm({ onAuthenticated }: AuthFormProps) {
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
-  const { isLoading, error, signIn } = useAuth();
+  const [isLoading, setIsLoading] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const { signIn } = useAuth();
 
   const handleSubmit = async (event: FormEvent) => {
     event.preventDefault();
+    setIsLoading(true);
+    setError(null);
     try {
       await signIn(email, password);
       onAuthenticated?.();
-    } catch {
-      // error already surfaced via useAuth's error state below
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Sign in failed');
+    } finally {
+      setIsLoading(false);
     }
   };
 
@@ -40,6 +46,7 @@ export function AuthForm({ onAuthenticated }: AuthFormProps) {
             id="email"
             placeholder="you@example.com"
             autoComplete="email"
+            required
             value={email}
             onChange={(event) => setEmail(event.target.value)}
           />
@@ -51,6 +58,7 @@ export function AuthForm({ onAuthenticated }: AuthFormProps) {
             id="password"
             placeholder="••••••••"
             autoComplete="current-password"
+            required
             value={password}
             onChange={(event) => setPassword(event.target.value)}
           />
@@ -66,6 +74,9 @@ export function AuthForm({ onAuthenticated }: AuthFormProps) {
         {error && <AuthNotice message={error} />}
       </form>
 
+      <p className="switch-line">
+        <Link className="link" to="/signin/otp">Log in with a one-time code instead</Link>
+      </p>
       <p className="switch-line">
         Don't have an account? <Link className="link" to="/signup">Sign up</Link>
       </p>

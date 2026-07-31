@@ -1,4 +1,4 @@
-import type { FormEvent } from 'react';
+import { useState, type FormEvent } from 'react';
 import { Link } from 'react-router-dom';
 import { useAuth } from '../../../hooks/useAuth';
 import { Button } from '../../ui/Button/Button';
@@ -16,15 +16,21 @@ interface EmailStepProps {
 // returns 200 regardless of whether the account exists (anti-
 // enumeration), so "Continue" always advances once the call succeeds.
 export function EmailStep({ email, onEmailChange, onContinue }: EmailStepProps) {
-  const { isLoading, error, requestPasswordResetOtp } = useAuth();
+  const [isLoading, setIsLoading] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const { requestPasswordResetOtp } = useAuth();
 
   const handleSubmit = async (event: FormEvent) => {
     event.preventDefault();
+    setIsLoading(true);
+    setError(null);
     try {
       await requestPasswordResetOtp(email);
       onContinue();
-    } catch {
-      // error already surfaced via useAuth's error state below
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Could not send verification code');
+    } finally {
+      setIsLoading(false);
     }
   };
 
@@ -41,6 +47,7 @@ export function EmailStep({ email, onEmailChange, onContinue }: EmailStepProps) 
             id="reset-email"
             placeholder="you@example.com"
             autoComplete="email"
+            required
             value={email}
             onChange={(event) => onEmailChange(event.target.value)}
           />

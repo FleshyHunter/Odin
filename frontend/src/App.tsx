@@ -3,6 +3,7 @@ import { AuthLayout } from './components/auth/layout/AuthLayout';
 import { Login } from './pages/Login/Login';
 import { Signup } from './pages/Signup/Signup';
 import { ForgotPassword } from './pages/ForgotPassword/ForgotPassword';
+import { OtpLogin } from './pages/OtpLogin/OtpLogin';
 import { SessionLayout } from './pages/Session/SessionLayout';
 import { ChatView } from './pages/Session/ChatView';
 import { Projects } from './pages/Projects/Projects';
@@ -66,6 +67,12 @@ function App() {
             ) : (
               <ForgotPassword onAuthenticated={handleAuthenticated} />
             )
+          }
+        />
+        <Route
+          path="/signin/otp"
+          element={
+            isAuthenticated ? <Navigate to="/chat" replace /> : <OtpLogin onAuthenticated={handleAuthenticated} />
           }
         />
       </Route>

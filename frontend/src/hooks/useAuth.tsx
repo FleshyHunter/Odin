@@ -5,13 +5,13 @@ import type { AuthSession } from '../types';
 
 interface AuthContextValue {
   session: AuthSession | null;
-  isLoading: boolean;
   // True only for the brief silent-refresh check on first app load —
   // lets App.tsx avoid flashing the sign-in page before that check
   // resolves (see the bootstrap effect below).
   isBootstrapping: boolean;
-  error: string | null;
   signIn: (email: string, password: string) => Promise<AuthSession>;
+  requestLoginOtp: (email: string) => Promise<void>;
+  verifyLoginOtp: (email: string, code: string) => Promise<AuthSession>;
   requestSignupOtp: (email: string) => Promise<void>;
   verifySignupOtp: (email: string, code: string) => Promise<void>;
   completeSignup: (email: string, displayName: string, password: string) => Promise<AuthSession>;
@@ -23,16 +23,23 @@ interface AuthContextValue {
 
 const AuthContext = createContext<AuthContextValue | null>(null);
 
-// A real Context (not a plain hook) specifically because auth state is
+// A real Context (not a plain hook) specifically because `session` is
 // genuinely global: the sidebar (email display, log out) and every
 // auth-flow component (sign-in, signup wizard, forgot-password wizard)
 // all need the SAME session, not each independently maintaining and
 // silently drifting out of sync with its own local copy.
+//
+// isLoading/error are deliberately NOT part of this shared state (they
+// were originally, and that was a real bug: every consumer reads the
+// same context value, so one screen's "invalid code" error — or its
+// loading spinner — kept showing up on completely unrelated screens
+// after navigating away, since nothing had scoped it back down). Each
+// calling component tracks its own isLoading/error locally around
+// calling these functions, exactly like a normal async call — this
+// object only exposes the actions + the one genuinely-shared value.
 export function AuthProvider({ children }: { children: ReactNode }) {
   const [session, setSession] = useState<AuthSession | null>(null);
-  const [isLoading, setIsLoading] = useState(false);
   const [isBootstrapping, setIsBootstrapping] = useState(true);
-  const [error, setError] = useState<string | null>(null);
   // Since the refresh call below ROTATES the cookie (a new one replaces
   // it on every use), React StrictMode's dev-only double-invoke of
   // effects would otherwise fire two near-simultaneous rotations on
@@ -66,100 +73,46 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   }, []);
 
   const signIn = useCallback(async (email: string, password: string) => {
-    setIsLoading(true);
-    setError(null);
-    try {
-      const result = await authApi.signIn(email, password);
-      setSession(result);
-      return result;
-    } catch (err) {
-      setError(err instanceof Error ? err.message : 'Sign in failed');
-      throw err;
-    } finally {
-      setIsLoading(false);
-    }
+    const result = await authApi.signIn(email, password);
+    setSession(result);
+    return result;
   }, []);
 
-  const requestSignupOtp = useCallback(async (email: string) => {
-    setIsLoading(true);
-    setError(null);
-    try {
-      await authApi.requestSignupOtp(email);
-    } catch (err) {
-      setError(err instanceof Error ? err.message : 'Could not send verification code');
-      throw err;
-    } finally {
-      setIsLoading(false);
-    }
+  const requestLoginOtp = useCallback((email: string) => authApi.requestLoginOtp(email), []);
+
+  const verifyLoginOtp = useCallback(async (email: string, code: string) => {
+    const result = await authApi.verifyLoginOtp(email, code);
+    setSession(result);
+    return result;
   }, []);
 
-  const verifySignupOtp = useCallback(async (email: string, code: string) => {
-    setIsLoading(true);
-    setError(null);
-    try {
-      await authApi.verifySignupOtp(email, code);
-    } catch (err) {
-      setError(err instanceof Error ? err.message : 'Invalid or expired code');
-      throw err;
-    } finally {
-      setIsLoading(false);
-    }
-  }, []);
+  const requestSignupOtp = useCallback((email: string) => authApi.requestSignupOtp(email), []);
+
+  const verifySignupOtp = useCallback(
+    (email: string, code: string) => authApi.verifySignupOtp(email, code),
+    [],
+  );
 
   const completeSignup = useCallback(async (email: string, displayName: string, password: string) => {
-    setIsLoading(true);
-    setError(null);
-    try {
-      const result = await authApi.completeSignup(email, displayName, password);
-      setSession(result);
-      return result;
-    } catch (err) {
-      setError(err instanceof Error ? err.message : 'Sign up failed');
-      throw err;
-    } finally {
-      setIsLoading(false);
-    }
+    const result = await authApi.completeSignup(email, displayName, password);
+    setSession(result);
+    return result;
   }, []);
 
-  const requestPasswordResetOtp = useCallback(async (email: string) => {
-    setIsLoading(true);
-    setError(null);
-    try {
-      await authApi.requestPasswordResetOtp(email);
-    } catch (err) {
-      setError(err instanceof Error ? err.message : 'Could not send verification code');
-      throw err;
-    } finally {
-      setIsLoading(false);
-    }
-  }, []);
+  const requestPasswordResetOtp = useCallback(
+    (email: string) => authApi.requestPasswordResetOtp(email),
+    [],
+  );
 
-  const verifyPasswordResetOtp = useCallback(async (email: string, code: string) => {
-    setIsLoading(true);
-    setError(null);
-    try {
-      return await authApi.verifyPasswordResetOtp(email, code);
-    } catch (err) {
-      setError(err instanceof Error ? err.message : 'Invalid or expired code');
-      throw err;
-    } finally {
-      setIsLoading(false);
-    }
-  }, []);
+  const verifyPasswordResetOtp = useCallback(
+    (email: string, code: string) => authApi.verifyPasswordResetOtp(email, code),
+    [],
+  );
 
   const completePasswordReset = useCallback(async (email: string, newPassword: string) => {
-    setIsLoading(true);
-    setError(null);
-    try {
-      const result = await authApi.completePasswordReset(email, newPassword);
-      setSession(result);
-      return result;
-    } catch (err) {
-      setError(err instanceof Error ? err.message : 'Could not reset password');
-      throw err;
-    } finally {
-      setIsLoading(false);
-    }
+    const result = await authApi.completePasswordReset(email, newPassword);
+    setSession(result);
+    return result;
   }, []);
 
   const signOut = useCallback(async () => {
@@ -176,10 +129,10 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
   const value: AuthContextValue = {
     session,
-    isLoading,
     isBootstrapping,
-    error,
     signIn,
+    requestLoginOtp,
+    verifyLoginOtp,
     requestSignupOtp,
     verifySignupOtp,
     completeSignup,

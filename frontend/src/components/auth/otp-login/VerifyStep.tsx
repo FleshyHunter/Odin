@@ -7,31 +7,28 @@ import '../authWizard.css';
 
 interface VerifyStepProps {
   email: string;
-  onContinue: () => void;
-  onContinueWithPassword: () => void;
+  onAuthenticated?: () => void;
 }
 
-// Step 2 of 3: verify the code from step 1 (POST /auth/signup/verify-otp)
-// — advances only once the backend confirms a real match. "Continue
-// with password" is a restored pure-navigation shortcut (matches the
-// original mockup — it skips straight to step 3 without verifying) —
-// the backend still requires a verified code before signup/complete
-// succeeds (Auth section), so taking this shortcut surfaces a real
-// "verification required" error there via AuthNotice rather than
-// silently working. Kept per instruction rather than removed.
-export function VerifyStep({ email, onContinue, onContinueWithPassword }: VerifyStepProps) {
+// Step 2 of 2: verify the code from step 1 (POST /auth/login/verify-otp)
+// — unlike signup/password-reset's verify-otp, this one already returns
+// full tokens on success (login_verify_otp calls respond_with_tokens
+// directly, backend/src/auth/handlers.rs), so a match logs the user
+// straight in. No separate "complete" step: logging in needs no
+// profile completion.
+export function VerifyStep({ email, onAuthenticated }: VerifyStepProps) {
   const [code, setCode] = useState('');
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const { verifySignupOtp, requestSignupOtp } = useAuth();
+  const { verifyLoginOtp, requestLoginOtp } = useAuth();
 
   const handleSubmit = async (event: FormEvent) => {
     event.preventDefault();
     setIsLoading(true);
     setError(null);
     try {
-      await verifySignupOtp(email, code);
-      onContinue();
+      await verifyLoginOtp(email, code);
+      onAuthenticated?.();
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Invalid or expired code');
     } finally {
@@ -41,7 +38,7 @@ export function VerifyStep({ email, onContinue, onContinueWithPassword }: Verify
 
   const handleResend = async () => {
     try {
-      await requestSignupOtp(email);
+      await requestLoginOtp(email);
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Could not resend code');
     }
@@ -54,10 +51,10 @@ export function VerifyStep({ email, onContinue, onContinueWithPassword }: Verify
 
       <form onSubmit={handleSubmit}>
         <div className="field">
-          <label htmlFor="signup-code">Code</label>
+          <label htmlFor="otp-login-code">Code</label>
           <input
             type="text"
-            id="signup-code"
+            id="otp-login-code"
             placeholder="123456"
             required
             value={code}
@@ -65,21 +62,13 @@ export function VerifyStep({ email, onContinue, onContinueWithPassword }: Verify
           />
         </div>
         <Button type="submit" disabled={isLoading}>
-          {isLoading ? 'Please wait…' : 'Continue'}
+          {isLoading ? 'Please wait…' : 'Log in'}
         </Button>
         {error && <AuthNotice message={error} />}
       </form>
 
       <button type="button" className="resend-link" onClick={handleResend} disabled={isLoading}>
         Resend email
-      </button>
-
-      <div className="auth-divider">
-        <span>OR</span>
-      </div>
-
-      <button type="button" className="secondary-btn" onClick={onContinueWithPassword}>
-        Continue with password
       </button>
     </div>
   );

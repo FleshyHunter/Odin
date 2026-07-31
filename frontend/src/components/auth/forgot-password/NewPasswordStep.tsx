@@ -20,21 +20,27 @@ interface NewPasswordStepProps {
 export function NewPasswordStep({ email, displayName, onComplete }: NewPasswordStepProps) {
   const [password, setPassword] = useState('');
   const [confirmPassword, setConfirmPassword] = useState('');
+  const [isLoading, setIsLoading] = useState(false);
+  const [error, setError] = useState<string | null>(null);
   const [mismatchError, setMismatchError] = useState<string | null>(null);
-  const { isLoading, error, completePasswordReset } = useAuth();
+  const { completePasswordReset } = useAuth();
 
   const handleSubmit = async (event: FormEvent) => {
     event.preventDefault();
     setMismatchError(null);
+    setError(null);
     if (password !== confirmPassword) {
       setMismatchError("Passwords don't match.");
       return;
     }
+    setIsLoading(true);
     try {
       await completePasswordReset(email, password);
       onComplete();
-    } catch {
-      // error already surfaced via useAuth's error state below
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Could not reset password');
+    } finally {
+      setIsLoading(false);
     }
   };
 
@@ -61,6 +67,7 @@ export function NewPasswordStep({ email, displayName, onComplete }: NewPasswordS
             id="reset-password"
             placeholder="••••••••"
             autoComplete="new-password"
+            required
             value={password}
             onChange={(event) => setPassword(event.target.value)}
           />
@@ -72,6 +79,7 @@ export function NewPasswordStep({ email, displayName, onComplete }: NewPasswordS
             id="reset-confirm-password"
             placeholder="••••••••"
             autoComplete="new-password"
+            required
             value={confirmPassword}
             onChange={(event) => setConfirmPassword(event.target.value)}
           />

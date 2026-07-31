@@ -28,7 +28,13 @@ export function SignupFlow({ onAuthenticated }: SignupFlowProps) {
   }
 
   if (step === 'verify') {
-    return <VerifyStep email={email} onContinue={() => setStep('complete')} />;
+    return (
+      <VerifyStep
+        email={email}
+        onContinue={() => setStep('complete')}
+        onContinueWithPassword={() => setStep('complete')}
+      />
+    );
   }
 
   return <CompleteStep email={email} onComplete={() => onAuthenticated?.()} />;

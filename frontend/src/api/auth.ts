@@ -93,6 +93,29 @@ export async function completePasswordReset(email: string, newPassword: string):
   return toSession(result);
 }
 
+// POST /auth/login/request-otp { email } -> 200, no body. Same anti-
+// enumeration shape as signup/password-reset's request-otp — always
+// succeeds, only actually stages/sends a code for a real account.
+export async function requestLoginOtp(email: string): Promise<void> {
+  await apiFetch<void>('/auth/login/request-otp', {
+    method: 'POST',
+    body: JSON.stringify({ email }),
+  });
+}
+
+// POST /auth/login/verify-otp { email, code } -> AuthResponse. Unlike
+// signup/password-reset's verify-otp, login's already returns full
+// tokens directly (backend/src/auth/handlers.rs's login_verify_otp
+// calls respond_with_tokens) — logging in needs no profile completion,
+// so there's no separate "complete" step.
+export async function verifyLoginOtp(email: string, code: string): Promise<AuthSession> {
+  const result = await apiFetch<AuthResponseBody>('/auth/login/verify-otp', {
+    method: 'POST',
+    body: JSON.stringify({ email, code }),
+  });
+  return toSession(result);
+}
+
 interface MeResponseBody {
   user_id: string;
   display_name: string;

@@ -17,20 +17,30 @@ interface VerifyStepProps {
 // real account, unlike the anti-enumeration-guarded request step).
 export function VerifyStep({ email, onVerified }: VerifyStepProps) {
   const [code, setCode] = useState('');
-  const { isLoading, error, verifyPasswordResetOtp, requestPasswordResetOtp } = useAuth();
+  const [isLoading, setIsLoading] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const { verifyPasswordResetOtp, requestPasswordResetOtp } = useAuth();
 
   const handleSubmit = async (event: FormEvent) => {
     event.preventDefault();
+    setIsLoading(true);
+    setError(null);
     try {
       const displayName = await verifyPasswordResetOtp(email, code);
       onVerified(displayName);
-    } catch {
-      // error already surfaced via useAuth's error state below
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Invalid or expired code');
+    } finally {
+      setIsLoading(false);
     }
   };
 
-  const handleResend = () => {
-    void requestPasswordResetOtp(email);
+  const handleResend = async () => {
+    try {
+      await requestPasswordResetOtp(email);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Could not resend code');
+    }
   };
 
   return (
@@ -45,6 +55,7 @@ export function VerifyStep({ email, onVerified }: VerifyStepProps) {
             type="text"
             id="reset-code"
             placeholder="123456"
+            required
             value={code}
             onChange={(event) => setCode(event.target.value)}
           />

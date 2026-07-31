@@ -11,20 +11,21 @@ interface EmailStepProps {
   onContinue: () => void;
 }
 
-// Step 1 of 3: collect the email and request a real signup OTP
-// (POST /auth/signup/request-otp) — advances to the verify step only
-// once the backend has actually staged and sent a code.
+// Step 1 of 2: collect the email and request a real login OTP
+// (POST /auth/login/request-otp) — same anti-enumeration shape as
+// signup/password-reset's request-otp (always 200), so "Continue"
+// always advances once the call succeeds.
 export function EmailStep({ email, onEmailChange, onContinue }: EmailStepProps) {
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const { requestSignupOtp } = useAuth();
+  const { requestLoginOtp } = useAuth();
 
   const handleSubmit = async (event: FormEvent) => {
     event.preventDefault();
     setIsLoading(true);
     setError(null);
     try {
-      await requestSignupOtp(email);
+      await requestLoginOtp(email);
       onContinue();
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Could not send verification code');
@@ -35,15 +36,15 @@ export function EmailStep({ email, onEmailChange, onContinue }: EmailStepProps) 
 
   return (
     <div className="signin-pane-content">
-      <h1 className="headline display">Sign up</h1>
-      <p className="subhead">Start learning on your terms.</p>
+      <h1 className="headline display">Log in with a code</h1>
+      <p className="subhead">We'll email you a one-time code.</p>
 
       <form onSubmit={handleSubmit}>
         <div className="field">
-          <label htmlFor="signup-email">Email</label>
+          <label htmlFor="otp-login-email">Email</label>
           <input
             type="email"
-            id="signup-email"
+            id="otp-login-email"
             placeholder="you@example.com"
             autoComplete="email"
             required
@@ -58,7 +59,10 @@ export function EmailStep({ email, onEmailChange, onContinue }: EmailStepProps) 
       </form>
 
       <p className="switch-line">
-        Already have an account? <Link className="link" to="/signin">Sign in</Link>
+        <Link className="link" to="/signin">Use your password instead</Link>
+      </p>
+      <p className="switch-line">
+        Don't have an account? <Link className="link" to="/signup">Sign up</Link>
       </p>
     </div>
   );
