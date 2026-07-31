@@ -68,6 +68,13 @@ services:
       # Desktop's bridge back to the host), not a plain
       # localhost/127.0.0.1 URL.
       OLLAMA_HOST: http://host.docker.internal:11434
+      # Milestone 9 (deferred.md #25) — chromadb is a service in THIS
+      # same compose file, so ai_service reaches it via Docker Compose's
+      # own service-name DNS (the "chromadb" hostname), on the
+      # container's internal port 8000 — NOT the host-mapped 8001 used
+      # to reach it from outside this compose network (e.g. from the
+      # Mac, over Tailscale).
+      CHROMADB_HOST: http://chromadb:8000
       # Block 10 (Dify) — all optional at the compose level: unset
       # means the corresponding env var is simply absent inside the
       # container, which ai_service already handles as "not configured

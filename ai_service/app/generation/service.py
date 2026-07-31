@@ -39,7 +39,13 @@ def get_client() -> Client:
     return Client(host=OLLAMA_HOST)
 
 
-def generate_text(prompt: str, think: bool = True) -> str:
+def _build_messages(prompt: str, system: str | None) -> list[dict[str, str]]:
+    if system:
+        return [{"role": "system", "content": system}, {"role": "user", "content": prompt}]
+    return [{"role": "user", "content": prompt}]
+
+
+def generate_text(prompt: str, think: bool = True, system: str | None = None) -> str:
     # /api/chat, not /api/generate — the model's Modelfile TEMPLATE is a
     # bare `{{ .Prompt }}` with no chat-role wrapping, so /api/generate
     # gives it no turn-boundary/stop signal at all. /api/chat applies
@@ -52,11 +58,17 @@ def generate_text(prompt: str, think: bool = True) -> str:
     # (Fine-Tuning Roadmap) — defaulting it off to save time would
     # quietly undo that. Once Block 8's intent classification exists,
     # callers can pass a per-message decision instead of this default.
+    #
+    # system is optional and None by default — intent/classifier.py's
+    # own direct call to this function (its qwen fallback) deliberately
+    # passes none, so this stays a no-op for every existing caller
+    # unless one opts in (see generation/router.py, the one caller that
+    # does, for the English-only enforcement instruction).
     with track_generation():
         client = get_client()
         response = client.chat(
             model=MODEL_NAME,
-            messages=[{"role": "user", "content": prompt}],
+            messages=_build_messages(prompt, system),
             think=think,
             options={"num_ctx": OLLAMA_NUM_CTX},
         )
@@ -73,12 +85,12 @@ def generate_text(prompt: str, think: bool = True) -> str:
 # call, just with `content` holding an incremental delta rather than
 # the full text. The empty-content guard skips ollama's own boundary
 # chunks (e.g. the final done=True chunk often carries no new text).
-def generate_text_stream(prompt: str, think: bool = True) -> Iterator[str]:
+def generate_text_stream(prompt: str, think: bool = True, system: str | None = None) -> Iterator[str]:
     with track_generation():
         client = get_client()
         stream = client.chat(
             model=MODEL_NAME,
-            messages=[{"role": "user", "content": prompt}],
+            messages=_build_messages(prompt, system),
             think=think,
             options={"num_ctx": OLLAMA_NUM_CTX},
             stream=True,

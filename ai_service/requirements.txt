@@ -21,3 +21,7 @@ python-docx>=1.1
 # Dockerfile) — pytesseract only wraps it.
 pytesseract>=0.3.13
 pillow-heif>=0.18
+# Milestone 9 (deferred.md #25): knowledge_global/concept_embeddings
+# collections — chromadb's own HttpClient talks to the ChromaDB server
+# container (docker-compose.windows.yml), not an embedded/local mode.
+chromadb>=0.5
