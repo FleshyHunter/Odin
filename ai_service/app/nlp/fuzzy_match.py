@@ -1,10 +1,15 @@
+import os
 from dataclasses import dataclass
 
 from rapidfuzz import fuzz, process
 
 from app.nlp.spacy_pipe import get_nlp
 
-DEFAULT_THRESHOLD = 80.0
+# Rule 12 (never hardcode thresholds) — deferred.md #30. Was a plain
+# Python float; FUZZY_MATCH_MIN_SCORE is already a named env var in
+# ARCHITECTURE.md's Environment Variables [LOCKED] list, just never
+# actually read anywhere until now.
+DEFAULT_THRESHOLD = float(os.environ.get("FUZZY_MATCH_MIN_SCORE", "80"))
 
 
 @dataclass

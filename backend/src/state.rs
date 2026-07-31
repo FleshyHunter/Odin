@@ -42,6 +42,12 @@ pub struct AppState {
     pub ai_service_url: Arc<str>,
     // Block 11: sliding TTL for Redis-staged memoryless threads.
     pub memoryless_thread_ttl_minutes: i64,
+    // Size guardrail on staged uploads — see config.rs's own comment.
+    pub memoryless_staged_upload_max_mb: u64,
+    pub memoryless_staged_upload_max_chunks: usize,
+    // generate_exercise_template()'s race-prevention lock TTL — see
+    // exercises/service.rs.
+    pub template_gen_lock_ttl_seconds: u64,
 }
 
 impl AppState {
@@ -66,6 +72,9 @@ impl AppState {
             http_client,
             ai_service_url: Arc::from(config.ai_service_url.as_str()),
             memoryless_thread_ttl_minutes: config.memoryless_thread_ttl_minutes,
+            memoryless_staged_upload_max_mb: config.memoryless_staged_upload_max_mb,
+            memoryless_staged_upload_max_chunks: config.memoryless_staged_upload_max_chunks,
+            template_gen_lock_ttl_seconds: config.template_gen_lock_ttl_seconds,
         }
     }
 

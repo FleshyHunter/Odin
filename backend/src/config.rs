@@ -53,7 +53,26 @@ pub struct Config {
     // Block-12+ territory and can legitimately differ — a large staged
     // upload arguably deserves a shorter, more deliberate window than
     // casual message history).
+    //
+    // NOTE (deferred.md #32): a genuinely separate upload TTL isn't
+    // actually implemented — staged uploads live inside this SAME
+    // thread blob/key, so they share this exact TTL today rather than
+    // their own shorter one. Documented deviation, not a silent gap —
+    // see deferred.md #32's own note for why (would need staged
+    // uploads to move to their own Redis keys, a real but separate
+    // piece of work from the size caps this pass actually builds).
     pub memoryless_thread_ttl_minutes: i64,
+    // PRD.md, Memoryless Mode — SIZE GUARDRAIL: explicit limits on a
+    // staged upload, enforced BEFORE embedding starts, so an oversized
+    // real upload can't run uncapped OCR/chunk/embed compute (deferred.md
+    // #32 — previously unenforced despite the doc already framing this
+    // as "closes a real gap").
+    pub memoryless_staged_upload_max_mb: u64,
+    pub memoryless_staged_upload_max_chunks: usize,
+    // Rule 12 (never hardcode thresholds) — deferred.md #29. Same
+    // value PRD.md already locks (120s), now a real env var instead of
+    // a compiled-in Rust constant.
+    pub template_gen_lock_ttl_seconds: u64,
 }
 
 impl Config {
@@ -124,6 +143,18 @@ impl Config {
             .ok()
             .and_then(|v| v.parse().ok())
             .unwrap_or(60);
+        let memoryless_staged_upload_max_mb = env::var("MEMORYLESS_STAGED_UPLOAD_MAX_MB")
+            .ok()
+            .and_then(|v| v.parse().ok())
+            .unwrap_or(25);
+        let memoryless_staged_upload_max_chunks = env::var("MEMORYLESS_STAGED_UPLOAD_MAX_CHUNKS")
+            .ok()
+            .and_then(|v| v.parse().ok())
+            .unwrap_or(200);
+        let template_gen_lock_ttl_seconds = env::var("TEMPLATE_GEN_LOCK_TTL_SECONDS")
+            .ok()
+            .and_then(|v| v.parse().ok())
+            .unwrap_or(120);
 
         Self {
             database_url,
@@ -143,6 +174,9 @@ impl Config {
             cookie_secure,
             ai_service_url,
             memoryless_thread_ttl_minutes,
+            memoryless_staged_upload_max_mb,
+            memoryless_staged_upload_max_chunks,
+            template_gen_lock_ttl_seconds,
         }
     }
 }

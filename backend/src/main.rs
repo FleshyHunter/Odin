@@ -12,6 +12,7 @@
 mod ai_client;
 mod auth;
 mod config;
+mod content_flags;
 mod db;
 mod exercises;
 mod memoryless;
@@ -99,8 +100,9 @@ async fn main() {
         .merge(routes::router())
         .merge(auth::router())
         .merge(memoryless::router())
-        .merge(uploads::router())
+        .merge(uploads::router(config.memoryless_staged_upload_max_mb))
         .merge(exercises::router())
+        .merge(content_flags::router())
         .layer(cors)
         .with_state(app_state);
 

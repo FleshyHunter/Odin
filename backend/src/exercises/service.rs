@@ -6,9 +6,11 @@
 //     (migrations/0001_initial_schema.sql) — the actual guarantee, no
 //     duplicate canonical template per difficulty can ever exist.
 //   Cost layer (this file): a Redis SET NX lock, key
-//     generating_template:{concept_id}, TTL 120s — an optimization on
-//     top, not instead of. Only avoids a redundant, real Claude/Dify
-//     call; the database constraint above is what actually prevents
+//     generating_template:{concept_id}, TTL from TEMPLATE_GEN_LOCK_TTL_
+//     SECONDS (config.rs — was a hardcoded 120s constant, Rule 12
+//     violation, fixed in deferred.md #29) — an optimization on top,
+//     not instead of. Only avoids a redundant, real Claude/Dify call;
+//     the database constraint above is what actually prevents
 //     duplicate data even if this lock's guarantee somehow fails.
 //
 // No real automatic caller exists yet (exercise-template
@@ -28,7 +30,6 @@ use crate::state::AppState;
 
 use super::errors::ExerciseError;
 
-const LOCK_TTL_SECONDS: u64 = 120; // PRD.md-locked value.
 const POLL_INTERVAL: Duration = Duration::from_secs(1);
 
 fn lock_key(concept_id: Uuid) -> String {
@@ -50,9 +51,9 @@ pub async fn get_or_generate(
         // Someone else is already generating for this concept — don't
         // call Claude a second time for a result that would just be
         // discarded; wait for theirs and hand back whatever they save.
-        return poll_for_canonical(state, concept_id, LOCK_TTL_SECONDS).await;
+        return poll_for_canonical(state, concept_id, state.template_gen_lock_ttl_seconds).await;
     }
-    conn.expire::<_, ()>(&key, LOCK_TTL_SECONDS as i64).await?;
+    conn.expire::<_, ()>(&key, state.template_gen_lock_ttl_seconds as i64).await?;
 
     // The lock's lifetime must cover generation AND persistence, not
     // just the Dify call — found live (Block 12 verification, a real

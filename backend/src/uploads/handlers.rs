@@ -14,6 +14,13 @@ use super::dedup;
 
 const VALID_ROLES: [&str; 3] = ["ephemeral", "prompt_upload", "material_upload"];
 
+// PRD.md, Memoryless Mode — SIZE GUARDRAIL (deferred.md #32, previously
+// unenforced despite the doc already framing this as "closes a real
+// gap"). Exact locked message text — shown regardless of which limit
+// (MB or chunk count) was actually exceeded, same as the doc specifies.
+const SIZE_GUARDRAIL_MESSAGE: &str =
+    "This document is too large for temporary memoryless use. Start a track to ingest it properly.";
+
 struct ParsedUpload {
     file_bytes: Vec<u8>,
     filename: String,
@@ -101,6 +108,16 @@ pub async fn upload(
 ) -> Result<Json<UploadResponse>, MemorylessError> {
     let parsed = parse_multipart(multipart).await?;
 
+    // Enforced BEFORE embedding starts (PRD.md's own wording) — checked
+    // against every role, not just the staged ones: an oversized
+    // ephemeral upload would still run the full extract/OCR/chunk/embed
+    // pipeline for nothing, which is exactly the wasted-compute problem
+    // this guardrail exists to prevent.
+    let max_bytes = state.memoryless_staged_upload_max_mb * 1024 * 1024;
+    if parsed.file_bytes.len() as u64 > max_bytes {
+        return Err(MemorylessError::Validation(SIZE_GUARDRAIL_MESSAGE.to_string()));
+    }
+
     if parsed.role == "ephemeral" {
         let result = ai_client::ingest(&state.http_client, &state.ai_service_url, parsed.file_bytes, &parsed.filename, &parsed.role)
             .await?;
@@ -150,6 +167,13 @@ pub async fn upload(
     }
 
     let chunk_count = result.chunks.len();
+    // Only knowable AFTER chunking (content-dependent, unlike the byte-
+    // size check above) — rejected here, before ever staging into
+    // Redis, rather than after (no point saving something we're about
+    // to tell the user is too large).
+    if chunk_count > state.memoryless_staged_upload_max_chunks {
+        return Err(MemorylessError::Validation(SIZE_GUARDRAIL_MESSAGE.to_string()));
+    }
     thread.staged_uploads.push(StagedUpload {
         content_hash,
         filename: parsed.filename,
