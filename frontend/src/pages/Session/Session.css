@@ -10,7 +10,7 @@
    needs a distinct "empty" 2-column variant — a flex container just
    naturally reflows around however many children it has (Sidebar, plus
    either [conversation, active-panel], or a single main element for
-   Projects/Tracks/EmptyLanding). */
+   Projects/Tracks/MemorylessLanding). */
 .session-page .app-shell {
   display: flex;
   height: 100vh;

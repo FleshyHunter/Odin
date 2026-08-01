@@ -119,8 +119,15 @@ pub async fn upload(
     }
 
     if parsed.role == "ephemeral" {
-        let result = ai_client::ingest(&state.http_client, &state.ai_service_url, parsed.file_bytes, &parsed.filename, &parsed.role)
-            .await?;
+        let result = ai_client::ingest(
+            &state.http_client,
+            &state.ai_service_url,
+            parsed.file_bytes,
+            &parsed.filename,
+            &parsed.role,
+            state.memoryless_staged_upload_max_chunks,
+        )
+        .await?;
         if result.rejected {
             return Err(MemorylessError::Validation(
                 result.rejection_reason.unwrap_or_else(|| "upload rejected".to_string()),
@@ -166,22 +173,27 @@ pub async fn upload(
         }));
     }
 
-    let result = ai_client::ingest(&state.http_client, &state.ai_service_url, parsed.file_bytes, &parsed.filename, &parsed.role)
-        .await?;
+    let result = ai_client::ingest(
+        &state.http_client,
+        &state.ai_service_url,
+        parsed.file_bytes,
+        &parsed.filename,
+        &parsed.role,
+        state.memoryless_staged_upload_max_chunks,
+    )
+    .await?;
     if result.rejected {
         return Err(MemorylessError::Validation(
             result.rejection_reason.unwrap_or_else(|| "upload rejected".to_string()),
         ));
     }
 
+    // deferred.md #47: chunk-count guardrail now enforced ai_service-side,
+    // BEFORE embed_texts() runs (ai_service/app/ingestion/service.py) —
+    // ai_service returns `rejected` above if max_chunks was exceeded, so
+    // there is nothing left to check post-hoc here. chunk_count itself is
+    // still needed for UploadResponse below.
     let chunk_count = result.chunks.len();
-    // Only knowable AFTER chunking (content-dependent, unlike the byte-
-    // size check above) — rejected here, before ever staging into
-    // Redis, rather than after (no point saving something we're about
-    // to tell the user is too large).
-    if chunk_count > state.memoryless_staged_upload_max_chunks {
-        return Err(MemorylessError::Validation(SIZE_GUARDRAIL_MESSAGE.to_string()));
-    }
     thread.staged_uploads.push(StagedUpload {
         content_hash,
         filename: parsed.filename,

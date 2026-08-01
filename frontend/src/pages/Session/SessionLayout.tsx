@@ -83,7 +83,7 @@ export function SessionLayout({ profileName, email, onSignOut }: SessionLayoutPr
     <div className="session-page">
       {/* .app-shell is a flex row now (see Session.css) — it naturally
           reflows around however many children the Outlet renders (2 for
-          Projects/Tracks/EmptyLanding, 3 for an open conversation's
+          Projects/Tracks/MemorylessLanding, 3 for an open conversation's
           conversation+active-panel), so no separate "empty" variant
           class is needed here anymore. */}
       <div className="app-shell">

@@ -8,11 +8,16 @@ interface ComposerProps {
   onSend: (text: string) => void;
   disabled?: boolean;
   isSending?: boolean;
+  // Called instead of onSend when the button is clicked while isSending
+  // is true (the button already swaps to a stop icon in that state —
+  // deferred.md #51 wired this so the click actually does something,
+  // rather than the previous silent no-op).
+  onStop?: () => void;
   notice?: ComposerNoticeData | null;
   onDismissNotice?: () => void;
 }
 
-export function Composer({ onSend, disabled, isSending, notice, onDismissNotice }: ComposerProps) {
+export function Composer({ onSend, disabled, isSending, onStop, notice, onDismissNotice }: ComposerProps) {
   const [value, setValue] = useState('');
   const { status, startRecording, stopRecording } = useVoiceInput();
   const textareaRef = useRef<HTMLTextAreaElement>(null);
@@ -30,7 +35,10 @@ export function Composer({ onSend, disabled, isSending, notice, onDismissNotice 
   }, [value]);
 
   const handleSend = () => {
-    if (isSending) return;
+    if (isSending) {
+      onStop?.();
+      return;
+    }
     const trimmed = value.trim();
     if (!trimmed) return;
     onSend(trimmed);

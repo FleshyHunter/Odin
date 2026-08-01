@@ -37,7 +37,10 @@ export function getAccessToken(): string | null {
 // per request.
 let refreshInFlight: Promise<boolean> | null = null;
 
-async function silentRefresh(): Promise<boolean> {
+// Exported so api/memoryless.ts's raw-fetch SSE call can reuse the same
+// single-retry-on-401 behavior as apiFetch below, without duplicating
+// the coalescing logic.
+export async function silentRefresh(): Promise<boolean> {
   if (!refreshInFlight) {
     refreshInFlight = (async () => {
       try {
@@ -121,11 +124,11 @@ export async function apiFetch<T>(path: string, options: RequestInit = {}, isRet
 // (tone from the status code, message from the response body) so
 // every caller's error handling keeps working unchanged.
 export class ApiError extends Error {
-  constructor(
-    public tone: 'warning' | 'error',
-    message: string,
-  ) {
+  tone: 'warning' | 'error';
+
+  constructor(tone: 'warning' | 'error', message: string) {
     super(message);
+    this.tone = tone;
     this.name = 'ApiError';
   }
 }

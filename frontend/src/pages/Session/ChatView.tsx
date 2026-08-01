@@ -4,7 +4,7 @@ import { TrackHeader } from '../../components/conversation/TrackBar/TrackHeader'
 import { MessageList } from '../../components/conversation/Messages/MessageList';
 import { Composer } from '../../components/conversation/Composer/Composer';
 import { ActivePanel } from '../../components/active-panel/ActivePanel';
-import { EmptyLanding } from './EmptyLanding';
+import { MemorylessLanding } from './MemorylessLanding';
 import { useTrackMessages } from '../../hooks/useTracks';
 import { useActivePanel, ACTIVE_PANEL_MIN_WIDTH } from '../../hooks/useActivePanel';
 import * as exercisesApi from '../../api/exercises';
@@ -12,7 +12,7 @@ import type { Exercise, MasteryStatus } from '../../types';
 import type { SessionOutletContext } from './SessionLayout';
 
 // The /chat route's content — rendered inside SessionLayout's <Outlet />.
-// Shows the active track's conversation, or EmptyLanding if none is active.
+// Shows the active track's conversation, or MemorylessLanding if none is active.
 export function ChatView() {
   const { activeTrackId, activeTrack, setActiveTrackId, removeTrack, togglePin, openCreateTrackModal } =
     useOutletContext<SessionOutletContext>();
@@ -86,7 +86,7 @@ export function ChatView() {
   };
 
   if (!activeTrack) {
-    return <EmptyLanding onStartTrack={openCreateTrackModal} />;
+    return <MemorylessLanding onStartTrack={openCreateTrackModal} />;
   }
 
   return (

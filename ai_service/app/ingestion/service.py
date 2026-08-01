@@ -28,9 +28,12 @@ class IngestResult:
     chunks: list[IngestChunk] = field(default_factory=list)
 
 
-def ingest(data: bytes, filename: str, role: str) -> IngestResult:
+SIZE_GUARDRAIL_MESSAGE = "This document is too large for temporary memoryless use. Start a track to ingest it properly."
+
+
+def ingest(data: bytes, filename: str, role: str, max_chunks: int | None = None) -> IngestResult:
     """Runs the full ingestion pipeline: extract -> quality gate ->
-    (ephemeral stops here) -> chunk -> embed.
+    (ephemeral stops here) -> chunk -> chunk-count guardrail -> embed.
 
     Deliberately does NOT touch content_hash/dedup (Rust's job, run
     BEFORE this is ever called — see Duplicate Upload Prevention) or
@@ -67,6 +70,18 @@ def ingest(data: bytes, filename: str, role: str) -> IngestResult:
         return IngestResult(extracted_text=text, rejected=False, rejection_reason=None)
 
     chunk_texts = chunk_text(text)
+
+    # deferred.md #47: checked HERE, before embed_texts() runs. Chunking
+    # and embedding are two fully separate, sequential steps — the chunk
+    # count is already known at this point, before the expensive GPU
+    # call ever fires. This is what actually makes the guardrail run
+    # "BEFORE embedding starts," as PRD.md's SIZE GUARDRAIL requires: the
+    # original Rust-side-only check couldn't do this, since chunk_count
+    # wasn't knowable until AFTER ai_service had already embedded
+    # everything and returned.
+    if max_chunks is not None and len(chunk_texts) > max_chunks:
+        return IngestResult(extracted_text=text, rejected=True, rejection_reason=SIZE_GUARDRAIL_MESSAGE)
+
     embeddings = embed_texts(chunk_texts)
     chunks = [
         IngestChunk(text=t, token_count=_token_count(t), embedding=e)

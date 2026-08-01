@@ -630,19 +630,27 @@ pub struct IngestResponse {
 /// function's concern — that runs in Rust, BEFORE this is ever called
 /// (Duplicate Upload Prevention), so a caller only reaches this once a
 /// hash-match has already been ruled out.
+///
+/// max_chunks (deferred.md #47): ai_service checks this BEFORE running
+/// embed_texts(), not after — the whole point of the fix. The old
+/// design had Rust check chunk_count on the RETURNED result, by which
+/// point ai_service had already embedded everything; that check is
+/// gone now (uploads/handlers.rs), superseded by this.
 pub async fn ingest(
     client: &reqwest::Client,
     ai_service_url: &str,
     file_bytes: Vec<u8>,
     filename: &str,
     role: &str,
+    max_chunks: usize,
 ) -> Result<IngestResponse, AiClientError> {
     let url = format!("{ai_service_url}/ingest");
 
     let part = reqwest::multipart::Part::bytes(file_bytes).file_name(filename.to_string());
     let form = reqwest::multipart::Form::new()
         .part("file", part)
-        .text("role", role.to_string());
+        .text("role", role.to_string())
+        .text("max_chunks", max_chunks.to_string());
 
     let response = client
         .post(&url)

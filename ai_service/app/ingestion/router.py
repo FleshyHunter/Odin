@@ -20,13 +20,15 @@ class IngestResponse(BaseModel):
 
 
 @router.post("/ingest", response_model=IngestResponse)
-async def ingest_upload(file: UploadFile, role: str = Form(...)) -> IngestResponse:
+async def ingest_upload(
+    file: UploadFile, role: str = Form(...), max_chunks: int | None = Form(None)
+) -> IngestResponse:
     if role not in ("ephemeral", "prompt_upload", "material_upload"):
         raise HTTPException(status_code=422, detail=f"invalid role: {role}")
 
     data = await file.read()
     try:
-        result = ingest(data, file.filename or "upload", role)
+        result = ingest(data, file.filename or "upload", role, max_chunks=max_chunks)
     except Exception as e:
         raise HTTPException(status_code=422, detail=f"could not process upload: {e}") from e
 
