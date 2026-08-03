@@ -4,6 +4,7 @@ import { useAuth } from '../../../hooks/useAuth';
 import { Button } from '../../ui/Button/Button';
 import { AuthNotice } from '../AuthNotice';
 import '../form/authForm.css';
+import '../authWizard.css';
 
 interface EmailStepProps {
   email: string;
@@ -58,9 +59,14 @@ export function EmailStep({ email, onEmailChange, onContinue }: EmailStepProps) 
         {error && <AuthNotice message={error} />}
       </form>
 
-      <p className="switch-line">
-        <Link className="link" to="/signin">Use your password instead</Link>
-      </p>
+      <div className="auth-divider">
+        <span>OR</span>
+      </div>
+
+      <Link className="secondary-btn" to="/signin">
+        Continue with password
+      </Link>
+
       <p className="switch-line">
         Don't have an account? <Link className="link" to="/signup">Sign up</Link>
       </p>

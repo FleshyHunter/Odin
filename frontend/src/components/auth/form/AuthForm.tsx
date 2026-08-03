@@ -4,6 +4,7 @@ import { useAuth } from '../../../hooks/useAuth';
 import { Button } from '../../ui/Button/Button';
 import { AuthNotice } from '../AuthNotice';
 import './authForm.css';
+import '../authWizard.css';
 
 interface AuthFormProps {
   onAuthenticated?: () => void;
@@ -74,9 +75,14 @@ export function AuthForm({ onAuthenticated }: AuthFormProps) {
         {error && <AuthNotice message={error} />}
       </form>
 
-      <p className="switch-line">
-        <Link className="link" to="/signin/otp">Log in with a one-time code instead</Link>
-      </p>
+      <div className="auth-divider">
+        <span>OR</span>
+      </div>
+
+      <Link className="secondary-btn" to="/signin/otp">
+        Log in with a one-time code
+      </Link>
+
       <p className="switch-line">
         Don't have an account? <Link className="link" to="/signup">Sign up</Link>
       </p>

@@ -1,4 +1,5 @@
 import { useState, type FormEvent } from 'react';
+import { Link } from 'react-router-dom';
 import { useAuth } from '../../../hooks/useAuth';
 import { Button } from '../../ui/Button/Button';
 import { AuthNotice } from '../AuthNotice';
@@ -70,6 +71,14 @@ export function VerifyStep({ email, onAuthenticated }: VerifyStepProps) {
       <button type="button" className="resend-link" onClick={handleResend} disabled={isLoading}>
         Resend email
       </button>
+
+      <div className="auth-divider">
+        <span>OR</span>
+      </div>
+
+      <Link className="secondary-btn" to="/signin">
+        Continue with password
+      </Link>
     </div>
   );
 }
