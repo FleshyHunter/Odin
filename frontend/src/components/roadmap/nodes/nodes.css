@@ -34,12 +34,19 @@
   fill: var(--glow);
 }
 
+.roadmap-collapsed-node {
+  cursor: pointer;
+}
+.roadmap-collapsed-node:focus-visible {
+  outline: 2px solid var(--focus);
+  outline-offset: 2px;
+}
+
 .roadmap-collapsed-rect {
   fill: var(--surface);
   stroke: var(--text-muted);
   stroke-width: 1.3;
   stroke-dasharray: 4 3;
-  cursor: pointer;
 }
 
 .roadmap-collapsed-text {

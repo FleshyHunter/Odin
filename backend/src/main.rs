@@ -81,13 +81,13 @@ async fn main() {
     // Browser-only same-origin gate — separate from and unrelated to the
     // JWT/RLS auth layers below. allow_credentials(true) is required so
     // the browser will actually attach/accept the httpOnly refresh_token
-    // cookie cross-origin (5173 -> 8080 in local dev); that flag can't be
+    // cookie cross-origin (5174 -> 8080 in local dev); that flag can't be
     // paired with a wildcard origin (tower-http rejects it at runtime),
     // so this is one explicit origin, not Any.
     let cors_origin: HeaderValue = config
         .frontend_origin
         .parse()
-        .expect("FRONTEND_ORIGIN must be a valid header value (e.g. http://localhost:5173)");
+        .expect("FRONTEND_ORIGIN must be a valid header value (e.g. http://localhost:5174)");
     let cors = CorsLayer::new()
         .allow_origin(cors_origin)
         .allow_credentials(true)

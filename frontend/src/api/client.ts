@@ -69,7 +69,7 @@ export async function silentRefresh(): Promise<boolean> {
 
 // Shared real-fetch helper. credentials: 'include' carries the httpOnly
 // refresh_token cookie (Path=/auth/refresh, see backend/src/auth/
-// handlers.rs) across the cross-origin dev setup (5173 -> 8080), which
+// handlers.rs) across the cross-origin dev setup (5174 -> 8080), which
 // requires the backend's CORS layer to explicitly allow this origin
 // with credentials (backend/src/main.rs) — a plain fetch() without this
 // flag would just never receive/send that cookie at all.

@@ -21,4 +21,7 @@ services:
     build:
       context: ./frontend
     ports:
-      - "5173:80"
+      # 5174, matching vite.config.ts's pinned native-dev port — a
+      # separate local project ("veritas") already owns 5173, and this
+      # must match FRONTEND_ORIGIN (backend/.env) for CORS to work.
+      - "5174:80"

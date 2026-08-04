@@ -26,7 +26,18 @@ export const sampleRoadmap: RoadmapData = {
       isJunction: true,
       subtitle: '+ Vector spaces',
     },
-    { kind: 'collapsed', id: 'foundational-chain', lines: ['5 foundational', 'concepts'] },
+    {
+      kind: 'collapsed',
+      id: 'foundational-chain',
+      lines: ['5 foundational', 'concepts'],
+      concepts: [
+        { id: 'scalars', title: 'Scalars' },
+        { id: 'vector-addition', title: 'Vector addition' },
+        { id: 'dot-product', title: 'Dot product' },
+        { id: 'norms', title: 'Norms' },
+        { id: 'linear-combinations', title: 'Linear combinations' },
+      ],
+    },
     { kind: 'node', id: 'diagonalization', title: 'Diagonalization', status: 'pending' },
   ],
 };

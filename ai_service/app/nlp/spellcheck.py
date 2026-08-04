@@ -28,6 +28,18 @@ def _is_protected(token: Token, protected_spans: list[tuple[int, int]]) -> bool:
     return any(token.start >= start and token.end <= end for start, end in protected_spans)
 
 
+def _is_numeric(token: Token) -> bool:
+    # deferred.md #52: symspellpy's dictionary is English words only —
+    # a digit-only token like "7" has no real entry, but at
+    # MAX_EDIT_DISTANCE=2 a single-character substitution to a common
+    # short word ("a") is well within range, so lookup() "corrects" it
+    # instead of having no suggestion. tokenize()'s regex ([A-Za-z0-9']+)
+    # only ever produces a pure-digit token for genuinely numeric input
+    # (e.g. "3.14" splits into "3"/"14" since "." isn't in the class) —
+    # isdigit() alone is enough, no need to handle decimals/signs here.
+    return token.text.isdigit()
+
+
 def correct_spelling(text: str, protected_spans: list[tuple[int, int]]) -> str:
     """Step 3 — general English spelling correction, skipping any span
     Step 2 marked as protected domain vocabulary.
@@ -45,7 +57,7 @@ def correct_spelling(text: str, protected_spans: list[tuple[int, int]]) -> str:
     last_end = 0
     for token in tokens:
         pieces.append(text[last_end : token.start])
-        if _is_protected(token, protected_spans):
+        if _is_protected(token, protected_spans) or _is_numeric(token):
             pieces.append(token.text)
         else:
             suggestions = sym_spell.lookup(

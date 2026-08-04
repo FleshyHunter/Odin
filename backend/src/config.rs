@@ -28,7 +28,7 @@ pub struct Config {
     pub smtp_password: Option<String>,
     // The browser's own same-origin policy, not an auth/authorization
     // layer (JWT + RLS already cover that) — needed the moment the
-    // frontend makes real cross-origin requests (5173 -> 8080) with
+    // frontend makes real cross-origin requests (5174 -> 8080) with
     // credentials (the httpOnly refresh_token cookie). Deliberately one
     // explicit origin, not a wildcard: allow_credentials(true) can't be
     // combined with Any in tower-http anyway, and a real allow-list is
@@ -131,8 +131,15 @@ impl Config {
         // fix in .env.example addresses, but this handles the value
         // itself regardless of quoting).
         let smtp_password = env::var("SMTP_PASSWORD").ok().map(|p| p.replace(' ', ""));
+        // 5174, not Vite's own factory default of 5173 — a separate
+        // local project ("veritas") already owns 5173 on this machine,
+        // and frontend/vite.config.ts is pinned to 5174 for the same
+        // reason. Silently falling back to a port the frontend isn't
+        // actually running on breaks CORS for every credentialed
+        // request with no obvious error — this default must stay in
+        // sync with vite.config.ts's server.port.
         let frontend_origin =
-            env::var("FRONTEND_ORIGIN").unwrap_or_else(|_| "http://localhost:5173".to_string());
+            env::var("FRONTEND_ORIGIN").unwrap_or_else(|_| "http://localhost:5174".to_string());
         let cookie_secure = env::var("COOKIE_SECURE")
             .ok()
             .map(|v| v == "true")
