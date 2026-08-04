@@ -61,8 +61,17 @@ pub async fn send_message(
 
     let sse_stream = async_stream::stream! {
         yield Ok(Event::default().event("thread").data(thread_id.to_string()));
-        while let Some(delta) = rx.recv().await {
-            yield Ok(Event::default().event("delta").data(delta));
+        while let Some(event) = rx.recv().await {
+            // deferred.md #53: a real, distinguishable "error" event —
+            // previously a mid-generation failure just ended the stream
+            // with zero deltas, indistinguishable from an empty-but-
+            // successful reply. `done` still follows unconditionally
+            // either way, same as before — it marks "stream over," not
+            // "stream succeeded."
+            match event {
+                turn::TurnEvent::Delta(text) => yield Ok(Event::default().event("delta").data(text)),
+                turn::TurnEvent::Error(reason) => yield Ok(Event::default().event("error").data(reason)),
+            }
         }
         yield Ok(Event::default().event("done").data("ok"));
     };

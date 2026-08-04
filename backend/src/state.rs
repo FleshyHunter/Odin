@@ -48,6 +48,8 @@ pub struct AppState {
     // generate_exercise_template()'s race-prevention lock TTL — see
     // exercises/service.rs.
     pub template_gen_lock_ttl_seconds: u64,
+    // deferred.md #19: shared threshold with ai_service's RETRIEVAL_MIN_SCORE.
+    pub retrieval_min_score: f32,
 }
 
 impl AppState {
@@ -75,6 +77,7 @@ impl AppState {
             memoryless_staged_upload_max_mb: config.memoryless_staged_upload_max_mb,
             memoryless_staged_upload_max_chunks: config.memoryless_staged_upload_max_chunks,
             template_gen_lock_ttl_seconds: config.template_gen_lock_ttl_seconds,
+            retrieval_min_score: config.retrieval_min_score,
         }
     }
 

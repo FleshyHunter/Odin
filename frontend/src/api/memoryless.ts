@@ -107,6 +107,13 @@ export async function streamMessage(
 
         if (eventName === 'thread') handlers.onThreadId(data);
         else if (eventName === 'delta') handlers.onDelta(data);
+        // deferred.md #53: a real backend-signaled failure, distinct
+        // from "delta" — previously a mid-generation failure was
+        // invisible here, indistinguishable from an empty-but-
+        // successful stream. Reuses the same onError callback as a
+        // transport-level failure below; useMemorylessChat decides how
+        // to treat it based on whether any delta already arrived.
+        else if (eventName === 'error') handlers.onError(data);
         // "done" carries no payload this caller needs — the read loop's
         // own `done` (stream end) is what actually signals completion.
 

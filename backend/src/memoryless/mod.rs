@@ -4,10 +4,8 @@
 
 pub mod errors;
 mod handlers;
-// Exercised only by its own unit tests for now (Block 11 spec point 6)
-// — no staged-upload embedding pipeline exists yet to call it for real,
-// same as ai_client's own not-yet-wired functions (see main.rs).
-#[allow(dead_code)]
+// deferred.md #19: wired into turn.rs's staged-upload retrieval —
+// no longer unwired/dead code.
 mod similarity;
 // pub: uploads:: (Block 12) shares StagedThread/StagedUpload and
 // load_owned/save with memoryless::handlers — a staged upload lives

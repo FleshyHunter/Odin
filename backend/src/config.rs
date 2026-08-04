@@ -73,6 +73,12 @@ pub struct Config {
     // value PRD.md already locks (120s), now a real env var instead of
     // a compiled-in Rust constant.
     pub template_gen_lock_ttl_seconds: u64,
+    // deferred.md #19: shared with ai_service's own RETRIEVAL_MIN_SCORE
+    // (knowledge/service.py) — same locked concept, same threshold, per
+    // PRD.md's "results from both are merged and ranked together"
+    // (ChromaDB + this session's own staged-upload chunks). Genuinely
+    // cross-language, not a duplicate invention.
+    pub retrieval_min_score: f32,
 }
 
 impl Config {
@@ -165,6 +171,10 @@ impl Config {
             .ok()
             .and_then(|v| v.parse().ok())
             .unwrap_or(120);
+        let retrieval_min_score = env::var("RETRIEVAL_MIN_SCORE")
+            .ok()
+            .and_then(|v| v.parse().ok())
+            .unwrap_or(0.60);
 
         Self {
             database_url,
@@ -187,6 +197,7 @@ impl Config {
             memoryless_staged_upload_max_mb,
             memoryless_staged_upload_max_chunks,
             template_gen_lock_ttl_seconds,
+            retrieval_min_score,
         }
     }
 }

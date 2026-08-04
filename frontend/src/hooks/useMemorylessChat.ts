@@ -50,23 +50,33 @@ export function useMemorylessChat() {
           },
           onError: (message) => {
             sawError = true;
-            // No partial tutor bubble left behind for a turn that never
-            // really produced anything — matches the empty-field/failed-
-            // send handling already used across the auth forms.
-            setMessages((prev) => prev.filter((m) => m.id !== tutorMessageId));
+            // deferred.md #53: this now fires for two real, different
+            // cases — a transport-level failure (never any delta) and a
+            // genuine backend-signaled `event: error` that can arrive
+            // AFTER real content already streamed (e.g. a mid-generation
+            // stall). Only strip the bubble in the first case; partial
+            // text that already rendered is kept as the tutor's real
+            // (partial) reply, matching the same "keep partial text"
+            // philosophy already used for a user-initiated cancel
+            // (turn.rs's own comment) — a server-side failure still
+            // deserves a real signal, just not silently discarding
+            // output that was already shown to be correct so far.
+            if (!receivedDelta) {
+              setMessages((prev) => prev.filter((m) => m.id !== tutorMessageId));
+            }
             setComposerNotice({ tone: 'error', message, actionLabel: 'Retry', onAction: () => send(text) });
           },
         },
         controller.signal,
       );
 
-      // A turn that ai_service fails mid-generation on (confirmed live:
-      // qwen's model server failing to start) doesn't surface as an SSE
-      // error event at all — the backend's stream just ends with zero
-      // deltas and a bare "done" (the failure reason only ever reaches
-      // the Postgres-bound audit event, per memoryless/turn.rs). Without
-      // this check, that leaves a permanently empty tutor bubble with no
-      // indication anything went wrong.
+      // Defensive backstop only, should rarely fire now: the backend
+      // itself emits a real `event: error` for a mid-generation failure
+      // as of deferred.md #53 (previously it didn't — the stream just
+      // ended with zero deltas and a bare "done," indistinguishable from
+      // an empty-but-successful reply, which is what this check was
+      // originally built to catch). Kept in case some future failure
+      // mode still ends the stream silently without an explicit error.
       if (!receivedDelta && !sawError && !controller.signal.aborted) {
         setMessages((prev) => prev.filter((m) => m.id !== tutorMessageId));
         setComposerNotice({

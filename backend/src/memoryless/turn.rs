@@ -2,10 +2,12 @@
 // (Block 8) -> STREAM a generate() reply (Blocks 5/6, Block 11 follow-up
 // — see markdown/deferred.md #20) -> append both message sides plus one
 // audit event to the staged thread once the stream ends. Deliberately
-// BARE, per the negotiated Block 11 scope: no ChromaDB retrieval, no
-// mastery_bank reads/writes, no prerequisite checks, no completion-check
-// logic — memoryless mode has no journey/subject to scope any of that
-// against yet.
+// BARE against the permanent knowledge base and journey state, per the
+// negotiated Block 11 scope: no ChromaDB retrieval (deferred.md #18,
+// still unwired), no mastery_bank reads/writes, no prerequisite checks,
+// no completion-check logic — memoryless mode has no journey/subject to
+// scope any of that against yet. NOT bare against THIS thread's own
+// staged uploads, though (deferred.md #19) — see retrieve_staged_context.
 //
 // Streaming architecture: the returned mpsc::Receiver feeds the HTTP
 // SSE response (handlers.rs); the actual generation + persistence runs
@@ -28,14 +30,69 @@ use futures_util::StreamExt;
 use tokio::sync::mpsc;
 
 use super::errors::MemorylessError;
-use super::staging::{self, StagedAuditEvent, StagedMessage, StagedThread};
-use crate::ai_client;
+use super::similarity::rank_by_similarity;
+use super::staging::{self, StagedAuditEvent, StagedMessage, StagedThread, StagedUpload};
+use crate::ai_client::{self, AiClientError};
 use crate::state::AppState;
 
 // Matches ai_service/app/generation/service.py's MODEL_NAME literal.
 // /generate's response carries no model field of its own to read this
 // back from, so it's recorded here rather than invented as a guess.
 const MODEL_USED: &str = "qwen3.5:9b";
+
+// deferred.md #53: the SSE stream (handlers.rs) previously only ever
+// carried plain text deltas — a turn that failed mid-generation just
+// ended the stream with zero deltas, byte-identical to an empty-but-
+// successful reply. This carries the same `cutoff_reason` this module
+// already computes (previously only ever written to the staged audit
+// event) out to the client as a real, distinguishable event.
+pub enum TurnEvent {
+    Delta(String),
+    Error(String),
+}
+
+// deferred.md #19: memoryless/similarity.rs's cosine-similarity scan,
+// built and unit-tested well ahead of this, its first real caller.
+// Scoped deliberately to JUST this thread's own staged-upload chunks
+// (PRD.md, Staged Upload Retrieval's second of two searches) — the
+// other half (a normal query against the permanent global ChromaDB) is
+// a separate, still-unwired piece of work (deferred.md #18), since
+// nothing today calls ChromaDB from a real chat turn at all. Fails
+// open on any embedding-service error: this is a retrieval
+// ENHANCEMENT, not core functionality, and the existing bare-query
+// behavior without it is already the accepted baseline (deferred.md #18).
+async fn retrieve_staged_context(
+    state: &AppState,
+    query: &str,
+    staged_uploads: &[StagedUpload],
+) -> Result<Option<String>, AiClientError> {
+    let candidates: Vec<(String, Vec<f32>)> = staged_uploads
+        .iter()
+        .flat_map(|upload| upload.chunks.iter())
+        .map(|chunk| (chunk.text.clone(), chunk.embedding.clone()))
+        .collect();
+
+    if candidates.is_empty() {
+        return Ok(None);
+    }
+
+    let query_embedding = ai_client::embed(&state.http_client, &state.ai_service_url, vec![query.to_string()])
+        .await?
+        .into_iter()
+        .next()
+        .ok_or_else(|| AiClientError::UnexpectedResponse("embed() returned no vectors for the query".to_string()))?;
+
+    let relevant: Vec<&str> = rank_by_similarity(&query_embedding, &candidates)
+        .into_iter()
+        .filter(|(_, score)| *score >= state.retrieval_min_score)
+        .map(|(text, _)| text.as_str())
+        .collect();
+
+    if relevant.is_empty() {
+        return Ok(None);
+    }
+    Ok(Some(relevant.join("\n\n")))
+}
 
 // No longer a whole-request bound (streaming can legitimately run much
 // longer in total, as long as output keeps arriving) — this is now a
@@ -56,7 +113,7 @@ pub async fn start_turn_stream(
     thread: StagedThread,
     raw_input: String,
     think: bool,
-) -> Result<mpsc::Receiver<String>, MemorylessError> {
+) -> Result<mpsc::Receiver<TurnEvent>, MemorylessError> {
     // known_terms empty, current_concept_id None: no journey/subject
     // exists in memoryless mode to scope either against (ai_client::
     // analyze_input's own doc comment — this is exactly its "no journey
@@ -70,18 +127,35 @@ pub async fn start_turn_stream(
     )
     .await?;
 
-    // BARE call — no retrieval/"use only provided material" framing,
-    // since no foundation exists yet to retrieve FROM (flagged and
-    // agreed as a real consequence of Block 11's scope).
-    let chunks = ai_client::generate_stream(
-        &state.http_client,
-        &state.ai_service_url,
-        analysis.cleaned_query.clone(),
-        think,
-    )
-    .await?;
+    // deferred.md #19: staged-upload retrieval — see
+    // retrieve_staged_context's own doc comment. Still BARE against the
+    // permanent global knowledge base (deferred.md #18, unchanged) —
+    // this only ever looks at chunks staged on THIS thread.
+    let retrieved_context = if thread.staged_uploads.iter().any(|upload| !upload.chunks.is_empty()) {
+        match retrieve_staged_context(state, &analysis.cleaned_query, &thread.staged_uploads).await {
+            Ok(context) => context,
+            Err(err) => {
+                tracing::warn!(?err, thread_id = %thread.thread_id, "staged-upload retrieval failed, continuing without it");
+                None
+            }
+        }
+    } else {
+        None
+    };
 
-    let (tx, rx) = mpsc::channel::<String>(16);
+    let prompt = match &retrieved_context {
+        Some(context) => format!(
+            "The student uploaded a document earlier in this conversation. Here is material from it \
+             that may be relevant — use it if it helps, but you don't have to:\n{context}\n\n\
+             Student's question: {}",
+            analysis.cleaned_query
+        ),
+        None => analysis.cleaned_query.clone(),
+    };
+
+    let chunks = ai_client::generate_stream(&state.http_client, &state.ai_service_url, prompt, think).await?;
+
+    let (tx, rx) = mpsc::channel::<TurnEvent>(16);
     let state = state.clone();
     let cleaned_query = analysis.cleaned_query;
     let matched_concepts = analysis.matched_concepts;
@@ -114,21 +188,30 @@ pub async fn start_turn_stream(
                         // pause). Stop pulling further chunks
                         // immediately, but keep running past this point
                         // to still persist whatever was generated so far.
-                        if tx.send(delta).await.is_err() {
+                        if tx.send(TurnEvent::Delta(delta)).await.is_err() {
                             cutoff_reason = Some("cancelled by user".to_string());
                             break;
                         }
                     }
                     Ok(Some(Err(err))) => {
-                        cutoff_reason = Some(format!("ai service error mid-stream: {err}"));
+                        let reason = format!("ai service error mid-stream: {err}");
+                        // deferred.md #53: best-effort — if the receiver
+                        // is already gone (client disconnected right as
+                        // this fired), there's nothing left to tell; the
+                        // reason still lands in the staged audit event
+                        // below regardless.
+                        let _ = tx.send(TurnEvent::Error(reason.clone())).await;
+                        cutoff_reason = Some(reason);
                         break;
                     }
                     Ok(None) => break, // stream ended normally — full response received
                     Err(_) => {
-                        cutoff_reason = Some(format!(
+                        let reason = format!(
                             "generation stalled — no output for {}s",
                             CHUNK_INACTIVITY_TIMEOUT.as_secs()
-                        ));
+                        );
+                        let _ = tx.send(TurnEvent::Error(reason.clone())).await;
+                        cutoff_reason = Some(reason);
                         break;
                     }
                 }
