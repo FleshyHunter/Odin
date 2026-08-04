@@ -146,10 +146,13 @@ impl Config {
             .unwrap_or(false);
         let ai_service_url = env::var("AI_SERVICE_URL").expect("AI_SERVICE_URL must be set");
 
+        // deferred.md #55: lowered from 60 (2026-08-06) — a deliberate
+        // value decision, not a bug fix; the sliding anchor point and
+        // expiry-race handling were both already correct before this.
         let memoryless_thread_ttl_minutes = env::var("MEMORYLESS_THREAD_TTL_MINUTES")
             .ok()
             .and_then(|v| v.parse().ok())
-            .unwrap_or(60);
+            .unwrap_or(15);
         let memoryless_staged_upload_max_mb = env::var("MEMORYLESS_STAGED_UPLOAD_MAX_MB")
             .ok()
             .and_then(|v| v.parse().ok())
