@@ -17,7 +17,7 @@ export function Tracks() {
 
   const handleOpenTrack = (trackId: string) => {
     setActiveTrackId(trackId);
-    navigate('/chat');
+    navigate(`/chat/${trackId}`);
   };
 
   const filtered = tracks.filter((track) => track.title.toLowerCase().includes(search.trim().toLowerCase()));

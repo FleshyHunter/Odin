@@ -7,6 +7,7 @@ import { OtpLogin } from './pages/OtpLogin/OtpLogin';
 import { SessionLayout } from './pages/Session/SessionLayout';
 import { ChatView } from './pages/Session/ChatView';
 import { Projects } from './pages/Projects/Projects';
+import { ProjectDetail } from './pages/ProjectDetail/ProjectDetail';
 import { Tracks } from './pages/Tracks/Tracks';
 import { useAuth } from './hooks/useAuth';
 
@@ -90,7 +91,9 @@ function App() {
         }
       >
         <Route path="/chat" element={<ChatView />} />
+        <Route path="/chat/:id" element={<ChatView />} />
         <Route path="/projects" element={<Projects />} />
+        <Route path="/projects/:id" element={<ProjectDetail />} />
         <Route path="/tracks" element={<Tracks />} />
       </Route>
       <Route path="*" element={<Navigate to="/chat" replace />} />

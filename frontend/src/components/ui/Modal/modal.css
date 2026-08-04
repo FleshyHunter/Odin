@@ -132,6 +132,46 @@
   font-size: 0.8rem;
 }
 
+.modal-option-list {
+  display: flex;
+  flex-direction: column;
+  gap: 0.4rem;
+}
+
+.modal-option {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  width: 100%;
+  color: var(--text);
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 0.72rem 0.9rem;
+  font-size: 0.9rem;
+  text-align: left;
+  transition: border-color 0.15s ease, background 0.15s ease;
+}
+
+.modal-option:hover:not(:disabled) {
+  border-color: var(--border-strong);
+  background: var(--bg-pane);
+}
+
+.modal-option:focus-visible {
+  outline: 2px solid var(--focus);
+  outline-offset: 2px;
+}
+
+.modal-option[aria-pressed='true'] {
+  border-color: var(--glow);
+}
+
+.modal-option-current {
+  color: var(--text-muted);
+  font-size: 0.75rem;
+}
+
 .modal-actions {
   display: flex;
   justify-content: flex-end;

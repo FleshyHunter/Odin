@@ -102,6 +102,39 @@ async fn retrieve_staged_context(
 // http_client-level timeout, repurposed rather than invented fresh.
 const CHUNK_INACTIVITY_TIMEOUT: Duration = Duration::from_secs(120);
 
+// deferred.md #54: previously every turn was generated as if it were
+// the first — thread.messages was loaded from Redis but never read
+// before calling generate_stream(). 10 messages (5 turn-pairs), plain
+// FIFO eviction (oldest dropped first) — both explicitly decided in the
+// entry's own planning discussion, sized against OLLAMA_NUM_CTX=8192
+// being a hard, shared budget covering system + history + the current
+// message + the full generated output (including "thinking" tokens);
+// this exact app has already hit silent truncation once before from
+// exceeding that budget (see ai_service's own OLLAMA_NUM_CTX comment).
+// A plain const, not an env-configurable threshold, matching
+// CHUNK_INACTIVITY_TIMEOUT just above — this value came from arithmetic
+// against a fixed model/context budget, not an operational knob.
+const HISTORY_WINDOW_MESSAGES: usize = 10;
+
+// Builds the capped, role-mapped history generate_stream() sends ahead
+// of the current turn's prompt. Only ever reads thread.messages as it
+// stood BEFORE this turn's own messages are appended (see the bottom of
+// start_turn_stream, well after this is called) — so the current
+// student message never ends up duplicated in both history and prompt.
+fn build_history(messages: &[StagedMessage]) -> Vec<ai_client::HistoryMessage> {
+    let start = messages.len().saturating_sub(HISTORY_WINDOW_MESSAGES);
+    messages[start..]
+        .iter()
+        .map(|message| ai_client::HistoryMessage {
+            // StagedMessage.role matches the messages table's own
+            // "user"/"tutor" CHECK constraint — Ollama's /api/chat wants
+            // "assistant" instead of "tutor"; "user" already matches.
+            role: if message.role == "tutor" { "assistant".to_string() } else { message.role.clone() },
+            content: message.content.clone(),
+        })
+        .collect()
+}
+
 /// Starts a streaming chat turn. Runs analyze_input and opens the
 /// generate() stream synchronously (so an unreachable ai_service still
 /// surfaces as a normal, immediate error to the caller — see
@@ -153,7 +186,9 @@ pub async fn start_turn_stream(
         None => analysis.cleaned_query.clone(),
     };
 
-    let chunks = ai_client::generate_stream(&state.http_client, &state.ai_service_url, prompt, think).await?;
+    let history = build_history(&thread.messages);
+    let chunks =
+        ai_client::generate_stream(&state.http_client, &state.ai_service_url, prompt, think, history).await?;
 
     let (tx, rx) = mpsc::channel::<TurnEvent>(16);
     let state = state.clone();

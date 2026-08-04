@@ -1,9 +1,38 @@
-import { API_BASE_URL, getAccessToken, silentRefresh } from './client';
+import { apiFetch, API_BASE_URL, getAccessToken, silentRefresh } from './client';
+import type { ChatMessage } from '../types';
 
 export interface MemorylessStreamHandlers {
   onThreadId: (threadId: string) => void;
   onDelta: (text: string) => void;
   onError: (message: string) => void;
+}
+
+// Matches backend/src/memoryless/staging.rs's StagedMessage — only the
+// fields deferred.md #43's hydration path actually needs are declared.
+interface StagedMessage {
+  role: 'user' | 'tutor';
+  content: string;
+  timestamp: string;
+}
+interface StagedThreadResponse {
+  thread_id: string;
+  messages: StagedMessage[];
+}
+
+// GET /memoryless/threads/:id (backend/src/memoryless/handlers.rs::get_thread)
+// — deferred.md #43: lets a direct /chat/:id visit for a real memoryless
+// thread restore its message history, rather than only ever updating the
+// URL with nothing behind it on reload. "user" maps to ChatMessage's
+// 'student' role (StagedMessage's role string matches the messages
+// table's own CHECK constraint, not this frontend's naming).
+export async function getThread(threadId: string): Promise<ChatMessage[]> {
+  const thread = await apiFetch<StagedThreadResponse>(`/memoryless/threads/${threadId}`);
+  return thread.messages.map((message, index) => ({
+    id: `staged-${threadId}-${index}`,
+    role: message.role === 'user' ? 'student' : 'tutor',
+    text: message.content,
+    timestamp: message.timestamp,
+  }));
 }
 
 interface SendMessageParams {

@@ -4,6 +4,14 @@ import { useMemorylessChat } from '../../hooks/useMemorylessChat';
 
 interface MemorylessLandingProps {
   onStartTrack: () => void;
+  // deferred.md #43: a /chat/:id URL that isn't a known mock track is
+  // treated as a real memoryless thread id — this seeds the hook so it
+  // fetches that thread's real history instead of starting blank.
+  threadId?: string | null;
+  // Fires exactly once, only when a BRAND NEW thread (started from a
+  // bare /chat, threadId prop null) gets its first real id back from
+  // the backend — lets the caller push /chat/:id via router history.
+  onThreadCreated?: (threadId: string) => void;
 }
 
 // The /chat route's no-active-track state (deferred.md #51). Renders the
@@ -12,8 +20,13 @@ interface MemorylessLandingProps {
 // POST /memoryless/messages (no track, no journey — same bare-turn scope
 // as the rest of Block 11/12; TrackHeader/ActivePanel are track-specific
 // and don't apply here).
-export function MemorylessLanding({ onStartTrack }: MemorylessLandingProps) {
-  const { messages, isSending, send, cancel, composerNotice, dismissComposerNotice } = useMemorylessChat();
+export function MemorylessLanding({ onStartTrack, threadId = null, onThreadCreated }: MemorylessLandingProps) {
+  const { messages, isSending, isHydrating, send, cancel, composerNotice, dismissComposerNotice } =
+    useMemorylessChat(threadId, onThreadCreated);
+
+  if (isHydrating) {
+    return <main className="conversation" />;
+  }
 
   if (messages.length === 0) {
     return (

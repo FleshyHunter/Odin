@@ -2,7 +2,9 @@ import { useState } from 'react';
 import { Outlet, useLocation, useNavigate } from 'react-router-dom';
 import { Sidebar, type SidebarSection } from '../../components/sidebar/Sidebar/Sidebar';
 import { useTracks } from '../../hooks/useTracks';
+import { useProjects } from '../../hooks/useProjects';
 import { TrackModal } from '../../components/tracks/TrackModal/TrackModal';
+import { ChangeProjectModal } from '../../components/tracks/ChangeProjectModal/ChangeProjectModal';
 import type { Track } from '../../types';
 import './Session.css';
 
@@ -20,7 +22,10 @@ export interface SessionOutletContext {
   createTrack: (title: string) => Promise<Track>;
   removeTrack: (id: string) => Promise<void>;
   togglePin: (id: string) => Promise<void>;
+  renameTrack: (id: string, title: string) => Promise<void>;
+  setTrackProject: (id: string, projectId: string | null) => Promise<void>;
   openCreateTrackModal: () => void;
+  openChangeProjectModal: (trackId: string) => void;
 }
 
 // Layout route for /chat, /projects and /tracks (see App.tsx) — mirrors
@@ -34,10 +39,12 @@ export interface SessionOutletContext {
 // not local state — except "Pinned", which still has no route/content of
 // its own (out of scope so far), so it stays a harmless local-only toggle.
 export function SessionLayout({ profileName, email, onSignOut }: SessionLayoutProps) {
-  const { tracks, removeTrack, createTrack, togglePin } = useTracks();
+  const { tracks, removeTrack, createTrack, togglePin, renameTrack, setTrackProject } = useTracks();
+  const { projects } = useProjects();
   const [activeTrackId, setActiveTrackId] = useState('');
   const [pinnedActive, setPinnedActive] = useState(false);
   const [isTrackModalOpen, setIsTrackModalOpen] = useState(false);
+  const [changeProjectTrackId, setChangeProjectTrackId] = useState<string | null>(null);
   const location = useLocation();
   const navigate = useNavigate();
 
@@ -58,7 +65,7 @@ export function SessionLayout({ profileName, email, onSignOut }: SessionLayoutPr
 
   const handleSelectTrack = (trackId: string) => {
     setPinnedActive(false);
-    navigate('/chat');
+    navigate(`/chat/${trackId}`);
     setActiveTrackId(trackId);
   };
 
@@ -69,11 +76,13 @@ export function SessionLayout({ profileName, email, onSignOut }: SessionLayoutPr
   };
 
   const openCreateTrackModal = () => setIsTrackModalOpen(true);
+  const openChangeProjectModal = (trackId: string) => setChangeProjectTrackId(trackId);
+  const changeProjectTrack = tracks.find((track) => track.id === changeProjectTrackId) ?? null;
 
   const handleCreateTrack = async (title: string) => {
     const track = await createTrack(title);
     setPinnedActive(false);
-    navigate('/chat');
+    navigate(`/chat/${track.id}`);
     setActiveTrackId(track.id);
   };
 
@@ -110,7 +119,10 @@ export function SessionLayout({ profileName, email, onSignOut }: SessionLayoutPr
               createTrack,
               removeTrack,
               togglePin,
+              renameTrack,
+              setTrackProject,
               openCreateTrackModal,
+              openChangeProjectModal,
             } satisfies SessionOutletContext
           }
         />
@@ -120,6 +132,14 @@ export function SessionLayout({ profileName, email, onSignOut }: SessionLayoutPr
         open={isTrackModalOpen}
         onClose={() => setIsTrackModalOpen(false)}
         onCreate={handleCreateTrack}
+      />
+
+      <ChangeProjectModal
+        open={changeProjectTrackId !== null}
+        onClose={() => setChangeProjectTrackId(null)}
+        projects={projects}
+        currentProjectId={changeProjectTrack?.projectId ?? null}
+        onSelect={(projectId) => setTrackProject(changeProjectTrackId as string, projectId)}
       />
     </div>
   );

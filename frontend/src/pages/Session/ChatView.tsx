@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
-import { useOutletContext } from 'react-router-dom';
+import { useNavigate, useOutletContext, useParams } from 'react-router-dom';
 import { TrackHeader } from '../../components/conversation/TrackBar/TrackHeader';
 import { MessageList } from '../../components/conversation/Messages/MessageList';
 import { Composer } from '../../components/conversation/Composer/Composer';
@@ -14,14 +14,39 @@ import type { SessionOutletContext } from './SessionLayout';
 // The /chat route's content — rendered inside SessionLayout's <Outlet />.
 // Shows the active track's conversation, or MemorylessLanding if none is active.
 export function ChatView() {
-  const { activeTrackId, activeTrack, setActiveTrackId, removeTrack, togglePin, openCreateTrackModal } =
-    useOutletContext<SessionOutletContext>();
+  const {
+    activeTrackId,
+    activeTrack,
+    setActiveTrackId,
+    removeTrack,
+    togglePin,
+    renameTrack,
+    setTrackProject,
+    openCreateTrackModal,
+    openChangeProjectModal,
+  } = useOutletContext<SessionOutletContext>();
+  const { id: routeId } = useParams<{ id?: string }>();
+  const navigate = useNavigate();
   const { messages, isSending, send, composerNotice, dismissComposerNotice } = useTrackMessages(activeTrackId);
   const { width: panelWidth, setWidth: setPanelWidth, isOpen: isPanelOpen, toggle: togglePanel } = useActivePanel();
   const resizeHandleRef = useRef<HTMLDivElement>(null);
 
   const [exercise, setExercise] = useState<Exercise | null>(null);
   const [mastery, setMastery] = useState<MasteryStatus | null>(null);
+
+  // deferred.md #43: /chat/:id is the one real URL for either a mock
+  // track or a real memoryless thread — whichever this id turns out to
+  // be. Syncing it into the same activeTrackId state Sidebar/TrackMenu
+  // already use means a track match "just works" (tracks.find below
+  // resolves it); an id that matches no track correctly leaves
+  // activeTrack null, which is exactly what routes to MemorylessLanding.
+  useEffect(() => {
+    setActiveTrackId(routeId ?? '');
+  }, [routeId, setActiveTrackId]);
+
+  const handleThreadCreated = (threadId: string) => {
+    navigate(`/chat/${threadId}`, { replace: true });
+  };
 
   useEffect(() => {
     if (!activeTrackId) return;
@@ -52,6 +77,22 @@ export function ChatView() {
   const handlePin = () => {
     if (!activeTrackId) return;
     togglePin(activeTrackId);
+  };
+
+  const handleRename = () => {
+    if (!activeTrackId || !activeTrack) return;
+    const title = window.prompt('Rename track', activeTrack.title);
+    if (title && title.trim()) renameTrack(activeTrackId, title.trim());
+  };
+
+  const handleChangeProject = () => {
+    if (!activeTrackId) return;
+    openChangeProjectModal(activeTrackId);
+  };
+
+  const handleRemoveFromProject = () => {
+    if (!activeTrackId) return;
+    setTrackProject(activeTrackId, null);
   };
 
   // Drag-resize: both .conversation and .active-panel have their own
@@ -86,7 +127,18 @@ export function ChatView() {
   };
 
   if (!activeTrack) {
-    return <MemorylessLanding onStartTrack={openCreateTrackModal} />;
+    // routeId itself (not activeTrackId) is the real signal here: once a
+    // brand new thread's id is learned and the URL updates to /chat/:id,
+    // routeId briefly lags activeTrackId's own state update by a render
+    // (see handleThreadCreated) — passing routeId keeps this prop in
+    // exact lockstep with what's actually in the address bar.
+    return (
+      <MemorylessLanding
+        onStartTrack={openCreateTrackModal}
+        threadId={routeId ?? null}
+        onThreadCreated={handleThreadCreated}
+      />
+    );
   }
 
   return (
@@ -97,6 +149,9 @@ export function ChatView() {
           conceptTitle={activeTrack.currentConceptTitle}
           isPinned={activeTrack.pinned}
           onPin={handlePin}
+          onRename={handleRename}
+          onChangeProject={handleChangeProject}
+          onRemoveFromProject={handleRemoveFromProject}
           onDelete={handleDeleteTrack}
           isPanelOpen={isPanelOpen}
           onTogglePanel={togglePanel}

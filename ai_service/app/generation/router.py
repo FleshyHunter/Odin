@@ -27,9 +27,22 @@ _ENGLISH_ONLY_SYSTEM_PROMPT = (
 )
 
 
+class HistoryMessage(BaseModel):
+    # "user" | "assistant" — Ollama /api/chat's own role names, already
+    # mapped by the caller (backend/src/memoryless/turn.rs) from the
+    # messages table's "user"/"tutor" role strings. deferred.md #54.
+    role: str
+    content: str
+
+
 class GenerateRequest(BaseModel):
     prompt: str
     think: bool = True
+    # Only /generate/stream's handler below actually reads this — kept
+    # on the one shared request model rather than forked into a second
+    # one, matching how prompt/think are already shared between both
+    # routes even though /generate (blocking) has never needed history.
+    history: list[HistoryMessage] = []
 
 
 class GenerateResponse(BaseModel):
@@ -54,9 +67,12 @@ def generate(request: GenerateRequest) -> GenerateResponse:
 # the HTTP status is already 200 by the time any of this is streaming,
 # so a status code can't carry a mid-stream failure; this is the only
 # way to signal one to the caller.
-def _stream_lines(prompt: str, think: bool):
+def _stream_lines(prompt: str, think: bool, history: list[HistoryMessage]):
+    history_dicts = [{"role": message.role, "content": message.content} for message in history]
     try:
-        for delta in generate_text_stream(prompt, think, system=_ENGLISH_ONLY_SYSTEM_PROMPT):
+        for delta in generate_text_stream(
+            prompt, think, system=_ENGLISH_ONLY_SYSTEM_PROMPT, history=history_dicts
+        ):
             yield json.dumps({"delta": delta}) + "\n"
     except Exception as exc:  # noqa: BLE001 - deliberately broad: whatever
         # Ollama/the client raises here must still reach the caller as a
@@ -67,6 +83,6 @@ def _stream_lines(prompt: str, think: bool):
 @router.post("/generate/stream")
 def generate_stream(request: GenerateRequest) -> StreamingResponse:
     return StreamingResponse(
-        _stream_lines(request.prompt, request.think),
+        _stream_lines(request.prompt, request.think, request.history),
         media_type="application/x-ndjson",
     )

@@ -39,10 +39,16 @@ def get_client() -> Client:
     return Client(host=OLLAMA_HOST)
 
 
-def _build_messages(prompt: str, system: str | None) -> list[dict[str, str]]:
+def _build_messages(
+    prompt: str, system: str | None, history: list[dict[str, str]] | None = None
+) -> list[dict[str, str]]:
+    messages: list[dict[str, str]] = []
     if system:
-        return [{"role": "system", "content": system}, {"role": "user", "content": prompt}]
-    return [{"role": "user", "content": prompt}]
+        messages.append({"role": "system", "content": system})
+    if history:
+        messages.extend(history)
+    messages.append({"role": "user", "content": prompt})
+    return messages
 
 
 def generate_text(prompt: str, think: bool = True, system: str | None = None) -> str:
@@ -85,12 +91,17 @@ def generate_text(prompt: str, think: bool = True, system: str | None = None) ->
 # call, just with `content` holding an incremental delta rather than
 # the full text. The empty-content guard skips ollama's own boundary
 # chunks (e.g. the final done=True chunk often carries no new text).
-def generate_text_stream(prompt: str, think: bool = True, system: str | None = None) -> Iterator[str]:
+def generate_text_stream(
+    prompt: str,
+    think: bool = True,
+    system: str | None = None,
+    history: list[dict[str, str]] | None = None,
+) -> Iterator[str]:
     with track_generation():
         client = get_client()
         stream = client.chat(
             model=MODEL_NAME,
-            messages=_build_messages(prompt, system),
+            messages=_build_messages(prompt, system, history),
             think=think,
             options={"num_ctx": OLLAMA_NUM_CTX},
             stream=True,

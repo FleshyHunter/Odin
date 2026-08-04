@@ -50,7 +50,19 @@ export function useTracks() {
     setTracks((prev) => prev.map((t) => (t.id === trackId ? updated : t)));
   }, []);
 
-  return { tracks, isLoading, removeTrack, createTrack, togglePin };
+  const renameTrack = useCallback(async (trackId: string, title: string) => {
+    await initialLoadRef.current;
+    const updated = await tracksApi.renameTrack(trackId, title);
+    setTracks((prev) => prev.map((t) => (t.id === trackId ? updated : t)));
+  }, []);
+
+  const setTrackProject = useCallback(async (trackId: string, projectId: string | null) => {
+    await initialLoadRef.current;
+    const updated = await tracksApi.setTrackProject(trackId, projectId);
+    setTracks((prev) => prev.map((t) => (t.id === trackId ? updated : t)));
+  }, []);
+
+  return { tracks, isLoading, removeTrack, createTrack, togglePin, renameTrack, setTrackProject };
 }
 
 export function useTrackMessages(trackId: string) {

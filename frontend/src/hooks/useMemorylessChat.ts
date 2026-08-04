@@ -1,4 +1,4 @@
-import { useCallback, useRef, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import * as memorylessApi from '../api/memoryless';
 import type { ChatMessage, ComposerNoticeData } from '../types';
 
@@ -7,12 +7,71 @@ import type { ChatMessage, ComposerNoticeData } from '../types';
 // turn (POST /memoryless/messages, streamed). thread_id lives in a ref,
 // not state: it's an internal bookkeeping detail (which Redis-staged
 // thread to keep appending to) that no render needs to react to.
-export function useMemorylessChat() {
+//
+// initialThreadId (deferred.md #43): when a /chat/:id URL names a real,
+// still-live memoryless thread, its message history is fetched via
+// GET /memoryless/threads/:id and used to seed the conversation instead
+// of starting blank — a direct visit/reload now actually restores what
+// was there, not just a URL with nothing behind it. onThreadId fires
+// once, only the first time THIS hook learns a real thread_id (i.e. a
+// brand new thread created from a bare /chat) — never on every
+// message of an already-known thread — so a caller can push the URL to
+// /chat/:id via router history exactly once, matching DESIGN.md's
+// "URL updates via router history API only... never a full page
+// reload" spec.
+export function useMemorylessChat(initialThreadId: string | null = null, onThreadId?: (threadId: string) => void) {
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [isSending, setIsSending] = useState(false);
+  const [isHydrating, setIsHydrating] = useState(initialThreadId !== null);
   const [composerNotice, setComposerNotice] = useState<ComposerNoticeData | null>(null);
-  const threadIdRef = useRef<string | null>(null);
+  const threadIdRef = useRef<string | null>(initialThreadId);
   const abortRef = useRef<AbortController | null>(null);
+  // Set right when THIS hook's own send() learns a brand new thread_id
+  // (see onThreadId below) — distinguishes "initialThreadId just changed
+  // because our own navigate() caught up to a thread we already fully
+  // know" from "initialThreadId changed because the user actually
+  // navigated to a different thread's URL." Only the second case should
+  // trigger a re-fetch; re-hydrating the first case would race a Redis
+  // write that (per turn.rs) only happens once the stream finishes, and
+  // would discard state that's already more current than anything Redis
+  // has yet.
+  const justCreatedRef = useRef(false);
+
+  useEffect(() => {
+    if (justCreatedRef.current && initialThreadId === threadIdRef.current) {
+      justCreatedRef.current = false;
+      return;
+    }
+    threadIdRef.current = initialThreadId;
+    if (initialThreadId === null) {
+      setMessages([]);
+      setIsHydrating(false);
+      return;
+    }
+    let cancelled = false;
+    setIsHydrating(true);
+    memorylessApi
+      .getThread(initialThreadId)
+      .then((history) => {
+        if (cancelled) return;
+        setMessages(history);
+      })
+      .catch(() => {
+        // Expired/foreign/nonexistent thread — degrade to a fresh,
+        // empty conversation under this same URL rather than erroring;
+        // sending a message will simply start a new thread (the
+        // backend's own load_owned already 404s on a bad thread_id).
+        if (cancelled) return;
+        threadIdRef.current = null;
+        setMessages([]);
+      })
+      .finally(() => {
+        if (!cancelled) setIsHydrating(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [initialThreadId]);
 
   const send = useCallback(async (text: string) => {
     setComposerNotice(null);
@@ -40,7 +99,12 @@ export function useMemorylessChat() {
         { threadId: threadIdRef.current, message: text },
         {
           onThreadId: (id) => {
+            const isNewThread = threadIdRef.current !== id;
             threadIdRef.current = id;
+            if (isNewThread) {
+              justCreatedRef.current = true;
+              onThreadId?.(id);
+            }
           },
           onDelta: (delta) => {
             receivedDelta = true;
@@ -90,7 +154,7 @@ export function useMemorylessChat() {
       setIsSending(false);
       abortRef.current = null;
     }
-  }, []);
+  }, [onThreadId]);
 
   // Aborting the fetch IS the cancel signal the backend listens for
   // (see api/memoryless.ts's doc comment) — no separate endpoint call.
@@ -103,5 +167,5 @@ export function useMemorylessChat() {
 
   const dismissComposerNotice = useCallback(() => setComposerNotice(null), []);
 
-  return { messages, isSending, send, cancel, composerNotice, dismissComposerNotice };
+  return { messages, isSending, isHydrating, send, cancel, composerNotice, dismissComposerNotice };
 }

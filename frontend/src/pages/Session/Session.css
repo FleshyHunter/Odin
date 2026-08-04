@@ -227,11 +227,35 @@
   border-radius: 12px; padding: 1.1rem;
 }
 
+.session-page .exercise-card-top {
+  display: flex; align-items: center; justify-content: space-between;
+  margin-bottom: 0.9rem;
+}
+
 .session-page .difficulty-tag {
   display: inline-block; font-size: 0.7rem; font-weight: 600;
   text-transform: uppercase; letter-spacing: 0.03em;
   color: var(--glow); background: var(--glow-dim);
-  padding: 0.2rem 0.55rem; border-radius: 999px; margin-bottom: 0.9rem;
+  padding: 0.2rem 0.55rem; border-radius: 999px;
+}
+
+.session-page .flag-button {
+  display: flex; align-items: center; gap: 0.3rem;
+  color: var(--text-muted); background: transparent; border: 0;
+  font-size: 0.75rem; padding: 0.2rem 0.3rem; border-radius: 6px;
+  transition: color 0.15s ease, background 0.15s ease;
+}
+.session-page .flag-button:hover:not(:disabled) {
+  color: var(--text-secondary); background: var(--surface);
+}
+.session-page .flag-button:focus-visible {
+  outline: 2px solid var(--focus); outline-offset: 2px;
+}
+.session-page .flag-status {
+  font-size: 0.75rem; color: var(--text-muted);
+}
+.session-page .flag-status-error {
+  color: var(--error);
 }
 
 .session-page .exercise-q {

@@ -1,4 +1,5 @@
 import { useState } from 'react';
+import { useNavigate } from 'react-router-dom';
 import { useProjects } from '../../hooks/useProjects';
 import { Button } from '../../components/ui/Button/Button';
 import { SearchBar } from '../../components/list-view/SearchBar';
@@ -14,6 +15,7 @@ export function Projects() {
   const { projects, createProject } = useProjects();
   const [search, setSearch] = useState('');
   const [isCreateOpen, setIsCreateOpen] = useState(false);
+  const navigate = useNavigate();
 
   const filtered = projects.filter((project) =>
     project.title.toLowerCase().includes(search.trim().toLowerCase()),
@@ -43,6 +45,7 @@ export function Projects() {
                 title={project.title}
                 date={project.updatedAt}
                 description={project.description}
+                onClick={() => navigate(`/projects/${project.id}`)}
               />
             ))
           )}

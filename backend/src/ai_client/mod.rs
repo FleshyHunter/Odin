@@ -64,10 +64,21 @@ pub async fn embed(
     Ok(body.embeddings)
 }
 
+// "user" | "assistant" — Ollama /api/chat's own role names. Callers
+// (memoryless/turn.rs) map their staged "user"/"tutor" role strings to
+// this before constructing one. deferred.md #54.
+#[derive(Serialize, Clone)]
+pub struct HistoryMessage {
+    pub role: String,
+    pub content: String,
+}
+
 #[derive(Serialize)]
 struct GenerateRequest {
     prompt: String,
     think: bool,
+    #[serde(default)]
+    history: Vec<HistoryMessage>,
 }
 
 #[derive(Deserialize)]
@@ -90,7 +101,7 @@ pub async fn generate(
 
     let response = client
         .post(&url)
-        .json(&GenerateRequest { prompt, think })
+        .json(&GenerateRequest { prompt, think, history: Vec::new() })
         .send()
         .await
         .map_err(|_| AiClientError::ServiceUnavailable)?;
@@ -135,17 +146,22 @@ enum GenerateStreamLine {
 /// Callers own deciding what "the stream ended early" means (client
 /// disconnect, a stalled-too-long gap, an inner Err) — this function
 /// only relays what ai_service sent, it doesn't interpret it.
+///
+/// `history` (deferred.md #54): prior turns to send ahead of `prompt`,
+/// oldest first, already role-mapped to Ollama's "user"/"assistant"
+/// naming — empty for a turn with no prior context to include.
 pub async fn generate_stream(
     client: &reqwest::Client,
     ai_service_url: &str,
     prompt: String,
     think: bool,
+    history: Vec<HistoryMessage>,
 ) -> Result<impl Stream<Item = Result<String, AiClientError>> + Send + 'static, AiClientError> {
     let url = format!("{ai_service_url}/generate/stream");
 
     let response = client
         .post(&url)
-        .json(&GenerateRequest { prompt, think })
+        .json(&GenerateRequest { prompt, think, history })
         .send()
         .await
         .map_err(|_| AiClientError::ServiceUnavailable)?;

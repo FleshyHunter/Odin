@@ -98,3 +98,22 @@ export async function togglePin(trackId: string): Promise<Track> {
   track.pinned = !track.pinned;
   return simulateDelay(track, 200);
 }
+
+// Real contract: PATCH /tracks/:trackId { title } -> Track
+export async function renameTrack(trackId: string, title: string): Promise<Track> {
+  const track = tracks.find((t) => t.id === trackId);
+  if (!track) throw new Error(`Track ${trackId} not found`);
+  track.title = title;
+  return simulateDelay(track, 200);
+}
+
+// Real contract: PATCH /tracks/:trackId { projectId } -> Track
+// Same underlying operation for both TrackMenu's "Change project"
+// (projectId set to a real id) and "Remove from project" (projectId set
+// back to null) — deferred.md #41.
+export async function setTrackProject(trackId: string, projectId: string | null): Promise<Track> {
+  const track = tracks.find((t) => t.id === trackId);
+  if (!track) throw new Error(`Track ${trackId} not found`);
+  track.projectId = projectId;
+  return simulateDelay(track, 200);
+}
