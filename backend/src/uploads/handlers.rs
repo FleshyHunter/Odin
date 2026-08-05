@@ -8,6 +8,7 @@ use crate::ai_client;
 use crate::auth::middleware::AuthUser;
 use crate::memoryless::errors::MemorylessError;
 use crate::memoryless::staging::{self, StagedChunk, StagedThread, StagedUpload};
+use crate::memoryless::write_through;
 use crate::state::AppState;
 
 use super::dedup;
@@ -194,7 +195,7 @@ pub async fn upload(
     // there is nothing left to check post-hoc here. chunk_count itself is
     // still needed for UploadResponse below.
     let chunk_count = result.chunks.len();
-    thread.staged_uploads.push(StagedUpload {
+    let staged_upload = StagedUpload {
         content_hash,
         filename: parsed.filename,
         upload_role: parsed.role,
@@ -205,8 +206,24 @@ pub async fn upload(
             .map(|c| StagedChunk { text: c.text, token_count: c.token_count, embedding: c.embedding })
             .collect(),
         created_at: Utc::now(),
-    });
+    };
+    thread.staged_uploads.push(staged_upload.clone());
     staging::save(&state, &thread).await?;
+
+    // deferred.md #56: material_upload write-through, immediately —
+    // `sources`' own CHECK constraint requires a real journey_id for
+    // prompt_upload (Milestone 10, same root cause as #27), so this is
+    // deliberately scoped to material_upload only, unlike turn.rs's
+    // write-through (which has no such split). Fail-soft, same
+    // reasoning as turn.rs's own write-through call: the upload already
+    // succeeded from the student's point of view (staged in Redis,
+    // usable immediately) — a write-through failure only means this
+    // upload's durability rests on Redis alone for now.
+    if staged_upload.upload_role == "material_upload" {
+        if let Err(err) = write_through::write_through_material_upload(&state.pool, user_id, &staged_upload).await {
+            tracing::error!(?err, thread_id = %thread.thread_id, "failed to write material_upload through to Postgres");
+        }
+    }
 
     Ok(Json(UploadResponse {
         thread_id: Some(thread.thread_id),

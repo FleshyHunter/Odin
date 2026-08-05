@@ -32,6 +32,7 @@ use tokio::sync::mpsc;
 use super::errors::MemorylessError;
 use super::similarity::rank_by_similarity;
 use super::staging::{self, StagedAuditEvent, StagedMessage, StagedThread, StagedUpload};
+use super::write_through;
 use crate::ai_client::{self, AiClientError};
 use crate::state::AppState;
 
@@ -267,20 +268,16 @@ pub async fn start_turn_stream(
         }
 
         let now = Utc::now();
-        thread.messages.push(StagedMessage {
-            role: "user".to_string(),
-            content: raw_input.clone(),
-            timestamp: now,
-        });
-        thread.messages.push(StagedMessage {
-            role: "tutor".to_string(),
-            content: accumulated.clone(),
-            timestamp: now,
-        });
+        let user_message = StagedMessage { role: "user".to_string(), content: raw_input.clone(), timestamp: now };
+        let tutor_message =
+            StagedMessage { role: "tutor".to_string(), content: accumulated.clone(), timestamp: now };
+        thread.messages.push(user_message.clone());
+        thread.messages.push(tutor_message.clone());
+
         // One audit event per turn (Rule 4: mandatory every turn, all
         // modes) regardless of how it ended — staged here rather than
         // written to audit_logs directly, per Rule 51.
-        thread.audit_events.push(StagedAuditEvent {
+        let audit_event = StagedAuditEvent {
             user_input: raw_input,
             cleaned_query,
             matched_concepts,
@@ -289,10 +286,31 @@ pub async fn start_turn_stream(
             model_used: MODEL_USED.to_string(),
             error: cutoff_reason,
             timestamp: now,
-        });
+        };
+        thread.audit_events.push(audit_event.clone());
 
         if let Err(err) = staging::save(&state, &thread).await {
             tracing::error!(?err, %thread_id, "failed to stage memoryless turn after streaming");
+        }
+
+        // deferred.md #56: incremental Postgres write-through, right
+        // alongside the Redis staging above — fail-soft on purpose. A
+        // write-through failure never blocks or unwinds a turn the
+        // student already saw complete; it only means THIS turn's
+        // durability rests on Redis alone until a later turn's own
+        // write-through call catches up (each call is independent, no
+        // retry needed — see write_through.rs's own doc comment).
+        if let Err(err) = write_through::write_through_turn(
+            &state.pool,
+            thread.user_id,
+            thread_id,
+            thread.created_at,
+            &[user_message, tutor_message],
+            &audit_event,
+        )
+        .await
+        {
+            tracing::error!(?err, %thread_id, "failed to write memoryless turn through to Postgres");
         }
     });
 

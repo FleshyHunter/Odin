@@ -103,6 +103,19 @@ pub struct ConvertResponse {
 /// instead of Redis-staged. Commit-then-delete ordering (Block 11 spec
 /// point 4): the Redis key is only removed AFTER the Postgres commit
 /// succeeds, so a failed write never loses staged data.
+///
+/// deferred.md #56: write-through may already have committed some (or
+/// all) of this thread's messages/audit_logs/study_threads
+/// incrementally, per turn, well before this is ever called — this is
+/// no longer the only path to durability, just the one remaining real
+/// "checkout" moment (attaching a journey, once Milestone 10 exists).
+/// `study_threads` conflicts safely on its own primary key. `messages`/
+/// `audit_logs` have no natural business key to conflict on instead, so
+/// this counts what's already there for this thread_id and only
+/// inserts whatever write-through hasn't caught up on yet — safe, not
+/// approximate, since write-through and this load both process
+/// `thread.messages`/`thread.audit_events` in the exact same append
+/// order every time.
 pub async fn convert(
     AuthUser(user_id): AuthUser,
     State(state): State<AppState>,
@@ -119,7 +132,8 @@ pub async fn convert(
 
     sqlx::query(
         "INSERT INTO study_threads (thread_id, user_id, mode, created_at, last_active_at) \
-         VALUES ($1, $2, 'memoryless', $3, NOW())",
+         VALUES ($1, $2, 'memoryless', $3, NOW()) \
+         ON CONFLICT (thread_id) DO UPDATE SET last_active_at = NOW()",
     )
     .bind(thread.thread_id)
     .bind(thread.user_id)
@@ -127,7 +141,11 @@ pub async fn convert(
     .execute(&mut *tx)
     .await?;
 
-    for message in &thread.messages {
+    let existing_message_count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM messages WHERE thread_id = $1")
+        .bind(thread.thread_id)
+        .fetch_one(&mut *tx)
+        .await?;
+    for message in thread.messages.iter().skip(existing_message_count as usize) {
         sqlx::query(
             "INSERT INTO messages (thread_id, role, content, mode, timestamp) \
              VALUES ($1, $2, $3, 'memoryless', $4)",
@@ -140,7 +158,11 @@ pub async fn convert(
         .await?;
     }
 
-    for event in &thread.audit_events {
+    let existing_audit_count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM audit_logs WHERE thread_id = $1")
+        .bind(thread.thread_id)
+        .fetch_one(&mut *tx)
+        .await?;
+    for event in thread.audit_events.iter().skip(existing_audit_count as usize) {
         let matched_concepts = json!(event.matched_concepts);
         sqlx::query(
             "INSERT INTO audit_logs \
@@ -163,16 +185,17 @@ pub async fn convert(
 
     tx.commit().await?;
 
-    // thread.staged_uploads is deliberately NOT committed here (Block
-    // 12 — markdown/deferred.md #17/#25/#27): material_upload has no
-    // real ChromaDB destination yet, and prompt_upload can't pass RLS
-    // at all without a real journey_id to attach to (neither exists —
-    // both are Milestone 9/10 dependencies). Stated plainly, not
-    // softened: any staged_uploads on this thread are LOST at this
-    // point, not merely delayed — they live in the SAME Redis key
-    // being deleted below, so a successfully deduped/chunked/embedded
-    // upload does not survive its thread's conversion in this pass. A
-    // real gap, tracked rather than hidden.
+    // thread.staged_uploads is still NOT committed HERE (unchanged from
+    // Block 12 — markdown/deferred.md #17/#25/#27) — but as of deferred.md
+    // #56, material_upload uploads no longer depend on this moment at
+    // all: uploads::handlers::upload() already write-through committed
+    // them to Postgres immediately, at upload time. Only prompt_upload
+    // remains genuinely lost here — it can't pass RLS at all without a
+    // real journey_id to attach to (Milestone 10 dependency, unrelated
+    // to persistence timing) — stated plainly, not softened: a
+    // prompt_upload on this thread is LOST at this point, not merely
+    // delayed, since it lives only in the SAME Redis key being deleted
+    // below. A real gap, tracked rather than hidden (still #27).
 
     // Only remove the Redis entry once Postgres durably has it.
     staging::delete(&state, thread_id).await?;
