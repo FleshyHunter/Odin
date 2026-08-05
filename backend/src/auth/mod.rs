@@ -6,6 +6,9 @@ pub mod jwt;
 pub mod middleware;
 mod otp;
 mod password;
+// pub(crate): config.rs needs parse_rate_limit() too, unlike otp/
+// password/tokens which stay purely internal to auth's own handlers.
+pub(crate) mod rate_limit;
 mod tokens;
 
 use axum::{

@@ -187,8 +187,21 @@ pub async fn start_turn_stream(
     };
 
     let history = build_history(&thread.messages);
-    let chunks =
-        ai_client::generate_stream(&state.http_client, &state.ai_service_url, prompt, think, history).await?;
+    // Independent-audit finding (2026-08-05, reopens deferred.md #20):
+    // state.http_client's blanket 120s .timeout() is a TOTAL request
+    // deadline, not a per-chunk one — it would still kill a healthy,
+    // continuously-streaming generation at the 120s wall-clock mark
+    // regardless of this function's own CHUNK_INACTIVITY_TIMEOUT below.
+    // streaming_http_client uses .read_timeout() instead, reqwest's
+    // actual per-chunk-reset primitive — see state.rs's own comment.
+    let chunks = ai_client::generate_stream(
+        &state.streaming_http_client,
+        &state.ai_service_url,
+        prompt,
+        think,
+        history,
+    )
+    .await?;
 
     let (tx, rx) = mpsc::channel::<TurnEvent>(16);
     let state = state.clone();

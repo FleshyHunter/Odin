@@ -1,4 +1,10 @@
-use axum::{extract::State, http::StatusCode, Json};
+use std::net::SocketAddr;
+
+use axum::{
+    extract::{ConnectInfo, State},
+    http::StatusCode,
+    Json,
+};
 use axum_extra::extract::cookie::{Cookie, CookieJar, SameSite};
 use serde::{Deserialize, Serialize};
 use time::Duration as CookieDuration;
@@ -12,6 +18,7 @@ use super::hash_utils::sha256_hex;
 use super::jwt::{self, TokenType};
 use super::otp;
 use super::password;
+use super::rate_limit;
 use super::tokens::issue_tokens;
 
 fn normalize_email(email: &str) -> String {
@@ -89,12 +96,28 @@ pub struct EmailRequest {
     email: String,
 }
 
+// deferred.md #9-11 — no anti-enumeration concern on this endpoint (it
+// never branches on whether the account exists, unlike login/password-
+// reset's request-otp below), so both limits can 429 openly.
 pub async fn signup_request_otp(
+    ConnectInfo(addr): ConnectInfo<SocketAddr>,
     State(state): State<AppState>,
     Json(req): Json<EmailRequest>,
 ) -> Result<StatusCode, AuthError> {
     let email = normalize_email(&req.email);
     let mut conn = state.get_redis().await?;
+
+    let (signup_max, signup_window) = state.signup_rate_limit;
+    let signup_key = rate_limit::signup_key(&addr.ip());
+    if !rate_limit::check_and_increment(&mut conn, &signup_key, signup_max, signup_window).await? {
+        return Err(AuthError::RateLimited);
+    }
+    let (resend_max, resend_window) = state.otp_resend_rate_limit;
+    let resend_key = rate_limit::otp_resend_key(&email);
+    if !rate_limit::check_and_increment(&mut conn, &resend_key, resend_max, resend_window).await? {
+        return Err(AuthError::RateLimited);
+    }
+
     let code = otp::stage_signup_otp(&mut conn, &email, state.otp_expiry_minutes).await?;
     state.email_sender.send_otp(&email, &code).await;
     Ok(StatusCode::OK)
@@ -112,7 +135,7 @@ pub async fn signup_verify_otp(
 ) -> Result<StatusCode, AuthError> {
     let email = normalize_email(&req.email);
     let mut conn = state.get_redis().await?;
-    let matched = otp::verify_signup_otp(&mut conn, &email, &req.code).await?;
+    let matched = otp::verify_signup_otp(&mut conn, &email, &req.code, state.otp_verify_attempt_limit).await?;
     if !matched {
         return Err(AuthError::InvalidOtp);
     }
@@ -180,6 +203,18 @@ pub async fn login_password(
     Json(req): Json<LoginPasswordRequest>,
 ) -> Result<(CookieJar, Json<AuthResponse>), AuthError> {
     let email = normalize_email(&req.email);
+
+    // deferred.md #9-11 — checked BEFORE ever touching Postgres, and
+    // keyed regardless of whether the account is real (no enumeration
+    // risk: this endpoint already returns the same InvalidCredentials
+    // either way, so a 429 here doesn't reveal anything new).
+    let mut conn = state.get_redis().await?;
+    let (max, window) = state.login_rate_limit;
+    let key = rate_limit::login_key(&email);
+    if !rate_limit::check_and_increment(&mut conn, &key, max, window).await? {
+        return Err(AuthError::RateLimited);
+    }
+
     let user = sqlx::query_as::<_, User>("SELECT * FROM users WHERE email_normalized = $1")
         .bind(&email)
         .fetch_optional(&state.pool)
@@ -200,6 +235,17 @@ pub async fn login_request_otp(
     Json(req): Json<EmailRequest>,
 ) -> Result<StatusCode, AuthError> {
     let email = normalize_email(&req.email);
+    let mut conn = state.get_redis().await?;
+
+    // Same login-attempt limit as login_password (ARCHITECTURE.md:
+    // "login attempts (both methods)" is one shared limit) — safe to
+    // 429 openly, same reasoning as login_password's own check.
+    let (login_max, login_window) = state.login_rate_limit;
+    let login_key = rate_limit::login_key(&email);
+    if !rate_limit::check_and_increment(&mut conn, &login_key, login_max, login_window).await? {
+        return Err(AuthError::RateLimited);
+    }
+
     let exists: bool = sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM users WHERE email_normalized = $1)")
         .bind(&email)
         .fetch_one(&state.pool)
@@ -209,9 +255,17 @@ pub async fn login_request_otp(
     // letting this endpoint be used to enumerate registered emails.
     // Only actually stages/sends a code when there's a real account.
     if exists {
-        let mut conn = state.get_redis().await?;
-        let code = otp::stage_login_otp(&mut conn, &email, state.otp_expiry_minutes).await?;
-        state.email_sender.send_otp(&email, &code).await;
+        // deferred.md #9-11: the resend limit is checked HERE, inside
+        // the exists branch, so it can only ever be reached for a real
+        // account — a 429 for it would leak exactly that. Silently
+        // skipping the send (still 200 either way) preserves the same
+        // anti-enumeration guarantee as the `exists` check itself.
+        let (resend_max, resend_window) = state.otp_resend_rate_limit;
+        let resend_key = rate_limit::otp_resend_key(&email);
+        if rate_limit::check_and_increment(&mut conn, &resend_key, resend_max, resend_window).await? {
+            let code = otp::stage_login_otp(&mut conn, &email, state.otp_expiry_minutes).await?;
+            state.email_sender.send_otp(&email, &code).await;
+        }
     }
     Ok(StatusCode::OK)
 }
@@ -222,7 +276,7 @@ pub async fn login_verify_otp(
 ) -> Result<(CookieJar, Json<AuthResponse>), AuthError> {
     let email = normalize_email(&req.email);
     let mut conn = state.get_redis().await?;
-    let matched = otp::verify_login_otp(&mut conn, &email, &req.code).await?;
+    let matched = otp::verify_login_otp(&mut conn, &email, &req.code, state.otp_verify_attempt_limit).await?;
     if !matched {
         return Err(AuthError::InvalidOtp);
     }
@@ -352,6 +406,15 @@ pub async fn password_reset_request_otp(
     Json(req): Json<EmailRequest>,
 ) -> Result<StatusCode, AuthError> {
     let email = normalize_email(&req.email);
+    let mut conn = state.get_redis().await?;
+
+    // deferred.md #9-11 — checked regardless of whether the account is
+    // real (safe to 429 openly, same reasoning as login's own check).
+    let (pr_max, pr_window) = state.password_reset_rate_limit;
+    let pr_key = rate_limit::password_reset_key(&email);
+    if !rate_limit::check_and_increment(&mut conn, &pr_key, pr_max, pr_window).await? {
+        return Err(AuthError::RateLimited);
+    }
 
     // Same anti-enumeration shape as login_request_otp — always 200,
     // only actually stages/sends a code when the account is real.
@@ -361,9 +424,14 @@ pub async fn password_reset_request_otp(
         .await?;
 
     if exists {
-        let mut conn = state.get_redis().await?;
-        let code = otp::stage_password_reset_otp(&mut conn, &email, state.otp_expiry_minutes).await?;
-        state.email_sender.send_otp(&email, &code).await;
+        // Same silent-skip-on-limit shape as login_request_otp, for the
+        // same enumeration reason — only reachable for a real account.
+        let (resend_max, resend_window) = state.otp_resend_rate_limit;
+        let resend_key = rate_limit::otp_resend_key(&email);
+        if rate_limit::check_and_increment(&mut conn, &resend_key, resend_max, resend_window).await? {
+            let code = otp::stage_password_reset_otp(&mut conn, &email, state.otp_expiry_minutes).await?;
+            state.email_sender.send_otp(&email, &code).await;
+        }
     }
 
     Ok(StatusCode::OK)
@@ -380,7 +448,8 @@ pub async fn password_reset_verify_otp(
 ) -> Result<Json<PasswordResetVerifyResponse>, AuthError> {
     let email = normalize_email(&req.email);
     let mut conn = state.get_redis().await?;
-    let matched = otp::verify_password_reset_otp(&mut conn, &email, &req.code).await?;
+    let matched =
+        otp::verify_password_reset_otp(&mut conn, &email, &req.code, state.otp_verify_attempt_limit).await?;
     if !matched {
         return Err(AuthError::InvalidOtp);
     }

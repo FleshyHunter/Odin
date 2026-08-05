@@ -21,6 +21,7 @@ mod routes;
 mod state;
 mod uploads;
 
+use std::net::SocketAddr;
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -67,16 +68,37 @@ async fn main() {
 
     // 120s, not the 5s used for Redis/Postgres — ML inference is
     // legitimately slower than a connection ping, and a reasoning model
-    // (qwen3.5:9b, thinking on by default) can take real time even once
-    // the chat-template/turn-boundary fix is in place. Still a bound,
-    // not "wait forever": an unreachable/stalled FastAPI still fails
-    // clearly rather than hanging (Rule 29's "no offline mode"
-    // philosophy) — no streaming yet, so this has to cover a whole
-    // response, not just an idle gap between chunks.
+    // (qwen3.5:9b, thinking on by default) can take real time. Still a
+    // bound, not "wait forever": an unreachable/stalled FastAPI still
+    // fails clearly rather than hanging (Rule 29's "no offline mode"
+    // philosophy). Used for every ai_client call EXCEPT generate_stream
+    // (see streaming_http_client below) — a single blocking response is
+    // exactly what reqwest's `.timeout()` (a TOTAL request deadline) is
+    // for.
     let http_client = reqwest::Client::builder()
         .timeout(Duration::from_secs(120))
         .build()
         .expect("failed to build reqwest client");
+
+    // Independent-audit finding (2026-08-05, reopens deferred.md #20):
+    // `.timeout()` above is a TOTAL deadline from request start —
+    // reqwest 0.13.4's own doc comment confirms it covers "from when the
+    // request starts connecting until the response body has finished,"
+    // not reset per chunk. #20 believed streaming turned this into a
+    // per-chunk inactivity timeout; it didn't — only turn.rs's own
+    // separate CHUNK_INACTIVITY_TIMEOUT (application-level, wrapping
+    // chunks.next()) actually behaves that way. A healthy generation
+    // streaming real deltas continuously past 120s total was still
+    // getting killed by THIS client regardless. `.read_timeout()`
+    // instead is reqwest's actual per-chunk-reset primitive (its own doc
+    // comment: "resets after a successful read... appropriate for
+    // detecting stalled connections when the size isn't known
+    // beforehand") — used ONLY by generate_stream(), which already has
+    // its own redundant, correct safety net at the application layer.
+    let streaming_http_client = reqwest::Client::builder()
+        .read_timeout(Duration::from_secs(120))
+        .build()
+        .expect("failed to build streaming reqwest client");
 
     // Browser-only same-origin gate — separate from and unrelated to the
     // JWT/RLS auth layers below. allow_credentials(true) is required so
@@ -94,7 +116,7 @@ async fn main() {
         .allow_methods([Method::GET, Method::POST, Method::DELETE])
         .allow_headers([header::CONTENT_TYPE, header::AUTHORIZATION]);
 
-    let app_state = AppState::new(pool, redis, &config, email_sender, http_client);
+    let app_state = AppState::new(pool, redis, &config, email_sender, http_client, streaming_http_client);
 
     let app = Router::new()
         .merge(routes::router())
@@ -112,5 +134,11 @@ async fn main() {
 
     tracing::info!("odin-backend listening on port {}", config.port);
 
-    axum::serve(listener, app).await.expect("server error");
+    // deferred.md #9-11: SIGNUP_RATE_LIMIT is per-IP (PRD.md NC7 — "3
+    // signup attempts/hour/IP"), the one rate limit that isn't
+    // email-keyed — needs the real client address, which requires this
+    // connect-info-aware serve variant instead of the plain one.
+    axum::serve(listener, app.into_make_service_with_connect_info::<SocketAddr>())
+        .await
+        .expect("server error");
 }

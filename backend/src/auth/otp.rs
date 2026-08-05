@@ -15,6 +15,9 @@
 //                            config value as signup — same "just-verified,
 //                            about to submit" semantics either way, not
 //                            worth a second near-identical env var for.
+//   {signup,login,password_reset}_otp:{email}:attempts  — wrong-guess
+//                            counter (deferred.md #9-11, OTP_VERIFY_ATTEMPT_
+//                            LIMIT), same TTL as its sibling *_otp key.
 //
 // Hashing the OTP itself is a fast hash (SHA-256), deliberately NOT
 // argon2 — the OTP's defense is time (short TTL) and attempt-count
@@ -107,14 +110,42 @@ pub async fn stage_password_reset_otp(
 /// Mismatch/expiry both just return false; the caller doesn't get to
 /// distinguish "wrong code" from "expired," which is the point (no
 /// extra information leaked to a guesser).
-async fn verify_otp(conn: &mut MultiplexedConnection, key: &str, submitted: &str) -> RedisResult<bool> {
+///
+/// OTP_VERIFY_ATTEMPT_LIMIT (deferred.md #9-11, PRD.md NC7 — "5 OTP
+/// verify attempts before forcing a fresh code"): a wrong guess
+/// increments a sibling `{key}:attempts` counter, given the SAME TTL as
+/// the OTP itself the first time it's set (so it can never outlive the
+/// code it's counting attempts against). Hitting the limit deletes the
+/// OTP outright — forcing a fresh `request-otp` call — rather than just
+/// refusing further guesses, so there's no way to keep the same code
+/// alive indefinitely by spacing out guesses.
+async fn verify_otp(
+    conn: &mut MultiplexedConnection,
+    key: &str,
+    submitted: &str,
+    max_attempts: u32,
+) -> RedisResult<bool> {
     let stored: Option<String> = conn.get(key).await?;
     let Some(stored_hash) = stored else {
         return Ok(false);
     };
     let matches = constant_time_matches(&stored_hash, &hash_code(submitted));
+    let attempts_key = format!("{key}:attempts");
     if matches {
-        conn.del::<_, ()>(key).await?;
+        conn.del::<_, ()>((key, attempts_key.as_str())).await?;
+    } else {
+        let attempts: u32 = conn.incr(&attempts_key, 1).await?;
+        if attempts == 1 {
+            // Align the attempts counter's lifetime with the OTP's own
+            // remaining TTL, not a fresh one of its own.
+            let ttl: i64 = conn.ttl(key).await?;
+            if ttl > 0 {
+                conn.expire::<_, ()>(&attempts_key, ttl).await?;
+            }
+        }
+        if attempts >= max_attempts {
+            conn.del::<_, ()>((key, attempts_key.as_str())).await?;
+        }
     }
     Ok(matches)
 }
@@ -123,24 +154,27 @@ pub async fn verify_signup_otp(
     conn: &mut MultiplexedConnection,
     email: &str,
     submitted: &str,
+    max_attempts: u32,
 ) -> RedisResult<bool> {
-    verify_otp(conn, &signup_otp_key(email), submitted).await
+    verify_otp(conn, &signup_otp_key(email), submitted, max_attempts).await
 }
 
 pub async fn verify_login_otp(
     conn: &mut MultiplexedConnection,
     email: &str,
     submitted: &str,
+    max_attempts: u32,
 ) -> RedisResult<bool> {
-    verify_otp(conn, &login_otp_key(email), submitted).await
+    verify_otp(conn, &login_otp_key(email), submitted, max_attempts).await
 }
 
 pub async fn verify_password_reset_otp(
     conn: &mut MultiplexedConnection,
     email: &str,
     submitted: &str,
+    max_attempts: u32,
 ) -> RedisResult<bool> {
-    verify_otp(conn, &password_reset_otp_key(email), submitted).await
+    verify_otp(conn, &password_reset_otp_key(email), submitted, max_attempts).await
 }
 
 /// Marks this email as having just passed OTP verification, so the

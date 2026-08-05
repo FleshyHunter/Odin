@@ -17,6 +17,9 @@ pub enum AuthError {
     InvalidRefreshToken,
     #[error("internal error")]
     Internal,
+    // Redis Phase 1 (deferred.md #9-11) — a fixed-window counter tripped.
+    #[error("too many attempts — try again later")]
+    RateLimited,
     // Distinct from Internal: this specifically means an external
     // dependency (Redis) was unreachable, matching Rule 29's "no
     // offline mode... accepted behavior, not a gap to engineer
@@ -36,6 +39,7 @@ impl IntoResponse for AuthError {
             AuthError::AccountExists => StatusCode::CONFLICT,
             AuthError::Internal => StatusCode::INTERNAL_SERVER_ERROR,
             AuthError::ServiceUnavailable(_) => StatusCode::SERVICE_UNAVAILABLE,
+            AuthError::RateLimited => StatusCode::TOO_MANY_REQUESTS,
         };
         (status, Json(json!({ "error": self.to_string() }))).into_response()
     }

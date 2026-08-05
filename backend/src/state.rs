@@ -39,6 +39,27 @@ pub struct AppState {
     // by the memoryless chat-turn handler (Block 11) via ai_client::
     // analyze_input/generate.
     pub http_client: reqwest::Client,
+    // Independent-audit finding (2026-08-05, reopens deferred.md #20):
+    // http_client's own `.timeout()` is reqwest's TOTAL-request deadline
+    // (confirmed by reading reqwest 0.13.4's actual source —
+    // async_impl/client.rs's own doc comment: "applied from when the
+    // request starts connecting until the response body has finished")
+    // — an absolute wall-clock cap, NOT reset per chunk. #20 believed
+    // streaming had turned this into a per-chunk inactivity timeout, but
+    // that's only true of turn.rs's OWN CHUNK_INACTIVITY_TIMEOUT
+    // (a tokio::time::timeout wrapping chunks.next()) — the underlying
+    // HTTP layer was never changed, so any healthy generation running
+    // past http_client's 120s still gets killed mid-stream regardless
+    // of continuous output. This second client uses `.read_timeout()`
+    // instead — reqwest's own doc comment: "applies to each read
+    // operation, and resets after a successful read... more appropriate
+    // for detecting stalled connections when the size isn't known
+    // beforehand" — the actually-correct primitive for a stream, used
+    // ONLY by ai_client::generate_stream(). Every other ai_client call
+    // (generate/analyze_input/embed/etc.) keeps using http_client's
+    // total-deadline semantics, which are correct for a single blocking
+    // response.
+    pub streaming_http_client: reqwest::Client,
     pub ai_service_url: Arc<str>,
     // Block 11: sliding TTL for Redis-staged memoryless threads.
     pub memoryless_thread_ttl_minutes: i64,
@@ -50,6 +71,12 @@ pub struct AppState {
     pub template_gen_lock_ttl_seconds: u64,
     // deferred.md #19: shared threshold with ai_service's RETRIEVAL_MIN_SCORE.
     pub retrieval_min_score: f32,
+    // Redis Phase 1 (deferred.md #9-11) — see config.rs's own comments.
+    pub login_rate_limit: (u32, u64),
+    pub otp_resend_rate_limit: (u32, u64),
+    pub signup_rate_limit: (u32, u64),
+    pub password_reset_rate_limit: (u32, u64),
+    pub otp_verify_attempt_limit: u32,
 }
 
 impl AppState {
@@ -59,6 +86,7 @@ impl AppState {
         config: &Config,
         email_sender: Arc<dyn EmailSender>,
         http_client: reqwest::Client,
+        streaming_http_client: reqwest::Client,
     ) -> Self {
         Self {
             pool,
@@ -72,12 +100,18 @@ impl AppState {
             password_min_length: config.password_min_length,
             cookie_secure: config.cookie_secure,
             http_client,
+            streaming_http_client,
             ai_service_url: Arc::from(config.ai_service_url.as_str()),
             memoryless_thread_ttl_minutes: config.memoryless_thread_ttl_minutes,
             memoryless_staged_upload_max_mb: config.memoryless_staged_upload_max_mb,
             memoryless_staged_upload_max_chunks: config.memoryless_staged_upload_max_chunks,
             template_gen_lock_ttl_seconds: config.template_gen_lock_ttl_seconds,
             retrieval_min_score: config.retrieval_min_score,
+            login_rate_limit: config.login_rate_limit,
+            otp_resend_rate_limit: config.otp_resend_rate_limit,
+            signup_rate_limit: config.signup_rate_limit,
+            password_reset_rate_limit: config.password_reset_rate_limit,
+            otp_verify_attempt_limit: config.otp_verify_attempt_limit,
         }
     }
 

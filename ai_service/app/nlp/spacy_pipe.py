@@ -3,6 +3,8 @@ from functools import lru_cache
 
 import spacy
 
+from app.cache.service import NLP_TTL_SECONDS, get_cached, set_cached
+
 
 @dataclass
 class NlpResult:
@@ -37,10 +39,21 @@ def analyze(text: str, matched_concepts: list[str]) -> NlpResult:
     and fed nothing downstream. Language detection is not implemented
     here; PRD.md's "English only" requirement is currently unenforced
     at this layer.
+
+    Redis Phase 3 (deferred.md #9-11): lemmas/keywords are cached keyed
+    on `text` alone — matched_concepts deliberately isn't part of the
+    key because it doesn't affect them at all; is_on_topic is a trivial
+    bool() of matched_concepts, not real spaCy work, so it's always
+    recomputed fresh regardless of whether the cache hit.
     """
-    doc = get_nlp()(text)
-    lemmas = [tok.lemma_.lower() for tok in doc if tok.is_alpha]
-    keywords = [tok.lemma_.lower() for tok in doc if tok.is_alpha and not tok.is_stop]
+    cached = get_cached("nlp", text)
+    if cached is not None:
+        lemmas, keywords = cached
+    else:
+        doc = get_nlp()(text)
+        lemmas = [tok.lemma_.lower() for tok in doc if tok.is_alpha]
+        keywords = [tok.lemma_.lower() for tok in doc if tok.is_alpha and not tok.is_stop]
+        set_cached("nlp", text, (lemmas, keywords), NLP_TTL_SECONDS)
     return NlpResult(
         lemmas=lemmas,
         keywords=keywords,

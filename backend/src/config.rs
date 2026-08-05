@@ -1,5 +1,7 @@
 use std::env;
 
+use crate::auth::rate_limit::parse_rate_limit;
+
 // Block 1 only needed DATABASE_URL/DB_POOL_SIZE/PORT. Block 3 (auth)
 // adds Redis + JWT + OTP + password config — all per the locked
 // Environment Variables list, not invented here.
@@ -79,6 +81,16 @@ pub struct Config {
     // (ChromaDB + this session's own staged-upload chunks). Genuinely
     // cross-language, not a duplicate invention.
     pub retrieval_min_score: f32,
+    // Redis Phase 1 (deferred.md #9-11, PRD.md NC7's locked values) —
+    // (max_count, window_seconds) pairs, parsed from the locked "N:Xm"/
+    // "N:Xh" env shape.
+    pub login_rate_limit: (u32, u64),
+    pub otp_resend_rate_limit: (u32, u64),
+    pub signup_rate_limit: (u32, u64),
+    pub password_reset_rate_limit: (u32, u64),
+    // A bare count, not a window — "5 OTP verify attempts before
+    // forcing a fresh code," not "5 per some time period."
+    pub otp_verify_attempt_limit: u32,
 }
 
 impl Config {
@@ -176,6 +188,30 @@ impl Config {
             .and_then(|v| v.parse().ok())
             .unwrap_or(0.60);
 
+        // Defaults match PRD.md NC7's locked values exactly, so an
+        // unset/fresh environment still gets real brute-force
+        // protection rather than silently having none.
+        let login_rate_limit = env::var("LOGIN_RATE_LIMIT")
+            .ok()
+            .map(|v| parse_rate_limit(&v))
+            .unwrap_or((5, 15 * 60));
+        let otp_resend_rate_limit = env::var("OTP_RESEND_RATE_LIMIT")
+            .ok()
+            .map(|v| parse_rate_limit(&v))
+            .unwrap_or((3, 10 * 60));
+        let signup_rate_limit = env::var("SIGNUP_RATE_LIMIT")
+            .ok()
+            .map(|v| parse_rate_limit(&v))
+            .unwrap_or((3, 3600));
+        let password_reset_rate_limit = env::var("PASSWORD_RESET_RATE_LIMIT")
+            .ok()
+            .map(|v| parse_rate_limit(&v))
+            .unwrap_or((3, 3600));
+        let otp_verify_attempt_limit = env::var("OTP_VERIFY_ATTEMPT_LIMIT")
+            .ok()
+            .and_then(|v| v.parse().ok())
+            .unwrap_or(5);
+
         Self {
             database_url,
             db_pool_size,
@@ -198,6 +234,11 @@ impl Config {
             memoryless_staged_upload_max_chunks,
             template_gen_lock_ttl_seconds,
             retrieval_min_score,
+            login_rate_limit,
+            otp_resend_rate_limit,
+            signup_rate_limit,
+            password_reset_rate_limit,
+            otp_verify_attempt_limit,
         }
     }
 }

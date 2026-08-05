@@ -26,6 +26,13 @@
 # separately, the same manual step already done on the real Windows
 # Postgres instance — not yet automated here.
 #
+# Redis Phase 3 (deferred.md #9-11): that same .env also needs
+# REDIS_PASSWORD — the SAME password already set as Memurai's requirepass
+# (matches backend/.env's REDIS_URL). Optional in practice: if unset,
+# ai_service's own REDIS_URL below resolves to a password-less URL that
+# Memurai will simply refuse, which just means embed()/spaCy caching
+# stays silently off (see app/cache/service.py) — never a startup failure.
+#
 # Block 10 (Dify): that same .env also needs DIFY_ACQUIRE_API_KEY,
 # DIFY_DAG_API_KEY, DIFY_EXERCISE_TEMPLATE_API_KEY (one per Dify app —
 # see ai_service/app/acquisition/ and its setup notes), plus optionally
@@ -75,6 +82,10 @@ services:
       # to reach it from outside this compose network (e.g. from the
       # Mac, over Tailscale).
       CHROMADB_HOST: http://chromadb:8000
+      # Redis Phase 3 (deferred.md #9-11) — same "runs natively on
+      # Windows, reach it via host.docker.internal" shape as OLLAMA_HOST
+      # above, not a compose service. See app/cache/service.py.
+      REDIS_URL: redis://:${REDIS_PASSWORD:-}@host.docker.internal:6379
       # Block 10 (Dify) — all optional at the compose level: unset
       # means the corresponding env var is simply absent inside the
       # container, which ai_service already handles as "not configured
