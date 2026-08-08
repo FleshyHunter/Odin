@@ -195,9 +195,17 @@ async def generate_dag(topic: str, intake_context: IntakeContext | None = None) 
     attempt — this matches the already-locked "skip diagnostic ->
     trust the self-report as-is" fallback (PRD.md, Onboarding
     Diagnostic Step 1), not a new behavior invented here.
+
+    The concepts list itself ALSO gets validated now (deferred.md #6) —
+    every ConceptNode.prerequisites title must match another concept's
+    title in the same response, same retry-once loop. Unlike a bad
+    diagnostic exercise, a dangling prerequisite reference can't fail
+    open — there's no DAG left to teach from — so a second failure
+    raises for real instead of silently continuing.
     """
     validation_error = ""
     result: dict = {}
+    concepts: list[ConceptNode] = []
     diagnostic_primary_raw = None
     diagnostic_backup_raw = None
 
@@ -205,11 +213,13 @@ async def generate_dag(topic: str, intake_context: IntakeContext | None = None) 
         prompt = _build_generate_dag_prompt(topic, intake_context, validation_error)
         outputs = await call_dify_workflow(DIFY_DAG_API_KEY_ENV, {"prompt": prompt})
         result = parse_json_output(outputs.get("result", "{}"))
+        concepts = [ConceptNode(**c) for c in result.get("concepts", [])]
 
         diagnostic_primary_raw = result.get("diagnostic_primary") if intake_context is not None else None
         diagnostic_backup_raw = result.get("diagnostic_backup") if intake_context is not None else None
 
         try:
+            _validate_dag_prerequisites(concepts)
             if diagnostic_primary_raw:
                 _validate_schema(diagnostic_primary_raw)
                 _sanity_check_instantiation(diagnostic_primary_raw)
@@ -220,11 +230,16 @@ async def generate_dag(topic: str, intake_context: IntakeContext | None = None) 
         except TemplateValidationError as e:
             validation_error = str(e)
             logger.info(
-                "generate_dag: diagnostic exercise validation failed (attempt %d): %s",
+                "generate_dag: validation failed (attempt %d): %s",
                 attempt + 1,
                 validation_error,
             )
             if attempt >= MAX_VALIDATION_RETRIES:
+                # A dangling-prerequisite failure means the DAG itself
+                # is unusable — re-check in isolation so it can't be
+                # masked by (and can't itself mask) a diagnostic-only
+                # failure, which CAN still fail open below.
+                _validate_dag_prerequisites(concepts)
                 diagnostic_primary_raw = None
                 diagnostic_backup_raw = None
                 logger.info(
@@ -232,7 +247,6 @@ async def generate_dag(topic: str, intake_context: IntakeContext | None = None) 
                     MAX_VALIDATION_RETRIES + 1,
                 )
 
-    concepts = [ConceptNode(**c) for c in result.get("concepts", [])]
     diagnostic_primary = ExerciseTemplate(**diagnostic_primary_raw) if diagnostic_primary_raw else None
     diagnostic_backup = ExerciseTemplate(**diagnostic_backup_raw) if diagnostic_backup_raw else None
 
@@ -242,6 +256,108 @@ async def generate_dag(topic: str, intake_context: IntakeContext | None = None) 
         diagnostic_primary=diagnostic_primary,
         diagnostic_backup=diagnostic_backup,
     )
+
+
+# Onboarding Diagnostic Steps 3-4 (PRD.md) — deferred.md #4. Reuses
+# DIFY_DAG_API_KEY, NOT a new Dify app: the workflow behind that key is
+# already a generic prompt-in/JSON-out pass-through (see
+# call_dify_workflow's own doc comment), so a different prompt to the
+# SAME app is all "adjusting" a DAG actually needs — no new Dify-side
+# setup required. Only called when the cheap, deterministic fallback
+# (reassign the entry point to an already-lower-difficulty_level
+# concept already present in the draft) finds nothing to fall back to —
+# i.e. the draft DAG came back genuinely missing foundational coverage
+# because it was scoped for a self-reported level that turned out wrong.
+_ADJUST_DAG_TASK_TEMPLATE = """A student's diagnostic assessment revealed their actual level doesn't match what they initially claimed for this learning path: {topic}
+
+Here is the current draft learning path (JSON array of concepts already generated):
+{concepts_json}
+
+Diagnostic outcome: {reason}
+
+Extend this SAME learning path by adding real foundational/prerequisite concepts BEFORE the current entry point ("{entry_concept}") — do not discard or restructure the existing concepts, only ADD what's missing underneath so a genuine beginner has somewhere real to start. The existing concepts and their relationships must remain intact and still valid.
+
+For each concept in your response (existing AND newly added), provide: title, description, difficulty_level (integer 1-5), learning_objective, and prerequisites (a list of OTHER concept titles from this FULL updated list that must come before it). Set entry_concept to whichever concept — almost certainly one of the newly-added ones — a genuine beginner should now start with."""
+
+_ADJUST_DAG_OUTPUT_FORMAT = """
+Respond with ONLY a single valid JSON object, no other text, no markdown fences:
+{
+  "concepts": [ ...ALL concepts, existing and new, as described above... ],
+  "entry_concept": "title of the concept a genuine beginner should now start with"
+}"""
+
+
+def _build_adjust_dag_prompt(topic: str, draft: DAGResult, reason: str, validation_error: str = "") -> str:
+    concepts_json = json.dumps([c.model_dump() for c in draft.concepts])
+    prompt = _ADJUST_DAG_TASK_TEMPLATE.format(
+        topic=topic, concepts_json=concepts_json, reason=reason, entry_concept=draft.entry_concept
+    ) + _ADJUST_DAG_OUTPUT_FORMAT
+
+    if validation_error:
+        prompt += (
+            f"\n\nYour previous attempt's response failed validation: {validation_error}\n"
+            "Fix this specific issue in your new response."
+        )
+
+    return prompt
+
+
+async def adjust_dag(topic: str, draft: DAGResult, reason: str) -> DAGResult:
+    """Onboarding Diagnostic Steps 3-4's DAG-repair call (PRD.md,
+    deferred.md #4) — extends an already-generated draft DAG with real
+    foundational concepts, rather than discarding it for a from-scratch
+    "beginner DAG". Reuses generate_dag()'s own #6 dangling-prerequisite
+    validation (same TemplateValidationError-based retry-once loop) —
+    a DAG missing foundational content is bad, but a DAG with a
+    dangling prerequisite reference is broken, and this is the only
+    other place that ever parses a DAG-shaped Dify response.
+
+    No diagnostic exercises are requested or returned here — Step 2's
+    diagnostic already ran and produced the contradiction this call is
+    responding to; the caller (Rust) keeps using that same result.
+
+    Dify workflow contract: identical to generate_dag()'s — ONE input
+    variable "prompt", ONE output variable "result" (a JSON object with
+    "concepts" and "entry_concept" only, no diagnostic fields).
+    """
+    validation_error = ""
+    result: dict = {}
+
+    for attempt in range(MAX_VALIDATION_RETRIES + 1):
+        prompt = _build_adjust_dag_prompt(topic, draft, reason, validation_error)
+        outputs = await call_dify_workflow(DIFY_DAG_API_KEY_ENV, {"prompt": prompt})
+        result = parse_json_output(outputs.get("result", "{}"))
+
+        try:
+            concepts = [ConceptNode(**c) for c in result.get("concepts", [])]
+            _validate_dag_prerequisites(concepts)
+            return DAGResult(concepts=concepts, entry_concept=result.get("entry_concept", ""))
+        except TemplateValidationError as e:
+            validation_error = str(e)
+            logger.info("adjust_dag: validation failed (attempt %d): %s", attempt + 1, validation_error)
+
+    # Unlike generate_dag()'s diagnostic-only fail-open: there is no
+    # safe fail-open here (the whole point of this call is producing a
+    # usable DAG) — a second failure is a real error the caller must
+    # see, not something to quietly paper over.
+    raise TemplateValidationError(f"adjust_dag: validation failed after retry: {validation_error}")
+
+
+def _validate_dag_prerequisites(concepts: list[ConceptNode]) -> None:
+    """deferred.md #6 — a ConceptNode's prerequisites list can reference
+    a title that doesn't exactly match any other concept's title in the
+    same response: structurally valid (Pydantic only checks it's a list
+    of strings) but a dangling reference, same class of bug as the
+    exercise-template placeholder-consistency issue (problems.md #32).
+    Shared by generate_dag() and adjust_dag() — the only two places that
+    ever produce a DAG-shaped response."""
+    titles = {c.title for c in concepts}
+    for concept in concepts:
+        for prereq in concept.prerequisites:
+            if prereq not in titles:
+                raise TemplateValidationError(
+                    f"concept {concept.title!r} lists prerequisite {prereq!r}, which doesn't match any concept's title"
+                )
 
 
 def _validate_schema(template: dict) -> None:

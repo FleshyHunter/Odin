@@ -30,6 +30,7 @@ export function ChatView() {
   const { messages, isSending, send, composerNotice, dismissComposerNotice } = useTrackMessages(activeTrackId);
   const { width: panelWidth, setWidth: setPanelWidth, isOpen: isPanelOpen, toggle: togglePanel } = useActivePanel();
   const resizeHandleRef = useRef<HTMLDivElement>(null);
+  const activePanelShellRef = useRef<HTMLDivElement>(null);
 
   const [exercise, setExercise] = useState<Exercise | null>(null);
   const [mastery, setMastery] = useState<MasteryStatus | null>(null);
@@ -100,11 +101,25 @@ export function ChatView() {
   // refuses to shrink either past its floor, so this only needs to track
   // the drag delta and let setWidth clamp against the same floor for the
   // persisted value itself (see useActivePanel).
+  //
+  // .active-panel-shell's own CSS has `transition: width 0.2s ease`,
+  // meant for the discrete open/close toggle — but with no guard, that
+  // SAME transition was also active during a live drag, and since
+  // handleMouseMove below calls setPanelWidth on every mousemove (many
+  // times a second), each one retargets the transition mid-flight,
+  // fighting itself: visibly glitchy/laggy while dragging wider, and a
+  // stray gap on the right while dragging narrower (found live, this
+  // session). The `resizing` class disables the transition for exactly
+  // the duration of the drag, so width tracks the cursor 1:1 with zero
+  // interpolation lag; removing it on mouseup restores the smooth
+  // transition for the NEXT discrete open/close toggle, which never
+  // fights a rapid-fire state update the way a drag does.
   const handleResizeStart = (event: React.MouseEvent<HTMLDivElement>) => {
     event.preventDefault();
     const startX = event.clientX;
     const startWidth = panelWidth;
     resizeHandleRef.current?.classList.add('resizing');
+    activePanelShellRef.current?.classList.add('resizing');
     document.body.style.cursor = 'col-resize';
     document.body.style.userSelect = 'none';
 
@@ -116,6 +131,7 @@ export function ChatView() {
     };
     const handleMouseUp = () => {
       resizeHandleRef.current?.classList.remove('resizing');
+      activePanelShellRef.current?.classList.remove('resizing');
       document.body.style.cursor = '';
       document.body.style.userSelect = '';
       document.removeEventListener('mousemove', handleMouseMove);
@@ -166,6 +182,7 @@ export function ChatView() {
       </main>
 
       <div
+        ref={activePanelShellRef}
         className={isPanelOpen ? 'active-panel-shell active-panel-shell-open' : 'active-panel-shell'}
         style={{ width: isPanelOpen ? panelWidth + 5 : 0 }}
         aria-hidden={!isPanelOpen}

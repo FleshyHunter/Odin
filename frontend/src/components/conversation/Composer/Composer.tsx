@@ -1,7 +1,9 @@
-import { useEffect, useRef, useState, type KeyboardEvent } from 'react';
+import { useEffect, useRef, useState, type ChangeEvent, type KeyboardEvent } from 'react';
 import { useVoiceInput } from '../../../hooks/useVoiceInput';
 import { ComposerNotice } from './ComposerNotice';
-import type { ComposerNoticeData } from '../../../types';
+import { AttachmentRow } from './AttachmentRow/AttachmentRow';
+import { UploadRoleModal } from './UploadRoleModal/UploadRoleModal';
+import type { Attachment, ComposerNoticeData, PendingFile, UploadRole } from '../../../types';
 import './composer.css';
 
 interface ComposerProps {
@@ -15,12 +17,40 @@ interface ComposerProps {
   onStop?: () => void;
   notice?: ComposerNoticeData | null;
   onDismissNotice?: () => void;
+  // deferred.md #37 (memoryless-only this pass — see plan doc). All
+  // optional and only rendered when provided, so the track-mode call site
+  // (ChatView.tsx, still fully mocked) stays exactly as it was — same
+  // pattern already used for onStop above.
+  attachments?: Attachment[];
+  pendingFiles?: PendingFile[];
+  onAttachFiles?: (files: File[]) => void;
+  onConfirmAttachRole?: (pendingId: string, role: UploadRole) => void;
+  onCancelPendingFile?: (pendingId: string) => void;
+  onRemoveAttachment?: (attachmentId: string) => void;
+  onRetryAttachment?: (attachmentId: string) => void;
 }
 
-export function Composer({ onSend, disabled, isSending, onStop, notice, onDismissNotice }: ComposerProps) {
+export function Composer({
+  onSend,
+  disabled,
+  isSending,
+  onStop,
+  notice,
+  onDismissNotice,
+  attachments,
+  pendingFiles,
+  onAttachFiles,
+  onConfirmAttachRole,
+  onCancelPendingFile,
+  onRemoveAttachment,
+  onRetryAttachment,
+}: ComposerProps) {
   const [value, setValue] = useState('');
   const { status, startRecording, stopRecording } = useVoiceInput();
   const textareaRef = useRef<HTMLTextAreaElement>(null);
+  const fileInputRef = useRef<HTMLInputElement>(null);
+  const attachEnabled = onAttachFiles !== undefined;
+  const currentPendingFile = pendingFiles && pendingFiles.length > 0 ? pendingFiles[0] : null;
 
   // Auto-grow: starts at one row (matches the previous single-line input's
   // height), grows with content. The actual cap (50% of the .conversation
@@ -67,13 +97,40 @@ export function Composer({ onSend, disabled, isSending, onStop, notice, onDismis
     }
   };
 
+  const handleAttachClick = () => {
+    fileInputRef.current?.click();
+  };
+
+  const handleFileInputChange = (event: ChangeEvent<HTMLInputElement>) => {
+    const files = event.target.files;
+    if (files && files.length > 0) {
+      onAttachFiles?.(Array.from(files));
+    }
+    // Reset so selecting the exact same file again still fires onChange.
+    event.target.value = '';
+  };
+
   const frameClassName = notice
     ? `composer-frame composer-frame-with-notice composer-frame-${notice.tone}`
     : 'composer-frame';
 
   return (
     <div className="composer">
+      {attachEnabled && (
+        <UploadRoleModal
+          file={currentPendingFile?.file ?? null}
+          onSelectRole={(role) => currentPendingFile && onConfirmAttachRole?.(currentPendingFile.id, role)}
+          onClose={() => currentPendingFile && onCancelPendingFile?.(currentPendingFile.id)}
+        />
+      )}
       <div className={frameClassName}>
+        {attachEnabled && attachments && attachments.length > 0 && (
+          <AttachmentRow
+            attachments={attachments}
+            onRemove={(id) => onRemoveAttachment?.(id)}
+            onRetry={(id) => onRetryAttachment?.(id)}
+          />
+        )}
         {notice && (
           <ComposerNotice
             tone={notice.tone}
@@ -97,9 +154,21 @@ export function Composer({ onSend, disabled, isSending, onStop, notice, onDismis
 
             <div className="composer-toolbar">
               <div className="composer-toolbar-left">
-                {/* No defined behavior yet (Claude's reference opens an
-                    attachment/tools menu) — placeholder affordance only. */}
-                <button className="icon-btn" aria-label="Add" disabled={disabled}>
+                {attachEnabled && (
+                  <input
+                    ref={fileInputRef}
+                    type="file"
+                    multiple
+                    hidden
+                    onChange={handleFileInputChange}
+                  />
+                )}
+                <button
+                  className="icon-btn"
+                  aria-label="Add"
+                  onClick={attachEnabled ? handleAttachClick : undefined}
+                  disabled={disabled || !attachEnabled}
+                >
                   <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.8}>
                     <line x1="12" y1="5" x2="12" y2="19" />
                     <line x1="5" y1="12" x2="19" y2="12" />

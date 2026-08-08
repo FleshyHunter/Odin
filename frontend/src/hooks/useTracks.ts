@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import * as tracksApi from '../api/tracks';
 import { ApiError } from '../api/client';
-import type { ChatMessage, ComposerNoticeData, Track } from '../types';
+import type { ChatMessage, ComposerNoticeData, Track, TrackIntake } from '../types';
 
 export function useTracks() {
   const [tracks, setTracks] = useState<Track[]>([]);
@@ -37,9 +37,9 @@ export function useTracks() {
     setTracks((prev) => prev.filter((t) => t.id !== trackId));
   }, []);
 
-  const createTrack = useCallback(async (title: string) => {
+  const createTrack = useCallback(async (title: string, intake: TrackIntake | null) => {
     await initialLoadRef.current;
-    const track = await tracksApi.createTrack(title);
+    const track = await tracksApi.createTrack(title, intake);
     setTracks((prev) => [...prev, track]);
     return track;
   }, []);

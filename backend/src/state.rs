@@ -77,6 +77,9 @@ pub struct AppState {
     pub signup_rate_limit: (u32, u64),
     pub password_reset_rate_limit: (u32, u64),
     pub otp_verify_attempt_limit: u32,
+    // deferred.md #4: TTL for Redis-staged onboarding diagnostics — see
+    // config.rs's own comment.
+    pub onboarding_diagnostic_ttl_minutes: i64,
 }
 
 impl AppState {
@@ -112,6 +115,7 @@ impl AppState {
             signup_rate_limit: config.signup_rate_limit,
             password_reset_rate_limit: config.password_reset_rate_limit,
             otp_verify_attempt_limit: config.otp_verify_attempt_limit,
+            onboarding_diagnostic_ttl_minutes: config.onboarding_diagnostic_ttl_minutes,
         }
     }
 

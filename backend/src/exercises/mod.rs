@@ -6,7 +6,10 @@
 
 pub mod errors;
 mod handlers;
-mod service;
+// deferred.md #4: journeys::service reuses get_or_generate/fetch_one_canonical
+// directly for an existing subject's diagnostic exercise — a diagnostic IS
+// just another canonical exercise template, not a separate concept.
+pub(crate) mod service;
 
 use axum::{routing::post, Router};
 

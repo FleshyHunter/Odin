@@ -498,7 +498,7 @@ struct GenerateDagRequest {
     intake_context: Option<IntakeContext>,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct DAGResult {
     pub concepts: Vec<ConceptNode>,
     pub entry_concept: String,
@@ -525,6 +525,54 @@ pub async fn generate_dag(
             topic,
             intake_context,
         })
+        .send()
+        .await
+        .map_err(|_| AiClientError::ServiceUnavailable)?;
+
+    if !response.status().is_success() {
+        return Err(AiClientError::UnexpectedResponse(format!(
+            "status {}",
+            response.status()
+        )));
+    }
+
+    let body: DAGResult = response
+        .json()
+        .await
+        .map_err(|err| AiClientError::UnexpectedResponse(err.to_string()))?;
+
+    Ok(body)
+}
+
+#[derive(Serialize)]
+struct AdjustDagRequest {
+    topic: String,
+    draft: DAGResult,
+    reason: String,
+}
+
+/// Calls FastAPI's POST /adjust_dag (deferred.md #4/#6) — Onboarding
+/// Diagnostic Steps 3-4's DAG-repair call, used only when a confirmed
+/// downgrade finds no already-present concept in the draft DAG with a
+/// lower `difficulty_level` than the current entry concept to fall back
+/// to. Reuses the SAME `DIFY_DAG_API_KEY`/Dify app as `generate_dag()` —
+/// a different prompt to the same generic prompt-in/JSON-out workflow,
+/// not a new Dify app. Extends the existing draft (adds real
+/// foundational concepts underneath it) rather than replacing it, so
+/// whatever advanced content the student's stated goal still needs
+/// isn't discarded.
+pub async fn adjust_dag(
+    client: &reqwest::Client,
+    ai_service_url: &str,
+    topic: String,
+    draft: DAGResult,
+    reason: String,
+) -> Result<DAGResult, AiClientError> {
+    let url = format!("{ai_service_url}/adjust_dag");
+
+    let response = client
+        .post(&url)
+        .json(&AdjustDagRequest { topic, draft, reason })
         .send()
         .await
         .map_err(|_| AiClientError::ServiceUnavailable)?;

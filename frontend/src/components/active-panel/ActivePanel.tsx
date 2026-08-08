@@ -1,10 +1,11 @@
 import { useState } from 'react';
 import type { Exercise, MasteryStatus } from '../../types';
+import { KivReview } from '../kiv/KivReview';
 import { Roadmap } from '../roadmap/Roadmap';
 import { ExerciseCard } from './ExerciseCard';
 import { MasteryBar } from './MasteryBar';
 
-type PanelTab = 'now' | 'map';
+type PanelTab = 'now' | 'map' | 'kiv';
 
 interface ActivePanelProps {
   exercise: Exercise | null;
@@ -25,6 +26,9 @@ export function ActivePanel({ exercise, mastery, onSubmitAnswer, width }: Active
         <button className={tab === 'map' ? 'tab active' : 'tab'} onClick={() => setTab('map')}>
           Map
         </button>
+        <button className={tab === 'kiv' ? 'tab active' : 'tab'} onClick={() => setTab('kiv')}>
+          KIV
+        </button>
       </div>
 
       {tab === 'now' && (
@@ -38,6 +42,7 @@ export function ActivePanel({ exercise, mastery, onSubmitAnswer, width }: Active
       )}
 
       {tab === 'map' && <Roadmap />}
+      {tab === 'kiv' && <KivReview />}
     </aside>
   );
 }

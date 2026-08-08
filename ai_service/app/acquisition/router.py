@@ -3,7 +3,13 @@ from pydantic import BaseModel
 
 from app.acquisition.dify_client import DifyError, DifyNotConfigured
 from app.acquisition.models import Chunk, ConceptMeta, DAGResult, ExerciseTemplate, IntakeContext, Resource
-from app.acquisition.service import acquire, generate_dag, generate_exercise_template
+from app.acquisition.service import (
+    TemplateValidationError,
+    acquire,
+    adjust_dag,
+    generate_dag,
+    generate_exercise_template,
+)
 
 router = APIRouter()
 
@@ -19,6 +25,12 @@ class AcquireResponse(BaseModel):
 class GenerateDagRequest(BaseModel):
     topic: str
     intake_context: IntakeContext | None = None
+
+
+class AdjustDagRequest(BaseModel):
+    topic: str
+    draft: DAGResult
+    reason: str
 
 
 class GenerateExerciseTemplateRequest(BaseModel):
@@ -56,6 +68,22 @@ async def generate_dag_endpoint(request: GenerateDagRequest) -> DAGResult:
         return await generate_dag(request.topic, request.intake_context)
     except DifyError as e:
         raise _dify_error_to_http(e) from e
+    except TemplateValidationError as e:
+        # deferred.md #6 — a dangling prerequisite reference survived
+        # the retry-once loop. Unlike a bad diagnostic exercise, there's
+        # no DAG left to fail open to — a real 422 the caller must
+        # handle, not a 200 with something silently broken inside it.
+        raise HTTPException(status_code=422, detail=str(e)) from e
+
+
+@router.post("/adjust_dag", response_model=DAGResult)
+async def adjust_dag_endpoint(request: AdjustDagRequest) -> DAGResult:
+    try:
+        return await adjust_dag(request.topic, request.draft, request.reason)
+    except DifyError as e:
+        raise _dify_error_to_http(e) from e
+    except TemplateValidationError as e:
+        raise HTTPException(status_code=422, detail=str(e)) from e
 
 
 @router.post("/generate_exercise_template", response_model=GenerateExerciseTemplateResponse)

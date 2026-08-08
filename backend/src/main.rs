@@ -2,12 +2,12 @@
 // real feature needing embeddings until a much later block (ingestion/
 // chunking) — verification of the actual live call is deferred too, per
 // this pass's explicit scope (code only, not yet wired to a route).
-// analyze_input()/generate()/generate_stream() (memoryless chat turns)
-// and generate_exercise_template()/ingest() (Block 12: exercises/,
-// uploads/) are now used; embed()/transcribe()/acquire()/generate_dag()/
-// grade() still have no Rust caller until later blocks wire ingestion/
-// onboarding/grading routes, hence the module-level allow still covers
-// the rest.
+// analyze_input()/generate()/generate_stream() (memoryless chat turns),
+// generate_exercise_template()/ingest() (Block 12: exercises/, uploads/),
+// and generate_dag()/adjust_dag()/grade() (deferred.md #4: journeys::)
+// are now used; embed()/transcribe()/acquire() still have no Rust caller
+// until later blocks wire ingestion/acquisition routes, hence the
+// module-level allow still covers the rest.
 #[allow(dead_code)]
 mod ai_client;
 mod auth;
@@ -15,6 +15,7 @@ mod config;
 mod content_flags;
 mod db;
 mod exercises;
+mod journeys;
 mod memoryless;
 mod models;
 mod routes;
@@ -125,6 +126,7 @@ async fn main() {
         .merge(uploads::router(config.memoryless_staged_upload_max_mb))
         .merge(exercises::router())
         .merge(content_flags::router())
+        .merge(journeys::router())
         .layer(cors)
         .with_state(app_state);
 

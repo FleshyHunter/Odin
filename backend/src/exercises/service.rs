@@ -153,7 +153,7 @@ async fn fetch_canonical_templates(pool: &PgPool, concept_id: Uuid) -> Result<Ve
     Ok(rows.into_iter().map(ExerciseTemplateRow::into_template).collect())
 }
 
-async fn fetch_one_canonical(
+pub(crate) async fn fetch_one_canonical(
     pool: &PgPool,
     concept_id: Uuid,
     difficulty: &str,

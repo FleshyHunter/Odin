@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import * as memorylessApi from '../api/memoryless';
-import type { ChatMessage, ComposerNoticeData } from '../types';
+import * as uploadsApi from '../api/uploads';
+import type { Attachment, ChatMessage, ComposerNoticeData, PendingFile, UploadRole } from '../types';
 
 // Real memoryless chat (deferred.md #51) — the /chat landing composer's
 // previous onSend={() => {}} no-op replaced with the actual backend
@@ -24,6 +25,8 @@ export function useMemorylessChat(initialThreadId: string | null = null, onThrea
   const [isSending, setIsSending] = useState(false);
   const [isHydrating, setIsHydrating] = useState(initialThreadId !== null);
   const [composerNotice, setComposerNotice] = useState<ComposerNoticeData | null>(null);
+  const [pendingFiles, setPendingFiles] = useState<PendingFile[]>([]);
+  const [attachments, setAttachments] = useState<Attachment[]>([]);
   const threadIdRef = useRef<string | null>(initialThreadId);
   const abortRef = useRef<AbortController | null>(null);
   // Set right when THIS hook's own send() learns a brand new thread_id
@@ -167,5 +170,106 @@ export function useMemorylessChat(initialThreadId: string | null = null, onThrea
 
   const dismissComposerNotice = useCallback(() => setComposerNotice(null), []);
 
-  return { messages, isSending, isHydrating, send, cancel, composerNotice, dismissComposerNotice };
+  // Shared by confirmAttachRole (first attempt) and retryAttachment (same
+  // file, same role, tried again) — the only difference between those two
+  // callers is where the Attachment entry already exists (retry) vs. still
+  // needs creating (first attempt), so the actual upload+outcome handling
+  // lives here once.
+  const runUpload = useCallback(
+    async (id: string, file: File, role: UploadRole) => {
+      try {
+        const result = await uploadsApi.uploadFile(file, role, threadIdRef.current);
+        // Same reconciliation as send()'s onThreadId handler above: a
+        // staged upload can create a brand-new thread just as easily as a
+        // message can, if this is the very first thing the user does.
+        if (result.threadId) {
+          const isNewThread = threadIdRef.current !== result.threadId;
+          threadIdRef.current = result.threadId;
+          if (isNewThread) {
+            justCreatedRef.current = true;
+            onThreadId?.(result.threadId);
+          }
+        }
+        setAttachments((prev) =>
+          prev.map((a) =>
+            a.id === id ? { ...a, status: 'ready', chunkCount: result.chunkCount, deduped: result.deduped } : a,
+          ),
+        );
+      } catch (err) {
+        setAttachments((prev) =>
+          prev.map((a) =>
+            a.id === id
+              ? { ...a, status: 'error', errorMessage: err instanceof Error ? err.message : 'Upload failed.' }
+              : a,
+          ),
+        );
+      }
+    },
+    [onThreadId],
+  );
+
+  // Queues files the instant they're selected/dropped — no upload yet,
+  // just makes them available for the role picker (Composer renders one
+  // for pendingFiles[0] and advances through the rest sequentially, per
+  // the "asked at upload time," one-modal-per-file decision).
+  const requestAttach = useCallback((files: File[]) => {
+    const queued = files.map((file) => ({ id: crypto.randomUUID(), file }));
+    setPendingFiles((prev) => [...prev, ...queued]);
+  }, []);
+
+  // Fires once a role is picked for a queued file — moves it out of the
+  // pending queue and into `attachments` as 'uploading', then kicks off
+  // the real POST /uploads.
+  const confirmAttachRole = useCallback(
+    (pendingId: string, role: UploadRole) => {
+      const pending = pendingFiles.find((p) => p.id === pendingId);
+      if (!pending) return;
+      setPendingFiles((prev) => prev.filter((p) => p.id !== pendingId));
+      setAttachments((prev) => [...prev, { id: pending.id, file: pending.file, role, status: 'uploading' }]);
+      void runUpload(pending.id, pending.file, role);
+    },
+    [pendingFiles, runUpload],
+  );
+
+  // Dismisses a file BEFORE its role was ever picked (e.g. closing the
+  // modal) — nothing was uploaded, so this is a full, clean undo.
+  const cancelPendingFile = useCallback((pendingId: string) => {
+    setPendingFiles((prev) => prev.filter((p) => p.id !== pendingId));
+  }, []);
+
+  const retryAttachment = useCallback(
+    (attachmentId: string) => {
+      const attachment = attachments.find((a) => a.id === attachmentId);
+      if (!attachment) return;
+      setAttachments((prev) =>
+        prev.map((a) => (a.id === attachmentId ? { ...a, status: 'uploading', errorMessage: undefined } : a)),
+      );
+      void runUpload(attachment.id, attachment.file, attachment.role);
+    },
+    [attachments, runUpload],
+  );
+
+  // UI-only: an already-uploaded staged attachment has no unstage/DELETE
+  // endpoint, so dismissing its card doesn't remove it from the thread's
+  // Redis blob — only hides it from this composer's own view.
+  const removeAttachment = useCallback((attachmentId: string) => {
+    setAttachments((prev) => prev.filter((a) => a.id !== attachmentId));
+  }, []);
+
+  return {
+    messages,
+    isSending,
+    isHydrating,
+    send,
+    cancel,
+    composerNotice,
+    dismissComposerNotice,
+    pendingFiles,
+    attachments,
+    requestAttach,
+    confirmAttachRole,
+    cancelPendingFile,
+    retryAttachment,
+    removeAttachment,
+  };
 }

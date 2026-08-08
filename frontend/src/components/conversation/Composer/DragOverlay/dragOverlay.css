@@ -1,0 +1,40 @@
+.drag-overlay {
+  position: absolute;
+  inset: 0;
+  z-index: 20;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 1.5rem;
+  background: rgb(0 0 0 / 0.55);
+  backdrop-filter: blur(2px);
+  /* Purely visual — the actual dragenter/dragover/dragleave/drop
+     listeners live on the container this overlay sits inside (see
+     MemorylessLanding.tsx), not on the overlay itself. Letting pointer
+     events pass through avoids a dragleave-on-overlay-appearing/
+     disappearing flicker loop as the cursor crosses this element's own
+     edges mid-drag. */
+  pointer-events: none;
+}
+
+.drag-overlay-box {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 0.7rem;
+  padding: 2.5rem 3rem;
+  color: var(--text);
+  border: 2px dashed var(--glow);
+  border-radius: 16px;
+  background: rgb(232 183 106 / 0.06);
+}
+
+.drag-overlay-box svg {
+  color: var(--glow);
+}
+
+.drag-overlay-box p {
+  margin: 0;
+  font-size: 0.95rem;
+  font-weight: 500;
+}

@@ -91,6 +91,12 @@ pub struct Config {
     // A bare count, not a window — "5 OTP verify attempts before
     // forcing a fresh code," not "5 per some time period."
     pub otp_verify_attempt_limit: u32,
+    // deferred.md #4: how long a Redis-staged Onboarding Diagnostic
+    // (journeys::staging) survives between `/journeys/start` and the
+    // student actually answering — same "not yet durable, Redis-only
+    // until finalized" shape as memoryless staging, but its own env var
+    // since these are unrelated flows with no reason to share a value.
+    pub onboarding_diagnostic_ttl_minutes: i64,
 }
 
 impl Config {
@@ -211,6 +217,10 @@ impl Config {
             .ok()
             .and_then(|v| v.parse().ok())
             .unwrap_or(5);
+        let onboarding_diagnostic_ttl_minutes = env::var("ONBOARDING_DIAGNOSTIC_TTL_MINUTES")
+            .ok()
+            .and_then(|v| v.parse().ok())
+            .unwrap_or(30);
 
         Self {
             database_url,
@@ -239,6 +249,7 @@ impl Config {
             signup_rate_limit,
             password_reset_rate_limit,
             otp_verify_attempt_limit,
+            onboarding_diagnostic_ttl_minutes,
         }
     }
 }

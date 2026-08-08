@@ -5,7 +5,7 @@ import { useTracks } from '../../hooks/useTracks';
 import { useProjects } from '../../hooks/useProjects';
 import { TrackModal } from '../../components/tracks/TrackModal/TrackModal';
 import { ChangeProjectModal } from '../../components/tracks/ChangeProjectModal/ChangeProjectModal';
-import type { Track } from '../../types';
+import type { Track, TrackIntake } from '../../types';
 import './Session.css';
 
 interface SessionLayoutProps {
@@ -19,7 +19,7 @@ export interface SessionOutletContext {
   activeTrackId: string;
   activeTrack: Track | null;
   setActiveTrackId: (id: string) => void;
-  createTrack: (title: string) => Promise<Track>;
+  createTrack: (title: string, intake: TrackIntake | null) => Promise<Track>;
   removeTrack: (id: string) => Promise<void>;
   togglePin: (id: string) => Promise<void>;
   renameTrack: (id: string, title: string) => Promise<void>;
@@ -79,8 +79,8 @@ export function SessionLayout({ profileName, email, onSignOut }: SessionLayoutPr
   const openChangeProjectModal = (trackId: string) => setChangeProjectTrackId(trackId);
   const changeProjectTrack = tracks.find((track) => track.id === changeProjectTrackId) ?? null;
 
-  const handleCreateTrack = async (title: string) => {
-    const track = await createTrack(title);
+  const handleCreateTrack = async (title: string, intake: TrackIntake | null) => {
+    const track = await createTrack(title, intake);
     setPinnedActive(false);
     navigate(`/chat/${track.id}`);
     setActiveTrackId(track.id);

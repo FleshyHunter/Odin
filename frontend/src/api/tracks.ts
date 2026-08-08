@@ -1,4 +1,4 @@
-import type { ChatMessage, Track } from '../types';
+import type { ChatMessage, Track, TrackIntake } from '../types';
 import { ApiError, simulateDelay } from './client';
 
 // In-memory only — stands in for a real backend/DB row set. Normally
@@ -25,11 +25,15 @@ export async function listTracks(): Promise<Track[]> {
   return simulateDelay([...tracks]);
 }
 
-// Real contract: POST /tracks { title } -> Track
-// subjectTitle mirrors title for now — there's no real subject/DAG
-// creation flow yet (Flow 4, ARCHITECTURE_LOCK.md), so a fresh track has
-// no canonical subject or concept assigned until that exists.
-export async function createTrack(title: string): Promise<Track> {
+// Real contract: POST /journeys/start { topic, level, goal, background }
+// (backend/src/journeys — deferred.md #4), not yet wired up here —
+// `intake` is accepted so TrackModal's real Level/Goal/Background fields
+// (deferred.md #40) have somewhere to go, but this mock discards it and
+// keeps behaving exactly as before. subjectTitle mirrors title for now —
+// there's no real subject/DAG creation flow wired to the frontend yet
+// (Flow 4, ARCHITECTURE_LOCK.md), so a fresh track has no canonical
+// subject or concept assigned until that happens.
+export async function createTrack(title: string, _intake: TrackIntake | null): Promise<Track> {
   const track: Track = {
     id: `track-${Date.now()}`,
     title,

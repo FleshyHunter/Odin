@@ -3,8 +3,15 @@
    MessageBubble itself), so no extra scoping prefix is needed the way
    Composer's .icon-btn/.send-btn needed one. */
 
-.msg { max-width: 640px; display: flex; gap: 0.7rem; }
-.msg .bubble { font-size: 0.92rem; line-height: 1.55; }
+/* min-width: 0 overrides flex items' default min-width: auto, which
+   refuses to shrink below the content's intrinsic size — without it, a
+   single long unbroken run of characters (no spaces to wrap at, e.g. a
+   URL or garbled text) forces .msg past its own max-width instead of
+   respecting it, blowing out the centered column entirely. overflow-
+   wrap lets the browser break inside that run once it's actually out of
+   room, rather than only ever breaking at whitespace. */
+.msg { max-width: 640px; display: flex; gap: 0.7rem; min-width: 0; }
+.msg .bubble { font-size: 0.92rem; line-height: 1.55; min-width: 0; overflow-wrap: break-word; }
 
 .msg.tutor .bubble-avatar {
   width: 26px; height: 26px; border-radius: 50%;
@@ -24,6 +31,12 @@
   padding: 0.7rem 0.95rem; border-radius: 12px 12px 3px 12px;
   color: var(--text);
 }
-.msg.tutor .bubble { color: var(--text); padding-top: 0.1rem; }
+/* One-sided inner padding (right only) — tutor's bubble has no
+   background/border so its LEFT side already gets breathing room from
+   .msg's own avatar gap; this is the missing counterpart on the right,
+   so text doesn't run all the way out to .messages-inner's own wall
+   padding with nothing in between. Same horizontal value as student's
+   own bubble padding, for consistency between the two. */
+.msg.tutor .bubble { color: var(--text); padding: 0.1rem 0.95rem 0 0; }
 
 .msg .bubble .term { color: var(--glow); font-style: normal; font-weight: 500; }

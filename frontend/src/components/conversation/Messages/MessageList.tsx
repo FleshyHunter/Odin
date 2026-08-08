@@ -16,11 +16,13 @@ export function MessageList({ messages }: MessageListProps) {
 
   return (
     <div className="messages">
-      {messages.length === 0 && <p className="panel-footnote">Say something to get started.</p>}
-      {messages.map((message) => (
-        <MessageBubble key={message.id} message={message} />
-      ))}
-      <div ref={endRef} />
+      <div className="messages-inner">
+        {messages.length === 0 && <p className="panel-footnote">Say something to get started.</p>}
+        {messages.map((message) => (
+          <MessageBubble key={message.id} message={message} />
+        ))}
+        <div ref={endRef} />
+      </div>
     </div>
   );
 }

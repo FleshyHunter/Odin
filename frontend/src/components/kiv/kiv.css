@@ -1,0 +1,174 @@
+.kiv-review {
+  display: flex;
+  flex-direction: column;
+}
+
+.kiv-prompt {
+  background: var(--surface);
+  border: 1px solid rgb(232 183 106 / 0.35);
+  border-radius: var(--radius-xl);
+  padding: 1.1rem 1.2rem;
+  margin-bottom: 1.4rem;
+  box-shadow: 0 0 24px rgb(232 183 106 / 0.06);
+}
+
+.kiv-prompt p {
+  margin: 0 0 0.85rem;
+  font-size: 0.88rem;
+  line-height: 1.5;
+  color: var(--text);
+}
+
+.kiv-prompt strong {
+  color: var(--glow);
+}
+
+.kiv-prompt-actions {
+  display: flex;
+  gap: 0.5rem;
+  flex-wrap: wrap;
+}
+
+.kiv-btn {
+  border-radius: var(--radius-md);
+  padding: 0.55rem 0.85rem;
+  font-size: 0.8rem;
+  font-weight: 600;
+  font-family: inherit;
+  cursor: pointer;
+  border: 1px solid var(--border-strong);
+  background: transparent;
+  color: var(--text-secondary);
+  transition: filter 0.15s ease, background 0.15s ease, color 0.15s ease, border-color 0.15s ease;
+}
+.kiv-btn:hover {
+  background: var(--bg-pane);
+  color: var(--text);
+  border-color: var(--text-muted);
+}
+.kiv-btn-primary {
+  background: var(--glow);
+  color: #1a1206;
+  border-color: var(--glow);
+}
+.kiv-btn-primary:hover {
+  filter: brightness(1.08);
+  background: var(--glow);
+  color: #1a1206;
+}
+.kiv-btn:focus-visible {
+  outline: 2px solid var(--focus);
+  outline-offset: 2px;
+}
+
+.kiv-section-label {
+  font-size: 0.7rem;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--text-muted);
+  margin: 0 0 0.6rem;
+}
+
+.kiv-list {
+  display: flex;
+  flex-direction: column;
+  border-top: 1px solid var(--border);
+}
+
+.kiv-row {
+  display: flex;
+  align-items: center;
+  gap: 0.8rem;
+  padding: 0.85rem 0.1rem;
+  border-bottom: 1px solid var(--border);
+}
+
+.kiv-row-main {
+  flex: 1;
+  min-width: 0;
+}
+
+.kiv-row-top {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  margin-bottom: 0.25rem;
+  flex-wrap: wrap;
+}
+
+.kiv-title {
+  font-size: 0.9rem;
+  font-weight: 500;
+  color: var(--text);
+}
+
+.kiv-tag {
+  font-size: 0.65rem;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+  padding: 0.12rem 0.45rem;
+  border-radius: 999px;
+  flex-shrink: 0;
+}
+.kiv-tag-kiv {
+  color: var(--glow);
+  background: var(--glow-dim);
+}
+.kiv-tag-foundation_gap {
+  color: var(--error);
+  background: var(--error-dim);
+}
+
+.kiv-meta {
+  font-size: 0.76rem;
+  color: var(--text-muted);
+}
+
+.kiv-mastery-bar {
+  width: 100%;
+  max-width: 180px;
+  height: 4px;
+  border-radius: 999px;
+  background: var(--border);
+  margin-top: 0.4rem;
+  overflow: hidden;
+}
+.kiv-mastery-fill {
+  height: 100%;
+  border-radius: 999px;
+}
+.kiv-mastery-fill-kiv {
+  background: var(--glow);
+}
+.kiv-mastery-fill-foundation_gap {
+  background: var(--error);
+}
+
+.kiv-mark-done {
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  gap: 0.35rem;
+  font-size: 0.76rem;
+  font-family: inherit;
+  color: var(--text-secondary);
+  background: transparent;
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-md);
+  padding: 0.4rem 0.65rem;
+  cursor: pointer;
+  transition: background 0.15s ease, border-color 0.15s ease, color 0.15s ease;
+}
+.kiv-mark-done:hover {
+  background: var(--surface);
+  color: var(--success);
+  border-color: var(--success);
+}
+.kiv-mark-done:focus-visible {
+  outline: 2px solid var(--focus);
+  outline-offset: 2px;
+}
+.kiv-mark-done svg {
+  flex-shrink: 0;
+}

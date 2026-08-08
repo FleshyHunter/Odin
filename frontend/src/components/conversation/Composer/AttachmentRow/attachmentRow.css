@@ -1,0 +1,123 @@
+/* Sits inside .composer-frame, above .composer-box (see Composer.tsx) —
+   reuses composer-frame's existing 80%-width column layout rather than
+   introducing a second width rule. Visually separate from the box itself
+   (own margin, not merged into its border), matching the reference design's
+   floating card row rather than ComposerNotice's merged-into-the-box style. */
+.attachment-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+  margin-bottom: 0.6rem;
+}
+
+.attachment-card {
+  display: flex;
+  align-items: center;
+  gap: 0.55rem;
+  max-width: 220px;
+  padding: 0.5rem 0.6rem;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  transition: border-color 0.15s ease;
+}
+.attachment-card-error {
+  border-color: var(--error);
+}
+
+.attachment-icon {
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 34px;
+  height: 34px;
+  border-radius: 7px;
+  background: var(--bg-pane);
+  color: var(--text-secondary);
+  font-size: 0.62rem;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+}
+
+.attachment-thumb {
+  position: relative;
+  flex-shrink: 0;
+  width: 34px;
+  height: 34px;
+  border-radius: 7px;
+  overflow: hidden;
+  background: var(--bg-pane);
+}
+.attachment-thumb img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  display: block;
+}
+.attachment-thumb-overlay {
+  position: absolute;
+  inset: 0;
+  background: rgb(0 0 0 / 0.4);
+}
+
+.attachment-info {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  gap: 0.05rem;
+}
+.attachment-name {
+  color: var(--text);
+  font-size: 0.8rem;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.attachment-detail {
+  color: var(--text-muted);
+  font-size: 0.72rem;
+}
+.attachment-error-message {
+  color: var(--error);
+  font-size: 0.72rem;
+  line-height: 1.3;
+}
+
+.attachment-retry {
+  flex-shrink: 0;
+  color: var(--glow);
+  font-size: 0.72rem;
+  font-weight: 500;
+  background: none;
+  border: none;
+  padding: 0;
+}
+.attachment-retry:hover {
+  text-decoration: underline;
+}
+
+.attachment-remove {
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 20px;
+  height: 20px;
+  color: var(--text-muted);
+  background: none;
+  border: none;
+  border-radius: 5px;
+  transition: color 0.15s ease, background 0.15s ease;
+}
+.attachment-remove:hover:not(:disabled) {
+  color: var(--text);
+  background: var(--bg-pane);
+}
+.attachment-remove:disabled {
+  opacity: 0.4;
+}
+.attachment-remove:focus-visible {
+  outline: 2px solid var(--focus);
+  outline-offset: 1px;
+}
