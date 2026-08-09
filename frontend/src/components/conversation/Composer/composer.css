@@ -4,9 +4,6 @@
    here (verified: grep found no other component referencing them), so
    this scoping is defensive, not currently load-bearing. */
 
-/* No horizontal padding here — .composer-box's width: 80% below needs to
-   be 80% of the FULL .conversation width, not 80% of an already-padded-in
-   content box (which would understate it). Vertical padding only. */
 .composer {
   width: 100%;
   display: flex; justify-content: center;
@@ -14,14 +11,25 @@
   border-top: 1px solid var(--border);
 }
 
-/* 80% of the .conversation column's width, centered — not edge-to-edge.
-   .composer-frame is a plain, invisible wrapper in the normal case (no
-   notice) — .composer-box below keeps its own border/radius/focus-glow
-   exactly as before. Only composer-frame-with-notice (see below) takes
-   over the visual boundary, so the notice bar and the input box below
-   it read as one connected shape (matches icons/ComposerError.png). */
+/* Mirrors .messages-inner's own box exactly (max-width 780px, centered,
+   1.125rem inset) rather than an independent 80%-of-.conversation rule —
+   the two were computed differently before and only lined up by
+   coincidence at one specific .conversation width; everywhere else the
+   composer's edges drifted from the message column's. Matching the same
+   max-width + padding-inline here means .composer-box's edges land at
+   the exact same horizontal position as message content's, at any
+   sidebar/active-panel width (claude.ai's own composer does the same:
+   shares one width with the conversation column above it, not its own
+   independent formula). .composer-frame is a plain, invisible wrapper in
+   the normal case (no notice) — .composer-box below keeps its own
+   border/radius/focus-glow exactly as before. Only composer-frame-with-
+   notice (see below) takes over the visual boundary, so the notice bar
+   and the input box below it read as one connected shape (matches
+   icons/ComposerError.png). */
 .composer .composer-frame {
-  width: 80%;
+  width: 100%;
+  max-width: 780px;
+  padding-inline: 1.125rem;
   display: flex; flex-direction: column;
 }
 

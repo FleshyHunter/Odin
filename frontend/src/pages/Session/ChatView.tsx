@@ -6,6 +6,7 @@ import { Composer } from '../../components/conversation/Composer/Composer';
 import { ActivePanel } from '../../components/active-panel/ActivePanel';
 import { MemorylessLanding } from './MemorylessLanding';
 import { useTrackMessages } from '../../hooks/useTracks';
+import { useJourneyChat } from '../../hooks/useJourneyChat';
 import { useActivePanel, ACTIVE_PANEL_MIN_WIDTH } from '../../hooks/useActivePanel';
 import * as exercisesApi from '../../api/exercises';
 import type { Exercise, MasteryStatus } from '../../types';
@@ -27,7 +28,18 @@ export function ChatView() {
   } = useOutletContext<SessionOutletContext>();
   const { id: routeId } = useParams<{ id?: string }>();
   const navigate = useNavigate();
-  const { messages, isSending, send, composerNotice, dismissComposerNotice } = useTrackMessages(activeTrackId);
+  // deferred.md #2a: real journey-mode chat for a track that carries a
+  // real journeyId (#4/#40); the mocked hook stays as the fallback for
+  // the pre-existing seed track (journeyId: null), which has no real
+  // backend to call. Both hooks always run (React's rules of hooks don't
+  // allow conditionally calling one or the other) — only the unused
+  // one's result is discarded, same pattern already used elsewhere for
+  // an optional real-vs-mock split.
+  const mockChat = useTrackMessages(activeTrackId);
+  const journeyChat = useJourneyChat(activeTrack?.journeyId ?? null);
+  const { messages, isSending, send, composerNotice, dismissComposerNotice } = activeTrack?.journeyId
+    ? journeyChat
+    : mockChat;
   const { width: panelWidth, setWidth: setPanelWidth, isOpen: isPanelOpen, toggle: togglePanel } = useActivePanel();
   const resizeHandleRef = useRef<HTMLDivElement>(null);
   const activePanelShellRef = useRef<HTMLDivElement>(null);
@@ -153,6 +165,7 @@ export function ChatView() {
         onStartTrack={openCreateTrackModal}
         threadId={routeId ?? null}
         onThreadCreated={handleThreadCreated}
+        onConvert={openCreateTrackModal}
       />
     );
   }

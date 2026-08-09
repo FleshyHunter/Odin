@@ -11,6 +11,10 @@ mod handlers;
 mod instantiate;
 mod service;
 pub mod staging;
+// pub(crate): memoryless::handlers::convert (deferred.md #17) reuses
+// verify_journey_and_subject/fetch_entry_concept directly — the same
+// entry-concept resolution #2a's own /start already needs.
+pub(crate) mod turn;
 
 use axum::{routing::post, Router};
 
@@ -27,5 +31,11 @@ pub fn router() -> Router<AppState> {
         .route(
             "/journeys/diagnostic/{diagnostic_id}/retry-backup",
             post(handlers::retry_backup),
+        )
+        // deferred.md #2a — the real journey-mode chat turn loop.
+        .route("/journeys/{journey_id}/start", post(handlers::start_journey_thread))
+        .route(
+            "/journeys/{journey_id}/messages",
+            post(handlers::send_journey_message).get(handlers::get_journey_messages),
         )
 }

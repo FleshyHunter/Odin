@@ -15,6 +15,11 @@ pub struct Subject {
     pub normalized_name: String,
     pub description: Option<String>,
     pub dag_version: Option<i32>,
+    // deferred.md #4 audit fix: the subject's own canonical entry point,
+    // set once at persist_new_subject() time — NULL only for a row from
+    // before this column existed (no real data predates it, so this
+    // should never actually happen in practice).
+    pub entry_concept_id: Option<Uuid>,
     pub created_at: Option<DateTime<Utc>>,
 }
 

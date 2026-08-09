@@ -8,6 +8,14 @@ interface TrackMenuProps {
   onChangeProject?: () => void;
   onRemoveFromProject?: () => void;
   onDelete?: () => void;
+  // Memoryless mode's one real action (deferred.md #74) — mutually
+  // exclusive with the five above in practice (a real track has no use
+  // for this, a memoryless thread has no track yet to Pin/Rename/etc.),
+  // but kept as a plain optional prop rather than a "mode" flag: each
+  // row below renders purely based on whether ITS OWN handler was
+  // passed, so the caller's prop list is the only thing that decides
+  // which items appear.
+  onAddToTrack?: () => void;
 }
 
 const iconProps = { width: 15, height: 15, viewBox: '0 0 24 24', fill: 'none', stroke: 'currentColor', strokeWidth: 1.6 };
@@ -40,6 +48,13 @@ const DELETE_ICON = (
     <path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2" />
   </svg>
 );
+const ADD_TRACK_ICON = (
+  <svg {...iconProps}>
+    <circle cx="12" cy="12" r="9" />
+    <line x1="12" y1="8" x2="12" y2="16" />
+    <line x1="8" y1="12" x2="16" y2="12" />
+  </svg>
+);
 
 // Delete copy states mastery is preserved because mastery is keyed on
 // canonical_concept_id, never journey_id (ARCHITECTURE_LOCK.md, Rule 14) —
@@ -56,6 +71,7 @@ export function TrackMenu({
   onChangeProject,
   onRemoveFromProject,
   onDelete,
+  onAddToTrack,
 }: TrackMenuProps) {
   const [isOpen, setIsOpen] = useState(false);
   const groupRef = useRef<HTMLDivElement>(null);
@@ -109,27 +125,45 @@ export function TrackMenu({
       </button>
 
       <div className={isOpen ? 'track-menu open' : 'track-menu'} onClick={(event) => event.stopPropagation()}>
-        <button className="menu-item" onClick={() => runAndClose(onPin)}>
-          {PIN_ICON}
-          <span>{isPinned ? 'Unpin' : 'Pin'}</span>
-        </button>
-        <button className="menu-item" onClick={() => runAndClose(onRename)}>
-          {RENAME_ICON}
-          <span>Rename</span>
-        </button>
-        <button className="menu-item" onClick={() => runAndClose(onChangeProject)}>
-          {PROJECT_ICON}
-          <span>Change project</span>
-        </button>
-        <button className="menu-item" onClick={() => runAndClose(onRemoveFromProject)}>
-          {REMOVE_PROJECT_ICON}
-          <span>Remove from project</span>
-        </button>
-        <div className="menu-divider" />
-        <button className="menu-item destructive" onClick={handleDeleteClick}>
-          {DELETE_ICON}
-          <span>Delete track</span>
-        </button>
+        {onAddToTrack && (
+          <button className="menu-item" onClick={() => runAndClose(onAddToTrack)}>
+            {ADD_TRACK_ICON}
+            <span>Add to a track</span>
+          </button>
+        )}
+        {onPin && (
+          <button className="menu-item" onClick={() => runAndClose(onPin)}>
+            {PIN_ICON}
+            <span>{isPinned ? 'Unpin' : 'Pin'}</span>
+          </button>
+        )}
+        {onRename && (
+          <button className="menu-item" onClick={() => runAndClose(onRename)}>
+            {RENAME_ICON}
+            <span>Rename</span>
+          </button>
+        )}
+        {onChangeProject && (
+          <button className="menu-item" onClick={() => runAndClose(onChangeProject)}>
+            {PROJECT_ICON}
+            <span>Change project</span>
+          </button>
+        )}
+        {onRemoveFromProject && (
+          <button className="menu-item" onClick={() => runAndClose(onRemoveFromProject)}>
+            {REMOVE_PROJECT_ICON}
+            <span>Remove from project</span>
+          </button>
+        )}
+        {onDelete && (
+          <>
+            <div className="menu-divider" />
+            <button className="menu-item destructive" onClick={handleDeleteClick}>
+              {DELETE_ICON}
+              <span>Delete track</span>
+            </button>
+          </>
+        )}
       </div>
     </div>
   );

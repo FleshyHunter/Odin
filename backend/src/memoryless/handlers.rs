@@ -11,11 +11,13 @@ use serde_json::json;
 use uuid::Uuid;
 
 use crate::auth::middleware::{begin_rls_transaction, AuthUser};
+use crate::journeys;
 use crate::state::AppState;
 
 use super::errors::MemorylessError;
 use super::staging::{self, load_owned, StagedThread};
 use super::turn;
+use super::write_through;
 
 #[derive(Deserialize)]
 pub struct SendMessageRequest {
@@ -88,6 +90,16 @@ pub async fn get_thread(
     Ok(Json(thread))
 }
 
+#[derive(Deserialize)]
+pub struct ConvertRequest {
+    // Milestone 10 (deferred.md #4/#40) is done — a real journey must
+    // already exist before conversion runs (created through the
+    // existing TrackModal flow). Conversion just links it; it does not
+    // run the onboarding diagnostic itself, which would be redundant —
+    // the student already proved engagement through this conversation.
+    journey_id: Uuid,
+}
+
 #[derive(Serialize)]
 pub struct ConvertResponse {
     thread_id: Uuid,
@@ -95,31 +107,33 @@ pub struct ConvertResponse {
 }
 
 /// The "checkout" moment (PRD.md, Memoryless Mode: CONVERSION) —
-/// SCOPED DOWN for this pass to messages + audit_logs only. Does NOT
-/// create a journey: onboarding-diagnostic orchestration and journey
-/// creation depend on Milestone 10 work not yet built (see
-/// markdown/deferred.md #4) — the resulting study_threads row simply
-/// stays journey_id NULL, mode='memoryless', now durable in Postgres
-/// instead of Redis-staged. Commit-then-delete ordering (Block 11 spec
-/// point 4): the Redis key is only removed AFTER the Postgres commit
-/// succeeds, so a failed write never loses staged data.
+/// deferred.md #17: now genuinely links a real journey (Milestone 10 —
+/// #4/#40 — exists), instead of leaving `study_threads.journey_id` NULL
+/// forever. Commit-then-delete ordering (Block 11 spec point 4): the
+/// Redis key is only removed AFTER every Postgres write below succeeds
+/// (including the prompt_upload commit at the very end), so a failure
+/// anywhere in this function never loses staged data.
 ///
 /// deferred.md #56: write-through may already have committed some (or
 /// all) of this thread's messages/audit_logs/study_threads
 /// incrementally, per turn, well before this is ever called — this is
 /// no longer the only path to durability, just the one remaining real
-/// "checkout" moment (attaching a journey, once Milestone 10 exists).
-/// `study_threads` conflicts safely on its own primary key. `messages`/
-/// `audit_logs` have no natural business key to conflict on instead, so
-/// this counts what's already there for this thread_id and only
-/// inserts whatever write-through hasn't caught up on yet — safe, not
-/// approximate, since write-through and this load both process
-/// `thread.messages`/`thread.audit_events` in the exact same append
-/// order every time.
+/// "checkout" moment (attaching a journey). `study_threads` conflicts
+/// safely on its own primary key. `messages`/`audit_logs` have no
+/// natural business key to conflict on instead, so this counts what's
+/// already there for this thread_id and only inserts whatever
+/// write-through hasn't caught up on yet — safe, not approximate, since
+/// write-through and this load both process `thread.messages`/
+/// `thread.audit_events` in the exact same append order every time.
+/// Those historical rows keep `mode = 'memoryless'` — an honest record
+/// of what mode they were actually sent in; only new messages sent
+/// afterward, through the real `/journeys/{id}/messages` (#2a), get
+/// `mode = 'journey'`.
 pub async fn convert(
     AuthUser(user_id): AuthUser,
     State(state): State<AppState>,
     Path(thread_id): Path<Uuid>,
+    Json(req): Json<ConvertRequest>,
 ) -> Result<Json<ConvertResponse>, MemorylessError> {
     let thread = load_owned(&state, thread_id, user_id).await?;
 
@@ -128,18 +142,41 @@ pub async fn convert(
     // the Postgres commit finishing.
     staging::refresh_ttl(&state, thread_id).await?;
 
+    // RLS-scoped ownership check (Rule 34) — reuses #2a's own
+    // entry-concept resolution rather than duplicating that join.
+    let subject_id = journeys::turn::verify_journey_and_subject(&state.pool, user_id, req.journey_id).await?;
+    let dag_version: i32 = sqlx::query_scalar("SELECT dag_version FROM subjects WHERE subject_id = $1")
+        .bind(subject_id)
+        .fetch_one(&state.pool)
+        .await?;
+    let entry =
+        journeys::turn::fetch_entry_concept(&state.pool, user_id, req.journey_id, subject_id, dag_version).await?;
+
     let mut tx = begin_rls_transaction(&state.pool, user_id).await?;
 
     sqlx::query(
-        "INSERT INTO study_threads (thread_id, user_id, mode, created_at, last_active_at) \
-         VALUES ($1, $2, 'memoryless', $3, NOW()) \
-         ON CONFLICT (thread_id) DO UPDATE SET last_active_at = NOW()",
+        "INSERT INTO study_threads (thread_id, user_id, journey_id, mode, current_concept_id, created_at, last_active_at) \
+         VALUES ($1, $2, $3, 'journey', $4, $5, NOW()) \
+         ON CONFLICT (thread_id) DO UPDATE SET \
+           journey_id = EXCLUDED.journey_id, mode = 'journey', \
+           current_concept_id = EXCLUDED.current_concept_id, last_active_at = NOW()",
     )
     .bind(thread.thread_id)
     .bind(thread.user_id)
+    .bind(req.journey_id)
+    .bind(entry.concept_id)
     .bind(thread.created_at)
     .execute(&mut *tx)
     .await?;
+
+    // Flow 4's own "teach from first concept" — this thread's existing
+    // conversation now counts as that concept actively being taught,
+    // same as #2a's opening turn marks it for a brand-new thread.
+    sqlx::query("UPDATE journey_concepts SET status = 'in_progress' WHERE journey_id = $1 AND concept_id = $2")
+        .bind(req.journey_id)
+        .bind(entry.concept_id)
+        .execute(&mut *tx)
+        .await?;
 
     let existing_message_count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM messages WHERE thread_id = $1")
         .bind(thread.thread_id)
@@ -185,19 +222,21 @@ pub async fn convert(
 
     tx.commit().await?;
 
-    // thread.staged_uploads is still NOT committed HERE (unchanged from
-    // Block 12 — markdown/deferred.md #17/#25/#27) — but as of deferred.md
-    // #56, material_upload uploads no longer depend on this moment at
-    // all: uploads::handlers::upload() already write-through committed
-    // them to Postgres immediately, at upload time. Only prompt_upload
-    // remains genuinely lost here — it can't pass RLS at all without a
-    // real journey_id to attach to (Milestone 10 dependency, unrelated
-    // to persistence timing) — stated plainly, not softened: a
-    // prompt_upload on this thread is LOST at this point, not merely
-    // delayed, since it lives only in the SAME Redis key being deleted
-    // below. A real gap, tracked rather than hidden (still #27).
+    // deferred.md #27, closing for real now: a real journey_id exists
+    // (required by `sources`' own CHECK constraint for this role), so
+    // any prompt_upload staged earlier in this same conversation can
+    // finally be committed. material_upload staged uploads are NOT
+    // re-committed here — deferred.md #56 already write-through commits
+    // those at upload time, independent of this moment. Propagated with
+    // `?`, not logged-and-swallowed: a failure here must abort before
+    // the Redis delete below, or this data would be genuinely lost, not
+    // merely delayed (same "commit-then-delete" guarantee as the rest
+    // of this function).
+    for upload in thread.staged_uploads.iter().filter(|u| u.upload_role == "prompt_upload") {
+        write_through::write_through_prompt_upload(&state.pool, user_id, req.journey_id, upload).await?;
+    }
 
-    // Only remove the Redis entry once Postgres durably has it.
+    // Only remove the Redis entry once Postgres durably has everything.
     staging::delete(&state, thread_id).await?;
 
     Ok(Json(ConvertResponse { thread_id: thread.thread_id, converted: true }))

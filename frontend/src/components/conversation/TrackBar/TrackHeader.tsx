@@ -9,8 +9,16 @@ interface TrackHeaderProps {
   onChangeProject?: () => void;
   onRemoveFromProject?: () => void;
   onDelete?: () => void;
-  isPanelOpen: boolean;
-  onTogglePanel: () => void;
+  // Memoryless mode's placeholder header (deferred.md #74) has no
+  // ActivePanel content (no exercises/mastery for a chat with no
+  // journey yet) — so unlike a real track, there's nothing for this
+  // side to toggle. Optional rather than required lets that call site
+  // omit the whole panel-toggle button instead of wiring a fake one.
+  isPanelOpen?: boolean;
+  onTogglePanel?: () => void;
+  // Passed straight through to TrackMenu via ...menuHandlers below —
+  // memoryless mode's one real action.
+  onAddToTrack?: () => void;
 }
 
 // Rounded square divided nearer its right edge — mirrors the sidebar
@@ -33,17 +41,21 @@ export function TrackHeader({
   return (
     <header className="track-header">
       <TrackMenu title={title} {...menuHandlers} />
-      <div className="track-meta">
-        {conceptTitle && <span className="concept-pill">{conceptTitle}</span>}
-        <button
-          className="menu-trigger panel-toggle"
-          onClick={onTogglePanel}
-          aria-label={isPanelOpen ? 'Hide panel' : 'Show panel'}
-          aria-pressed={isPanelOpen}
-        >
-          {PANEL_TOGGLE_ICON}
-        </button>
-      </div>
+      {(conceptTitle || onTogglePanel) && (
+        <div className="track-meta">
+          {conceptTitle && <span className="concept-pill">{conceptTitle}</span>}
+          {onTogglePanel && (
+            <button
+              className="menu-trigger panel-toggle"
+              onClick={onTogglePanel}
+              aria-label={isPanelOpen ? 'Hide panel' : 'Show panel'}
+              aria-pressed={isPanelOpen}
+            >
+              {PANEL_TOGGLE_ICON}
+            </button>
+          )}
+        </div>
+      )}
     </header>
   );
 }

@@ -506,6 +506,124 @@ pub struct DAGResult {
     pub diagnostic_backup: Option<ExerciseTemplate>,
 }
 
+// ============================================================
+// TEMPORARY — Dify is currently out of credits (2026-08-08), not a code
+// or infra problem. This lets #4/#40's wiring actually be built and
+// exercised end-to-end without a live Dify account. REMOVE ONCE DIFY
+// CREDITS ARE RESTORED — never meant to ship enabled; default is off.
+// Scoped to the three Dify-backed calls reachable from the Onboarding
+// Diagnostic flow — generate_dag()/adjust_dag()/generate_exercise_template()
+// (the last one only via journeys::service's existing-subject reuse path,
+// exercises/service.rs::get_or_generate) — does not touch ai_service, and
+// does not affect acquire() at all.
+// ============================================================
+fn mock_dify_enabled() -> bool {
+    std::env::var("AI_CLIENT_MOCK_DIFY").map(|v| v == "true").unwrap_or(false)
+}
+
+/// Synthetic but structurally valid DAGResult: 3 concepts of increasing
+/// difficulty_level with a real prerequisite chain (passes #6's own
+/// dangling-reference validation shape), an entry_concept chosen from
+/// intake_context.level when given (matches level_to_difficulty()'s own
+/// three tiers) or the most basic concept when None (the skip case).
+/// Both diagnostic exercises are real, instantiable, gradeable
+/// symbolic_math templates — arithmetic simple enough that the real
+/// deterministic grader (unaffected by Dify being down) actually works
+/// against them end-to-end.
+fn mock_dag_result(intake_context: &Option<IntakeContext>) -> DAGResult {
+    let concepts = vec![
+        ConceptNode {
+            title: "Basic Arithmetic".to_string(),
+            description: "Addition and subtraction of whole numbers.".to_string(),
+            difficulty_level: 1,
+            learning_objective: Some("Add and subtract small whole numbers.".to_string()),
+            prerequisites: vec![],
+        },
+        ConceptNode {
+            title: "Linear Equations".to_string(),
+            description: "Solving equations of the form ax + b = c.".to_string(),
+            difficulty_level: 2,
+            learning_objective: Some("Isolate a variable in a one-step linear equation.".to_string()),
+            prerequisites: vec!["Basic Arithmetic".to_string()],
+        },
+        ConceptNode {
+            title: "Quadratic Equations".to_string(),
+            description: "Solving equations of the form ax^2 + bx + c = 0.".to_string(),
+            difficulty_level: 3,
+            learning_objective: Some("Factor and solve a simple quadratic equation.".to_string()),
+            prerequisites: vec!["Linear Equations".to_string()],
+        },
+    ];
+
+    let entry_concept = match intake_context.as_ref().map(|i| i.level.trim().to_lowercase()) {
+        Some(level) if level == "advanced" => "Quadratic Equations",
+        Some(level) if level == "intermediate" => "Linear Equations",
+        _ => "Basic Arithmetic",
+    }
+    .to_string();
+
+    let diagnostic_primary = Some(ExerciseTemplate {
+        exercise_type: "symbolic_math".to_string(),
+        difficulty: "basic".to_string(),
+        template_body: serde_json::json!({ "question_template": "What is {a} + {b}?" }),
+        template_params: Some(serde_json::json!({
+            "a": { "min": 2, "max": 9 },
+            "b": { "min": 2, "max": 9 },
+        })),
+        correct_answer: Some("{a}+{b}".to_string()),
+        grader_type: Some("symbolic_math".to_string()),
+        grader_config: None,
+        tolerance: None,
+    });
+    let diagnostic_backup = Some(ExerciseTemplate {
+        exercise_type: "symbolic_math".to_string(),
+        difficulty: "basic".to_string(),
+        template_body: serde_json::json!({ "question_template": "What is {a} - {b}?" }),
+        template_params: Some(serde_json::json!({
+            "a": { "min": 5, "max": 9 },
+            "b": { "min": 1, "max": 4 },
+        })),
+        correct_answer: Some("{a}-{b}".to_string()),
+        grader_type: Some("symbolic_math".to_string()),
+        grader_config: None,
+        tolerance: None,
+    });
+
+    DAGResult {
+        concepts,
+        entry_concept,
+        diagnostic_primary,
+        diagnostic_backup,
+    }
+}
+
+/// Same TEMPORARY mock as mock_dag_result — extends the given draft with
+/// one new, more-foundational concept below its current lowest
+/// difficulty_level (matches adjust_dag()'s own real contract: extend,
+/// never discard), and repoints entry_concept at it.
+fn mock_adjust_dag_result(mut draft: DAGResult) -> DAGResult {
+    let lowest = draft.concepts.iter().map(|c| c.difficulty_level).min().unwrap_or(2);
+    // subject_concepts.difficulty_level has a real CHECK(BETWEEN 1 AND 5)
+    // constraint (0001_initial_schema.sql) — found live via this exact
+    // mock (2026-08-08): the naive `lowest - 1` produced 0 for a draft
+    // already starting at 1, a real constraint violation, not a fake-data
+    // quirk. Floored here so the mock stays valid; see deferred.md for
+    // whether the REAL adjust_dag()/#6 validation needs its own floor
+    // check once Dify is back (this mock can't tell you that — it's not
+    // exercising the real Claude-authored response shape).
+    let new_difficulty = (lowest - 1).max(1);
+    let new_concept = ConceptNode {
+        title: "Number Sense".to_string(),
+        description: "Counting and comparing whole numbers.".to_string(),
+        difficulty_level: new_difficulty,
+        learning_objective: Some("Count and compare small whole numbers.".to_string()),
+        prerequisites: vec![],
+    };
+    draft.entry_concept = new_concept.title.clone();
+    draft.concepts.push(new_concept);
+    draft
+}
+
 /// Calls FastAPI's POST /generate_dag (Block 10) — Dify -> Claude
 /// (pedagogical concept ordering/prerequisite reasoning). When
 /// intake_context is Some (Onboarding Diagnostic, new-subject
@@ -517,6 +635,11 @@ pub async fn generate_dag(
     topic: String,
     intake_context: Option<IntakeContext>,
 ) -> Result<DAGResult, AiClientError> {
+    if mock_dify_enabled() {
+        tracing::warn!(%topic, "AI_CLIENT_MOCK_DIFY enabled — returning a fake DAGResult, not a real Dify call");
+        return Ok(mock_dag_result(&intake_context));
+    }
+
     let url = format!("{ai_service_url}/generate_dag");
 
     let response = client
@@ -568,6 +691,11 @@ pub async fn adjust_dag(
     draft: DAGResult,
     reason: String,
 ) -> Result<DAGResult, AiClientError> {
+    if mock_dify_enabled() {
+        tracing::warn!(%topic, %reason, "AI_CLIENT_MOCK_DIFY enabled — returning a fake adjusted DAGResult, not a real Dify call");
+        return Ok(mock_adjust_dag_result(draft));
+    }
+
     let url = format!("{ai_service_url}/adjust_dag");
 
     let response = client
@@ -632,6 +760,30 @@ struct GenerateExerciseTemplateResponse {
 /// ai_service has no DB/Redis access, so deciding whether to call this
 /// at all, and holding the lock around that decision, happens here in
 /// Rust, not inside ai_service.
+/// Same TEMPORARY reasoning as mock_dag_result (see its own comment) —
+/// this path is also Dify-backed and reachable from journeys::service's
+/// existing-subject reuse branch (get_or_generate_canonical_exercise).
+/// One template per difficulty tier, so a caller filtering by any of the
+/// three real difficulty strings finds a match.
+fn mock_exercise_templates() -> Vec<ExerciseTemplate> {
+    ["basic", "intermediate", "advanced"]
+        .iter()
+        .map(|difficulty| ExerciseTemplate {
+            exercise_type: "symbolic_math".to_string(),
+            difficulty: difficulty.to_string(),
+            template_body: serde_json::json!({ "question_template": "What is {a} + {b}?" }),
+            template_params: Some(serde_json::json!({
+                "a": { "min": 2, "max": 9 },
+                "b": { "min": 2, "max": 9 },
+            })),
+            correct_answer: Some("{a}+{b}".to_string()),
+            grader_type: Some("symbolic_math".to_string()),
+            grader_config: None,
+            tolerance: None,
+        })
+        .collect()
+}
+
 pub async fn generate_exercise_template(
     client: &reqwest::Client,
     ai_service_url: &str,
@@ -640,6 +792,11 @@ pub async fn generate_exercise_template(
     top_chunks: Vec<Chunk>,
     batch_children: Vec<Uuid>,
 ) -> Result<Vec<ExerciseTemplate>, AiClientError> {
+    if mock_dify_enabled() {
+        tracing::warn!(%concept_id, "AI_CLIENT_MOCK_DIFY enabled — returning fake ExerciseTemplates, not a real Dify call");
+        return Ok(mock_exercise_templates());
+    }
+
     let url = format!("{ai_service_url}/generate_exercise_template");
 
     let response = client

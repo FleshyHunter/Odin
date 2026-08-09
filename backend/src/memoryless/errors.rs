@@ -2,6 +2,7 @@ use axum::{http::StatusCode, response::IntoResponse, Json};
 use serde_json::json;
 
 use crate::ai_client::AiClientError;
+use crate::journeys::errors::JourneyError;
 use crate::state::RedisConnectError;
 
 #[derive(Debug, thiserror::Error)]
@@ -98,6 +99,26 @@ impl From<AiClientError> for MemorylessError {
                 tracing::error!(%msg, "unexpected AI service response in memoryless handler");
                 MemorylessError::Internal
             }
+        }
+    }
+}
+
+// deferred.md #17: convert() reuses journeys::turn's
+// verify_journey_and_subject/fetch_entry_concept directly, which return
+// JourneyError — translated here rather than duplicating those queries.
+impl From<JourneyError> for MemorylessError {
+    fn from(err: JourneyError) -> Self {
+        match err {
+            JourneyError::Validation(msg) => MemorylessError::Validation(msg),
+            // A journey that's expired-or-not-found or plain not-found are
+            // both "this journey_id doesn't resolve for this user" here.
+            JourneyError::DiagnosticExpiredOrNotFound | JourneyError::NotFound => MemorylessError::NotFound,
+            JourneyError::GenerationFailed(msg) => {
+                tracing::error!(%msg, "unexpected generation error resolving journey during conversion");
+                MemorylessError::Internal
+            }
+            JourneyError::Internal => MemorylessError::Internal,
+            JourneyError::ServiceUnavailable(msg) => MemorylessError::ServiceUnavailable(msg),
         }
     }
 }

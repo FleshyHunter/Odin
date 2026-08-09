@@ -24,6 +24,14 @@ export interface Track {
   pinned: boolean;
   projectId: string | null;
   lastActiveAt: string;
+  // The real backend journey this (still otherwise fully mocked) Track
+  // carries, from POST /journeys/start (deferred.md #4/#40) — null only
+  // for the pre-existing seed/demo track, which predates real wiring.
+  // Nothing else in the app reads this yet (journey listing/detail and
+  // real track-mode teaching are still out of #4's scope), but it's
+  // real, not a placeholder — carried through so it's there once
+  // something does need it.
+  journeyId: string | null;
 }
 
 export type TrackLevel = 'Beginner' | 'Intermediate' | 'Advanced';
@@ -32,13 +40,51 @@ export type TrackGoal = 'Exam prep' | 'Project' | 'General understanding';
 // Onboarding Diagnostic Step 1's structured intake (PRD.md; mirrors
 // backend/src/ai_client::IntakeContext exactly) — null when the student
 // used TrackModal's "Skip diagnostic" action instead of filling this in.
-// deferred.md #40: TrackModal collects this for real, but createTrack's
-// mock still just discards it (deferred.md #4's real backend isn't wired
-// to the frontend yet).
+// deferred.md #4/#40: real, wired end-to-end — TrackModal's wizard sends
+// this to POST /journeys/start via api/journeys.ts.
 export interface TrackIntake {
   level: TrackLevel;
   goal: TrackGoal;
   background: string | null;
+}
+
+// Onboarding Diagnostic Steps 2-3 (PRD.md) — a real question to answer,
+// from POST /journeys/start or a backup question surfaced on
+// contradiction. `choices` present means multiple-choice; absent means a
+// free-text answer.
+export interface DiagnosticQuestion {
+  diagnosticId: string;
+  question: string;
+  exerciseType: string;
+  choices: string[] | null;
+}
+
+// Contract: exactly one of `diagnostic`/`journeyId` is set — `journeyId`
+// when the intake was skipped (journey created immediately, no
+// diagnostic needed), `diagnostic` otherwise (answer it via
+// POST /journeys/diagnostic/:id/respond).
+export interface JourneyStartResult {
+  diagnostic: DiagnosticQuestion | null;
+  journeyId: string | null;
+}
+
+// Same shape as DiagnosticQuestion minus diagnosticId — the backup
+// question is answered against the SAME diagnostic_id via retry-backup,
+// not a new one.
+export interface BackupQuestion {
+  question: string;
+  exerciseType: string;
+  choices: string[] | null;
+}
+
+// Response from /respond, /retry-backup, /confirm-downgrade. journeyId
+// set means done (either confirmed or downgraded); contradicted + a
+// backupQuestion means PRD.md Step 3's disclosure UI should show,
+// offering Confirm or Try backup question.
+export interface DiagnosticOutcome {
+  contradicted: boolean;
+  backupQuestion: BackupQuestion | null;
+  journeyId: string | null;
 }
 
 export interface Project {

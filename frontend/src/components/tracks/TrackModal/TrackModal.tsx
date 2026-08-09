@@ -1,151 +1,182 @@
-import { useEffect, useId, useState, type FormEvent } from 'react';
-import { Button } from '../../ui/Button/Button';
+import { useEffect, useState } from 'react';
 import { Modal } from '../../ui/Modal/Modal';
-import type { TrackGoal, TrackIntake, TrackLevel } from '../../../types';
+import { IntakeStep } from './IntakeStep';
+import { DiagnosticStep } from './DiagnosticStep';
+import { ContradictionStep } from './ContradictionStep';
+import * as journeysApi from '../../../api/journeys';
+import * as memorylessApi from '../../../api/memoryless';
+import type { BackupQuestion, DiagnosticOutcome, DiagnosticQuestion, TrackIntake } from '../../../types';
 
-const LEVELS: TrackLevel[] = ['Beginner', 'Intermediate', 'Advanced'];
-const GOALS: TrackGoal[] = ['Exam prep', 'Project', 'General understanding'];
+type Step = 'intake' | 'diagnostic' | 'contradiction' | 'backup';
 
 interface TrackModalProps {
   open: boolean;
   onClose: () => void;
-  onCreate: (title: string, intake: TrackIntake | null) => Promise<unknown>;
+  onJourneyCreated: (title: string, journeyId: string) => Promise<unknown>;
+  // deferred.md #8/#17: set when this modal was opened via the memoryless
+  // nudge (or a future manual "add to a track" trigger, #74) — the
+  // student names the new track same as any fresh one (no reliable way
+  // to infer a topic from chat content without another LLM call), but on
+  // reaching a real journeyId, that memoryless thread is converted into
+  // it (real messages/audit_logs + any staged prompt_upload committed)
+  // BEFORE onJourneyCreated fires.
+  initialThreadId?: string | null;
 }
 
-// PRD.md Step 1's structured intake (deferred.md #40) — Level/Goal are
-// required unless the student skips it. "Skip diagnostic" mirrors PRD.md's
-// trigger-phrase skip, translated into a real UI affordance since intake
-// here is a form, not a chat message: it hides the three fields and
-// submits with intake: null instead.
-export function TrackModal({ open, onClose, onCreate }: TrackModalProps) {
+const STEP_TITLES: Record<Step, string> = {
+  intake: 'Create a track',
+  diagnostic: 'Quick check',
+  contradiction: 'One moment',
+  backup: 'Backup question',
+};
+
+// Onboarding Diagnostic orchestration (PRD.md Steps 1-4, deferred.md
+// #4/#40) — a real multi-step wizard, matching this codebase's existing
+// pattern (components/auth/signup/SignupFlow.tsx: an orchestrator owning
+// step state + the real backend calls, dumb per-step form components).
+// Intake -> POST /journeys/start. Either that returns a journey_id
+// immediately (skip path) or a question to answer (Diagnostic step).
+// A wrong answer moves to Contradiction (PRD.md's required disclosure —
+// "tell the student directly, don't silently reassign"), which offers
+// Confirm (-> confirm-downgrade) or, if a backup exists, Try backup
+// question (-> Backup step, same DiagnosticStep component, answered via
+// retry-backup instead). Any outcome carrying a real journey_id finishes
+// the flow.
+export function TrackModal({ open, onClose, onJourneyCreated, initialThreadId = null }: TrackModalProps) {
+  const [step, setStep] = useState<Step>('intake');
   const [title, setTitle] = useState('');
-  const [skipDiagnostic, setSkipDiagnostic] = useState(false);
-  const [level, setLevel] = useState<TrackLevel | null>(null);
-  const [goal, setGoal] = useState<TrackGoal | null>(null);
-  const [background, setBackground] = useState('');
+  const [level, setLevel] = useState<string | null>(null);
+  const [diagnosticId, setDiagnosticId] = useState<string | null>(null);
+  const [question, setQuestion] = useState<DiagnosticQuestion | BackupQuestion | null>(null);
+  const [pendingBackup, setPendingBackup] = useState<BackupQuestion | null>(null);
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const titleId = useId();
-  const backgroundId = useId();
 
   useEffect(() => {
     if (!open) return;
+    setStep('intake');
     setTitle('');
-    setSkipDiagnostic(false);
     setLevel(null);
-    setGoal(null);
-    setBackground('');
-    setError(null);
+    setDiagnosticId(null);
+    setQuestion(null);
+    setPendingBackup(null);
     setIsSubmitting(false);
+    setError(null);
   }, [open]);
 
-  const diagnosticComplete = skipDiagnostic || (level !== null && goal !== null);
+  const finish = async (finalTitle: string, journeyId: string) => {
+    if (initialThreadId) {
+      await memorylessApi.convertMemorylessThread(initialThreadId, journeyId);
+    }
+    await onJourneyCreated(finalTitle, journeyId);
+    onClose();
+  };
 
-  const handleSubmit = async (event: FormEvent<HTMLFormElement>) => {
-    event.preventDefault();
-    const trimmedTitle = title.trim();
-    if (!trimmedTitle || !diagnosticComplete || isSubmitting) return;
+  const handleOutcome = async (finalTitle: string, outcome: DiagnosticOutcome) => {
+    if (outcome.journeyId) {
+      await finish(finalTitle, outcome.journeyId);
+      return;
+    }
+    // Contradicted, awaiting a decision — PRD.md Step 3's disclosure.
+    setPendingBackup(outcome.backupQuestion);
+    setStep('contradiction');
+  };
 
+  const handleIntakeSubmit = async (submittedTitle: string, intake: TrackIntake | null) => {
     setIsSubmitting(true);
     setError(null);
-    const intake: TrackIntake | null =
-      skipDiagnostic || !level || !goal ? null : { level, goal, background: background.trim() || null };
+    setTitle(submittedTitle);
+    setLevel(intake?.level ?? null);
     try {
-      await onCreate(trimmedTitle, intake);
-      onClose();
+      const result = await journeysApi.startJourney(submittedTitle, intake);
+      if (result.journeyId) {
+        await finish(submittedTitle, result.journeyId);
+        return;
+      }
+      if (result.diagnostic) {
+        setDiagnosticId(result.diagnostic.diagnosticId);
+        setQuestion(result.diagnostic);
+        setStep('diagnostic');
+      }
     } catch {
-      setError('Track creation failed. Please try again.');
+      setError('Could not start this track. Please try again.');
+    } finally {
       setIsSubmitting(false);
     }
   };
 
+  const handleDiagnosticSubmit = async (answer: string) => {
+    if (!diagnosticId) return;
+    setIsSubmitting(true);
+    setError(null);
+    try {
+      const outcome = await journeysApi.respondToDiagnostic(diagnosticId, answer);
+      await handleOutcome(title, outcome);
+    } catch {
+      setError('Could not check that answer. Please try again.');
+    } finally {
+      setIsSubmitting(false);
+    }
+  };
+
+  const handleBackupSubmit = async (answer: string) => {
+    if (!diagnosticId) return;
+    setIsSubmitting(true);
+    setError(null);
+    try {
+      const outcome = await journeysApi.retryBackup(diagnosticId, answer);
+      await handleOutcome(title, outcome);
+    } catch {
+      setError('Could not check that answer. Please try again.');
+    } finally {
+      setIsSubmitting(false);
+    }
+  };
+
+  const handleConfirmDowngrade = async () => {
+    if (!diagnosticId) return;
+    setIsSubmitting(true);
+    setError(null);
+    try {
+      const outcome = await journeysApi.confirmDowngrade(diagnosticId);
+      await handleOutcome(title, outcome);
+    } catch {
+      setError('Could not confirm that. Please try again.');
+    } finally {
+      setIsSubmitting(false);
+    }
+  };
+
+  const handleTryBackup = () => {
+    if (!pendingBackup) return;
+    setQuestion(pendingBackup);
+    setStep('backup');
+  };
+
   return (
-    <Modal open={open} title="Create a track" onClose={onClose}>
-      <form className="modal-form" onSubmit={handleSubmit}>
-        <label className="modal-field" htmlFor={titleId}>
-          <span className="modal-label">What do you want to learn?</span>
-          <input
-            id={titleId}
-            className="modal-input"
-            value={title}
-            onChange={(event) => setTitle(event.target.value)}
-            placeholder="Name your learning track"
-            autoFocus
-            required
-          />
-        </label>
+    <Modal open={open} title={STEP_TITLES[step]} onClose={onClose}>
+      {step === 'intake' && <IntakeStep onSubmit={handleIntakeSubmit} onCancel={onClose} isSubmitting={isSubmitting} error={error} />}
 
-        <p className="modal-hint">
-          A track is a focused learning journey with its own conversation, roadmap, exercises, and progress.
-        </p>
+      {(step === 'diagnostic' || step === 'backup') && question && (
+        <DiagnosticStep
+          question={question.question}
+          choices={question.choices}
+          onSubmit={step === 'diagnostic' ? handleDiagnosticSubmit : handleBackupSubmit}
+          isSubmitting={isSubmitting}
+          error={error}
+        />
+      )}
 
-        {!skipDiagnostic && (
-          <>
-            <div className="modal-field">
-              <span className="modal-label">What&apos;s your current level?</span>
-              <div className="modal-option-list modal-option-row">
-                {LEVELS.map((option) => (
-                  <button
-                    key={option}
-                    type="button"
-                    className="modal-option"
-                    aria-pressed={level === option}
-                    onClick={() => setLevel(option)}
-                  >
-                    {option}
-                  </button>
-                ))}
-              </div>
-            </div>
-
-            <div className="modal-field">
-              <span className="modal-label">What&apos;s your goal?</span>
-              <div className="modal-option-list modal-option-row">
-                {GOALS.map((option) => (
-                  <button
-                    key={option}
-                    type="button"
-                    className="modal-option"
-                    aria-pressed={goal === option}
-                    onClick={() => setGoal(option)}
-                  >
-                    {option}
-                  </button>
-                ))}
-              </div>
-            </div>
-
-            <label className="modal-field" htmlFor={backgroundId}>
-              <span className="modal-label">
-                Anything else about your background?
-                <span className="modal-optional">Optional</span>
-              </span>
-              <textarea
-                id={backgroundId}
-                className="modal-textarea"
-                value={background}
-                onChange={(event) => setBackground(event.target.value)}
-                placeholder="Prior courses, relevant experience, anything that helps Odin place you accurately"
-              />
-            </label>
-          </>
-        )}
-
-        <button type="button" className="modal-skip-link" onClick={() => setSkipDiagnostic((value) => !value)}>
-          {skipDiagnostic ? 'Set my level and goal instead' : "Skip — I'll set my level later"}
-        </button>
-
-        {error && <p className="modal-error">{error}</p>}
-
-        <div className="modal-actions">
-          <Button variant="secondary" onClick={onClose} disabled={isSubmitting}>
-            Cancel
-          </Button>
-          <Button type="submit" disabled={!title.trim() || !diagnosticComplete || isSubmitting}>
-            {isSubmitting ? 'Creating...' : 'Create track'}
-          </Button>
-        </div>
-      </form>
+      {step === 'contradiction' && (
+        <ContradictionStep
+          level={level ?? ''}
+          hasBackup={pendingBackup !== null}
+          onConfirmDowngrade={handleConfirmDowngrade}
+          onTryBackup={handleTryBackup}
+          isSubmitting={isSubmitting}
+          error={error}
+        />
+      )}
     </Modal>
   );
 }

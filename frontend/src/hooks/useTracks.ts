@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import * as tracksApi from '../api/tracks';
 import { ApiError } from '../api/client';
-import type { ChatMessage, ComposerNoticeData, Track, TrackIntake } from '../types';
+import type { ChatMessage, ComposerNoticeData, Track } from '../types';
 
 export function useTracks() {
   const [tracks, setTracks] = useState<Track[]>([]);
@@ -37,9 +37,9 @@ export function useTracks() {
     setTracks((prev) => prev.filter((t) => t.id !== trackId));
   }, []);
 
-  const createTrack = useCallback(async (title: string, intake: TrackIntake | null) => {
+  const createTrackFromJourney = useCallback(async (title: string, journeyId: string) => {
     await initialLoadRef.current;
-    const track = await tracksApi.createTrack(title, intake);
+    const track = await tracksApi.createTrackFromJourney(title, journeyId);
     setTracks((prev) => [...prev, track]);
     return track;
   }, []);
@@ -62,7 +62,7 @@ export function useTracks() {
     setTracks((prev) => prev.map((t) => (t.id === trackId ? updated : t)));
   }, []);
 
-  return { tracks, isLoading, removeTrack, createTrack, togglePin, renameTrack, setTrackProject };
+  return { tracks, isLoading, removeTrack, createTrackFromJourney, togglePin, renameTrack, setTrackProject };
 }
 
 export function useTrackMessages(trackId: string) {

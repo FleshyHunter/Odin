@@ -9,15 +9,22 @@
 // unchanged), it just no longer means "data destroyed," only "this
 // live session ended."
 //
-// Scoped EXACTLY to the two-thirds deferred.md #56's own feasibility
-// check found clean: messages/study_threads/audit_logs (this file's
-// write_through_turn), and material_upload staged uploads (this file's
-// write_through_material_upload). Deliberately does NOT touch
-// prompt_upload uploads — `sources`' own CHECK constraint requires a
-// real journey_id for those, which doesn't exist until Milestone 10
-// (same root cause as #27) — callers must filter that role out
-// themselves before calling write_through_material_upload; this module
-// trusts that and does not re-check it.
+// Originally scoped EXACTLY to the two-thirds deferred.md #56's own
+// feasibility check found clean at the time: messages/study_threads/
+// audit_logs (this file's write_through_turn), and material_upload
+// staged uploads (this file's write_through_material_upload) —
+// deliberately NOT prompt_upload, since `sources`' own CHECK constraint
+// requires a real journey_id for that role, which didn't exist yet
+// (Milestone 10). Callers filter upload_role themselves before calling
+// write_through_material_upload; this module trusts that and does not
+// re-check it.
+//
+// deferred.md #17: Milestone 10 now exists, so write_through_prompt_upload
+// (below) closes that remaining gap — but only callable once a real
+// journey_id is known, which is exactly memoryless::handlers::convert's
+// own moment, not upload time. Unlike its material_upload sibling, this
+// one is NOT called from uploads::handlers::upload — a prompt_upload
+// genuinely has nowhere valid to land until conversion.
 
 use chrono::{DateTime, Utc};
 use sqlx::PgPool;
@@ -155,6 +162,55 @@ pub async fn write_through_material_upload(
 
     // A genuine conflict (no row returned) means another insert already
     // owns this content_hash — nothing left to chunk against here.
+    if let Some((source_id,)) = source_id {
+        for chunk in &upload.chunks {
+            sqlx::query("INSERT INTO chunks (source_id, text, token_count) VALUES ($1, $2, $3)")
+                .bind(source_id)
+                .bind(&chunk.text)
+                .bind(chunk.token_count)
+                .execute(&mut *tx)
+                .await?;
+        }
+    }
+
+    tx.commit().await?;
+    Ok(())
+}
+
+/// Writes one `prompt_upload` staged upload through to Postgres — only
+/// callable once a real journey_id exists (memoryless::handlers::convert,
+/// deferred.md #17), since `sources`' own CHECK constraint requires
+/// `upload_scope = 'journey' AND journey_id IS NOT NULL` for this role.
+/// Mirrors write_through_material_upload's shape exactly, just scoped to
+/// journey_id via its own dedup index, `sources_content_hash_journey_unique`
+/// (ON `(journey_id, content_hash)` — a syntactically exact match to that
+/// index's own WHERE clause is required for Postgres to infer it as the
+/// ON CONFLICT target, same requirement already confirmed live for the
+/// material_upload sibling above).
+pub async fn write_through_prompt_upload(
+    pool: &PgPool,
+    user_id: Uuid,
+    journey_id: Uuid,
+    upload: &StagedUpload,
+) -> Result<(), MemorylessError> {
+    let mut tx = begin_rls_transaction(pool, user_id).await?;
+
+    let source_id: Option<(Uuid,)> = sqlx::query_as(
+        "INSERT INTO sources \
+         (filename, source_type, upload_role, upload_scope, journey_id, trust_score, content_hash, retrieval_date) \
+         VALUES ($1, 'user_upload', 'prompt_upload', 'journey', $2, $3, $4, $5) \
+         ON CONFLICT (journey_id, content_hash) WHERE upload_role = 'prompt_upload' AND content_hash IS NOT NULL \
+         DO NOTHING \
+         RETURNING source_id",
+    )
+    .bind(&upload.filename)
+    .bind(journey_id)
+    .bind(USER_UPLOAD_TRUST_SCORE)
+    .bind(&upload.content_hash)
+    .bind(upload.created_at)
+    .fetch_optional(&mut *tx)
+    .await?;
+
     if let Some((source_id,)) = source_id {
         for chunk in &upload.chunks {
             sqlx::query("INSERT INTO chunks (source_id, text, token_count) VALUES ($1, $2, $3)")

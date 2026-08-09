@@ -5,7 +5,7 @@ import { useTracks } from '../../hooks/useTracks';
 import { useProjects } from '../../hooks/useProjects';
 import { TrackModal } from '../../components/tracks/TrackModal/TrackModal';
 import { ChangeProjectModal } from '../../components/tracks/ChangeProjectModal/ChangeProjectModal';
-import type { Track, TrackIntake } from '../../types';
+import type { Track } from '../../types';
 import './Session.css';
 
 interface SessionLayoutProps {
@@ -19,19 +19,25 @@ export interface SessionOutletContext {
   activeTrackId: string;
   activeTrack: Track | null;
   setActiveTrackId: (id: string) => void;
-  createTrack: (title: string, intake: TrackIntake | null) => Promise<Track>;
+  createTrackFromJourney: (title: string, journeyId: string) => Promise<Track>;
   removeTrack: (id: string) => Promise<void>;
   togglePin: (id: string) => Promise<void>;
   renameTrack: (id: string, title: string) => Promise<void>;
   setTrackProject: (id: string, projectId: string | null) => Promise<void>;
-  openCreateTrackModal: () => void;
+  // deferred.md #8: an optional thread_id seeds TrackModal so, once a
+  // real journey exists, it can convert that memoryless thread into it
+  // (deferred.md #17) before calling onJourneyCreated. Callers that wire
+  // this directly to a raw DOM event handler (a plain onClick, not an
+  // explicit `() => openCreateTrackModal()` wrapper) MUST NOT do so —
+  // the event object would land in this param instead of undefined.
+  openCreateTrackModal: (initialThreadId?: string) => void;
   openChangeProjectModal: (trackId: string) => void;
 }
 
 // Layout route for /chat, /projects and /tracks (see App.tsx) — mirrors
 // AuthLayout's pattern: this (and the Sidebar it renders) stays mounted
 // across navigation between them; only the matched child swaps via
-// <Outlet />. tracks/createTrack are passed through the outlet context
+// <Outlet />. tracks/createTrackFromJourney are passed through the outlet context
 // (not just used locally for the Sidebar) so the Tracks browse page reads
 // and writes the exact same list the Sidebar does, rather than each
 // holding its own separate useTracks() copy that could drift out of sync.
@@ -39,11 +45,12 @@ export interface SessionOutletContext {
 // not local state — except "Pinned", which still has no route/content of
 // its own (out of scope so far), so it stays a harmless local-only toggle.
 export function SessionLayout({ profileName, email, onSignOut }: SessionLayoutProps) {
-  const { tracks, removeTrack, createTrack, togglePin, renameTrack, setTrackProject } = useTracks();
+  const { tracks, removeTrack, createTrackFromJourney, togglePin, renameTrack, setTrackProject } = useTracks();
   const { projects } = useProjects();
   const [activeTrackId, setActiveTrackId] = useState('');
   const [pinnedActive, setPinnedActive] = useState(false);
   const [isTrackModalOpen, setIsTrackModalOpen] = useState(false);
+  const [trackModalThreadId, setTrackModalThreadId] = useState<string | null>(null);
   const [changeProjectTrackId, setChangeProjectTrackId] = useState<string | null>(null);
   const location = useLocation();
   const navigate = useNavigate();
@@ -75,12 +82,15 @@ export function SessionLayout({ profileName, email, onSignOut }: SessionLayoutPr
     navigate('/chat');
   };
 
-  const openCreateTrackModal = () => setIsTrackModalOpen(true);
+  const openCreateTrackModal = (initialThreadId?: string) => {
+    setTrackModalThreadId(initialThreadId ?? null);
+    setIsTrackModalOpen(true);
+  };
   const openChangeProjectModal = (trackId: string) => setChangeProjectTrackId(trackId);
   const changeProjectTrack = tracks.find((track) => track.id === changeProjectTrackId) ?? null;
 
-  const handleCreateTrack = async (title: string, intake: TrackIntake | null) => {
-    const track = await createTrack(title, intake);
+  const handleJourneyCreated = async (title: string, journeyId: string) => {
+    const track = await createTrackFromJourney(title, journeyId);
     setPinnedActive(false);
     navigate(`/chat/${track.id}`);
     setActiveTrackId(track.id);
@@ -100,7 +110,8 @@ export function SessionLayout({ profileName, email, onSignOut }: SessionLayoutPr
           tracks={tracks}
           activeTrackId={activeTrackId}
           onSelectTrack={handleSelectTrack}
-          onNewTrack={openCreateTrackModal}
+          onNewChat={handleHome}
+          onNewTrack={() => openCreateTrackModal()}
           profileName={profileName}
           email={email}
           onSignOut={onSignOut}
@@ -116,7 +127,7 @@ export function SessionLayout({ profileName, email, onSignOut }: SessionLayoutPr
               activeTrackId,
               activeTrack,
               setActiveTrackId,
-              createTrack,
+              createTrackFromJourney,
               removeTrack,
               togglePin,
               renameTrack,
@@ -130,8 +141,12 @@ export function SessionLayout({ profileName, email, onSignOut }: SessionLayoutPr
 
       <TrackModal
         open={isTrackModalOpen}
-        onClose={() => setIsTrackModalOpen(false)}
-        onCreate={handleCreateTrack}
+        onClose={() => {
+          setIsTrackModalOpen(false);
+          setTrackModalThreadId(null);
+        }}
+        initialThreadId={trackModalThreadId}
+        onJourneyCreated={handleJourneyCreated}
       />
 
       <ChangeProjectModal

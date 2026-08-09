@@ -39,19 +39,26 @@ fn level_to_difficulty(level: &str) -> &'static str {
     }
 }
 
-pub struct StartOutcome {
-    pub diagnostic_id: Uuid,
-    pub question: String,
-    pub exercise_type: String,
-    pub choices: Option<Vec<String>>,
+pub enum StartOutcome {
+    Diagnostic {
+        diagnostic_id: Uuid,
+        question: String,
+        exercise_type: String,
+        choices: Option<Vec<String>>,
+    },
+    // PRD.md Step 1's skip path: no diagnostic exercise at all, no Redis
+    // staging round-trip — the journey exists immediately.
+    JourneyCreated {
+        journey_id: Uuid,
+    },
 }
 
 pub async fn start(
     state: &AppState,
     user_id: Uuid,
     topic: String,
-    level: String,
-    goal: String,
+    level: Option<String>,
+    goal: Option<String>,
     background: Option<String>,
 ) -> Result<StartOutcome, JourneyError> {
     let topic = topic.trim().to_string();
@@ -59,30 +66,78 @@ pub async fn start(
         return Err(JourneyError::Validation("topic must not be empty".to_string()));
     }
     let normalized_name = normalize_topic(&topic);
-    let intake = IntakeContext {
-        level: level.clone(),
-        goal,
-        background,
-    };
+
+    // Skip is all-or-nothing (matches TrackModal's own UI: the whole
+    // Level/Goal/Background section hides together) — either field alone
+    // being absent is treated the same as both being absent, rather than
+    // silently defaulting the other one.
+    let skip = level.is_none() || goal.is_none();
 
     let existing_subject: Option<Subject> = sqlx::query_as("SELECT * FROM subjects WHERE normalized_name = $1")
         .bind(&normalized_name)
         .fetch_optional(&state.pool)
         .await?;
 
+    if skip {
+        let (subject_ctx, entry_concept) = match existing_subject {
+            Some(subject) => {
+                let entry_concept_id = subject.entry_concept_id.ok_or(JourneyError::Internal)?;
+                (
+                    SubjectContext::Existing { subject_id: subject.subject_id },
+                    EntryConcept::Existing(entry_concept_id),
+                )
+            }
+            None => {
+                // No intake_context at all (not a partially-filled one) —
+                // per generate_dag()'s own contract, this means no
+                // diagnostic gets produced, exactly what skip wants.
+                let draft = generate_dag_locked(state, &normalized_name, topic.clone(), None).await?;
+                let entry_title = draft.entry_concept.clone();
+                (
+                    SubjectContext::New {
+                        normalized_name: normalized_name.clone(),
+                        subject_title: topic.clone(),
+                        draft,
+                    },
+                    EntryConcept::Draft(entry_title),
+                )
+            }
+        };
+        let journey_id = finalize(
+            state,
+            user_id,
+            &subject_ctx,
+            &entry_concept,
+            None,
+            None,
+            InitialLevelResult::Skipped,
+        )
+        .await?;
+        return Ok(StartOutcome::JourneyCreated { journey_id });
+    }
+
+    let level = level.expect("skip is true when level is None");
+    let intake = IntakeContext {
+        level: level.clone(),
+        goal: goal.expect("skip is true when goal is None"),
+        background,
+    };
+
     let (subject_ctx, entry_concept, exercise, backup_exercise) = match existing_subject {
         Some(subject) => {
-            let dag_version = subject.dag_version.unwrap_or(1);
+            // #4 audit fix: previously guessed via `ORDER BY order_index
+            // LIMIT 1` (raw array position from the original Dify
+            // response, unrelated to which concept generate_dag()
+            // actually named entry_concept) — only the FIRST student to
+            // create a subject got the right one. subjects.entry_concept_id
+            // (set once, at persist_new_subject() time) is the real answer.
+            let entry_concept_id = subject.entry_concept_id.ok_or(JourneyError::Internal)?;
             let (concept_id, title, description): (Uuid, String, Option<String>) = sqlx::query_as(
                 "SELECT cc.concept_id, cc.title, cc.description \
-                 FROM subject_concepts sc \
-                 JOIN canonical_concepts cc ON cc.concept_id = sc.concept_id \
-                 WHERE sc.subject_id = $1 AND sc.dag_version = $2 \
-                 ORDER BY sc.order_index ASC NULLS LAST \
-                 LIMIT 1",
+                 FROM canonical_concepts cc \
+                 WHERE cc.concept_id = $1",
             )
-            .bind(subject.subject_id)
-            .bind(dag_version)
+            .bind(entry_concept_id)
             .fetch_optional(&state.pool)
             .await?
             .ok_or(JourneyError::Internal)?;
@@ -102,7 +157,7 @@ pub async fn start(
             )
         }
         None => {
-            let draft = generate_dag_locked(state, &normalized_name, topic.clone(), intake.clone()).await?;
+            let draft = generate_dag_locked(state, &normalized_name, topic.clone(), Some(intake.clone())).await?;
             let primary = draft.diagnostic_primary.clone().ok_or_else(|| {
                 JourneyError::GenerationFailed("no diagnostic produced for new subject".to_string())
             })?;
@@ -138,7 +193,7 @@ pub async fn start(
     };
     staging::save(state, &staged).await?;
 
-    Ok(StartOutcome {
+    Ok(StartOutcome::Diagnostic {
         diagnostic_id,
         question: exercise.rendered_question,
         exercise_type: exercise.exercise_type,
@@ -174,7 +229,10 @@ async fn generate_dag_locked(
     state: &AppState,
     normalized_name: &str,
     topic: String,
-    intake: IntakeContext,
+    // None for PRD.md Step 1's skip path — no intake context at all
+    // (not a partially-filled one), which per generate_dag()'s own
+    // contract means no diagnostic gets produced, exactly what skip wants.
+    intake: Option<IntakeContext>,
 ) -> Result<DAGResult, JourneyError> {
     let key = dag_lock_key(normalized_name);
     let mut conn = state.get_redis_connection().await?;
@@ -186,7 +244,7 @@ async fn generate_dag_locked(
     conn.expire::<_, ()>(&key, state.template_gen_lock_ttl_seconds as i64).await?;
 
     let outcome = async {
-        let draft = ai_client::generate_dag(&state.http_client, &state.ai_service_url, topic, Some(intake)).await?;
+        let draft = ai_client::generate_dag(&state.http_client, &state.ai_service_url, topic, intake).await?;
         let json = serde_json::to_string(&draft)?;
         conn.set_ex::<_, _, ()>(dag_draft_cache_key(normalized_name), json, state.template_gen_lock_ttl_seconds)
             .await?;
@@ -257,9 +315,19 @@ async fn get_or_generate_canonical_exercise(
     })
 }
 
+/// Sent back to the frontend when a contradiction leaves a backup
+/// question available — without this, there was no way to render "try
+/// the backup question" at all (a bare `backup_available: bool` never
+/// carried what it actually asks).
+pub struct BackupQuestion {
+    pub question: String,
+    pub exercise_type: String,
+    pub choices: Option<Vec<String>>,
+}
+
 pub struct DiagnosticOutcome {
     pub contradicted: bool,
-    pub backup_available: bool,
+    pub backup_question: Option<BackupQuestion>,
     pub journey_id: Option<Uuid>,
 }
 
@@ -288,21 +356,34 @@ pub async fn respond(
     .await?;
 
     if grade.is_correct {
-        let journey_id = finalize(state, user_id, &staged, InitialLevelResult::Confirmed).await?;
+        let journey_id = finalize(
+            state,
+            user_id,
+            &staged.subject,
+            &staged.entry_concept,
+            Some(&staged.intake.level),
+            Some(&staged.intake.goal),
+            InitialLevelResult::Confirmed,
+        )
+        .await?;
         staging::delete(state, diagnostic_id).await?;
         return Ok(DiagnosticOutcome {
             contradicted: false,
-            backup_available: false,
+            backup_question: None,
             journey_id: Some(journey_id),
         });
     }
 
-    let backup_available = staged.backup_exercise.is_some();
+    let backup_question = staged.backup_exercise.as_ref().map(|b| BackupQuestion {
+        question: b.rendered_question.clone(),
+        exercise_type: b.exercise_type.clone(),
+        choices: b.choices.clone(),
+    });
     staged.pending_confirmation = true;
     staging::save(state, &staged).await?;
     Ok(DiagnosticOutcome {
         contradicted: true,
-        backup_available,
+        backup_question,
         journey_id: None,
     })
 }
@@ -337,21 +418,39 @@ pub async fn retry_backup(
 
     if grade.is_correct {
         // Passing the backup counts as confirmed after all — no downgrade.
-        let journey_id = finalize(state, user_id, &staged, InitialLevelResult::Confirmed).await?;
+        let journey_id = finalize(
+            state,
+            user_id,
+            &staged.subject,
+            &staged.entry_concept,
+            Some(&staged.intake.level),
+            Some(&staged.intake.goal),
+            InitialLevelResult::Confirmed,
+        )
+        .await?;
         staging::delete(state, diagnostic_id).await?;
         return Ok(DiagnosticOutcome {
             contradicted: false,
-            backup_available: false,
+            backup_question: None,
             journey_id: Some(journey_id),
         });
     }
 
     confirm_downgrade_inner(state, &mut staged).await?;
-    let journey_id = finalize(state, user_id, &staged, InitialLevelResult::Downgraded).await?;
+    let journey_id = finalize(
+        state,
+        user_id,
+        &staged.subject,
+        &staged.entry_concept,
+        Some(&staged.intake.level),
+        Some(&staged.intake.goal),
+        InitialLevelResult::Downgraded,
+    )
+    .await?;
     staging::delete(state, diagnostic_id).await?;
     Ok(DiagnosticOutcome {
         contradicted: true,
-        backup_available: false,
+        backup_question: None,
         journey_id: Some(journey_id),
     })
 }
@@ -368,11 +467,20 @@ pub async fn confirm_downgrade(
         ));
     }
     confirm_downgrade_inner(state, &mut staged).await?;
-    let journey_id = finalize(state, user_id, &staged, InitialLevelResult::Downgraded).await?;
+    let journey_id = finalize(
+        state,
+        user_id,
+        &staged.subject,
+        &staged.entry_concept,
+        Some(&staged.intake.level),
+        Some(&staged.intake.goal),
+        InitialLevelResult::Downgraded,
+    )
+    .await?;
     staging::delete(state, diagnostic_id).await?;
     Ok(DiagnosticOutcome {
         contradicted: true,
-        backup_available: false,
+        backup_question: None,
         journey_id: Some(journey_id),
     })
 }
@@ -433,6 +541,63 @@ async fn confirm_downgrade_inner(state: &AppState, staged: &mut StagedDiagnostic
 enum InitialLevelResult {
     Confirmed,
     Downgraded,
+    // PRD.md Step 1's skip path — no diagnostic ran at all, so neither
+    // 'confirmed' nor 'downgraded' applies. Writes NULL, not a third
+    // string value (the CHECK constraint on initial_level_diagnostic_result
+    // only allows the original two — NULL means "not applicable", exactly
+    // matching "trust the self-report (or absence of one) as-is").
+    Skipped,
+}
+
+/// Outcome of `persist_new_subject` — distinguishes "we actually created
+/// this subject" from "#13 audit finding: a concurrent request already
+/// created it between our Redis lock releasing and this insert running
+/// (the lock is a cost optimization only, released well before
+/// finalize() — see generate_dag_locked's own doc comment; the real
+/// correctness guarantee is subjects.normalized_name's UNIQUE
+/// constraint, exercised HERE for the first time)." The loser's own
+/// draft content is simply discarded in favor of whatever the winner
+/// already persisted — same content either way, since both drafts came
+/// from the same Dify call shape for the same topic.
+enum PersistOutcome {
+    Created {
+        subject_id: Uuid,
+        dag_version: i32,
+        concept_id_by_title: HashMap<String, Uuid>,
+    },
+    AlreadyExisted {
+        subject_id: Uuid,
+        dag_version: i32,
+        entry_concept_id: Uuid,
+    },
+}
+
+async fn fetch_subject_concept_rows(
+    pool: &PgPool,
+    subject_id: Uuid,
+    dag_version: i32,
+) -> Result<Vec<(Uuid, Option<i32>)>, JourneyError> {
+    Ok(
+        sqlx::query_as("SELECT concept_id, order_index FROM subject_concepts WHERE subject_id = $1 AND dag_version = $2")
+            .bind(subject_id)
+            .bind(dag_version)
+            .fetch_all(pool)
+            .await?,
+    )
+}
+
+async fn fetch_subject_prereq_pairs(
+    pool: &PgPool,
+    subject_id: Uuid,
+    dag_version: i32,
+) -> Result<Vec<(Uuid, Uuid)>, JourneyError> {
+    Ok(sqlx::query_as(
+        "SELECT concept_id, prereq_concept_id FROM subject_prerequisites WHERE subject_id = $1 AND dag_version = $2",
+    )
+    .bind(subject_id)
+    .bind(dag_version)
+    .fetch_all(pool)
+    .await?)
 }
 
 /// Persists a brand-new subject's canonical content (subjects,
@@ -448,13 +613,65 @@ async fn persist_new_subject(
     normalized_name: &str,
     subject_title: &str,
     draft: &DAGResult,
-) -> Result<(Uuid, i32, HashMap<String, Uuid>), JourneyError> {
-    let subject_id: Uuid =
+) -> Result<PersistOutcome, JourneyError> {
+    // Validated BEFORE any write happens (fail fast, no partial state) —
+    // #6 already guards `prerequisites` against a dangling title
+    // reference; `entry_concept` itself was never checked at all until
+    // now. A typo'd entry_concept from Dify is exactly the same class of
+    // bug, just never caught for this one field.
+    if !draft.concepts.iter().any(|c| c.title == draft.entry_concept) {
+        return Err(JourneyError::GenerationFailed(format!(
+            "entry_concept {:?} does not match any concept title in the generated DAG",
+            draft.entry_concept
+        )));
+    }
+
+    // Real race window found via live concurrent testing (2026-08-08),
+    // not just a theoretical one: this function's writes used to run as
+    // separate autocommit statements against the plain pool — INSERT
+    // subjects, THEN (several statements later) UPDATE ... SET
+    // entry_concept_id. A concurrent request's unique-violation fallback
+    // (below) queries this same row and can observe it AFTER the INSERT
+    // but BEFORE the UPDATE — a real, transiently-NULL entry_concept_id,
+    // not a data-corruption case as the fallback's own comment used to
+    // assume. Wrapping the whole function in one transaction makes the
+    // insert-everything-then-set-entry_concept_id sequence atomic: a
+    // concurrent SELECT now only ever sees this row fully absent (before
+    // commit) or fully populated (after), never partial. Also fixes a
+    // second real issue this same testing pass hit: any error partway
+    // through used to leave orphaned canonical_concepts/subject_concepts
+    // rows with no matching subjects.entry_concept_id ever set — now
+    // rolls back cleanly instead.
+    let mut tx = pool.begin().await?;
+
+    let insert_result: Result<Uuid, sqlx::Error> =
         sqlx::query_scalar("INSERT INTO subjects (title, normalized_name) VALUES ($1, $2) RETURNING subject_id")
             .bind(subject_title)
             .bind(normalized_name)
+            .fetch_one(&mut *tx)
+            .await;
+
+    let subject_id = match insert_result {
+        Ok(id) => id,
+        Err(sqlx::Error::Database(db_err)) if db_err.is_unique_violation() => {
+            // Our own INSERT lost the race and rolled back nothing (it
+            // never committed) — query the WINNER's row on a fresh
+            // connection, not `tx` (this transaction has nothing
+            // committed in it and is about to be dropped/rolled back).
+            let (subject_id, dag_version, entry_concept_id): (Uuid, i32, Option<Uuid>) = sqlx::query_as(
+                "SELECT subject_id, dag_version, entry_concept_id FROM subjects WHERE normalized_name = $1",
+            )
+            .bind(normalized_name)
             .fetch_one(pool)
             .await?;
+            // With the transaction fix above, a concurrent winner's row
+            // is only ever visible here fully committed — NULL now
+            // really would mean something else is wrong.
+            let entry_concept_id = entry_concept_id.ok_or(JourneyError::Internal)?;
+            return Ok(PersistOutcome::AlreadyExisted { subject_id, dag_version, entry_concept_id });
+        }
+        Err(err) => return Err(err.into()),
+    };
     let dag_version = 1; // subjects.dag_version's own DEFAULT — a brand-new subject always starts here.
 
     let mut concept_id_by_title = HashMap::new();
@@ -464,7 +681,7 @@ async fn persist_new_subject(
         )
         .bind(&concept.title)
         .bind(&concept.description)
-        .fetch_one(pool)
+        .fetch_one(&mut *tx)
         .await?;
         concept_id_by_title.insert(concept.title.clone(), concept_id);
 
@@ -480,7 +697,7 @@ async fn persist_new_subject(
         .bind(index as i32)
         .bind("dify_claude")
         .bind(dag_version)
-        .execute(pool)
+        .execute(&mut *tx)
         .await?;
     }
 
@@ -504,88 +721,123 @@ async fn persist_new_subject(
             .bind(concept_id)
             .bind(prereq_concept_id)
             .bind(dag_version)
-            .execute(pool)
+            .execute(&mut *tx)
             .await?;
         }
     }
 
-    Ok((subject_id, dag_version, concept_id_by_title))
+    // #4 audit finding: the entry concept a FUTURE student's diagnostic
+    // reuses (start()'s existing-subject branch) used to be guessed via
+    // order_index (raw array position, unrelated to which concept was
+    // actually named entry_concept) — only the first student ever got it
+    // right. Recorded durably here, once, at the moment we know the real
+    // concept_id (canonical_concepts rows don't exist before this loop).
+    let entry_concept_id = *concept_id_by_title
+        .get(&draft.entry_concept)
+        .expect("validated above: entry_concept matches a concept title");
+    sqlx::query("UPDATE subjects SET entry_concept_id = $1 WHERE subject_id = $2")
+        .bind(entry_concept_id)
+        .bind(subject_id)
+        .execute(&mut *tx)
+        .await?;
+
+    tx.commit().await?;
+
+    Ok(PersistOutcome::Created { subject_id, dag_version, concept_id_by_title })
 }
 
-/// Shared by respond()/retry_backup()/confirm_downgrade() — the one
-/// place a real `journeys` row (and its journey_concepts/
-/// journey_prerequisites) ever gets created. Phase 1 (canonical content,
+/// Shared by respond()/retry_backup()/confirm_downgrade() (the normal
+/// diagnostic path) AND start()'s skip path — the one place a real
+/// `journeys` row (and its journey_concepts/journey_prerequisites) ever
+/// gets created. Takes the subject/entry-concept context directly rather
+/// than a `&StagedDiagnostic`, since the skip path never stages one at
+/// all (no diagnostic ran, nothing to stage). `self_report_level`/`goal`
+/// are `None` together only for the skip path (PRD.md Step 1: "trust the
+/// self-report or absence of one as-is"). Phase 1 (canonical content,
 /// only touched for a NEW subject) runs on the plain pool; Phase 2 (this
 /// user's own journey) runs inside an RLS transaction, since journeys/
 /// journey_concepts ARE RLS-protected unlike subjects/canonical_concepts.
 async fn finalize(
     state: &AppState,
     user_id: Uuid,
-    staged: &StagedDiagnostic,
+    subject: &SubjectContext,
+    entry_concept: &EntryConcept,
+    self_report_level: Option<&str>,
+    goal: Option<&str>,
     result: InitialLevelResult,
 ) -> Result<Uuid, JourneyError> {
-    let (subject_id, dag_version, concept_id_by_title) = match &staged.subject {
+    // #4 audit fixes (bugs #1/#2): a New subject can resolve two different
+    // ways now — genuinely Created (this student's own draft became
+    // canonical), or AlreadyExisted (a concurrent request beat us to it,
+    // #13's accepted race — see persist_new_subject's own doc comment).
+    // The AlreadyExisted case behaves exactly like a true Existing
+    // subject from here on: query concept_rows/prereq_pairs from the DB,
+    // and use the SUBJECT's own canonical entry_concept_id rather than
+    // this student's now-meaningless staged entry_concept (it names a
+    // title from OUR OWN discarded draft, which was never persisted).
+    let (subject_id, _dag_version, entry_concept_id, concept_rows, prereq_pairs): (
+        Uuid,
+        i32,
+        Uuid,
+        Vec<(Uuid, Option<i32>)>,
+        Vec<(Uuid, Uuid)>,
+    ) = match subject {
         SubjectContext::Existing { subject_id } => {
-            let dag_version: i32 = sqlx::query_scalar("SELECT dag_version FROM subjects WHERE subject_id = $1")
-                .bind(subject_id)
-                .fetch_one(&state.pool)
-                .await?;
-            (*subject_id, dag_version, HashMap::new())
+            let (dag_version, entry_concept_id): (i32, Option<Uuid>) =
+                sqlx::query_as("SELECT dag_version, entry_concept_id FROM subjects WHERE subject_id = $1")
+                    .bind(subject_id)
+                    .fetch_one(&state.pool)
+                    .await?;
+            let entry_concept_id = entry_concept_id.ok_or(JourneyError::Internal)?;
+            let concept_rows = fetch_subject_concept_rows(&state.pool, *subject_id, dag_version).await?;
+            let prereq_pairs = fetch_subject_prereq_pairs(&state.pool, *subject_id, dag_version).await?;
+            (*subject_id, dag_version, entry_concept_id, concept_rows, prereq_pairs)
         }
         SubjectContext::New {
             normalized_name,
             subject_title,
             draft,
-        } => persist_new_subject(&state.pool, normalized_name, subject_title, draft).await?,
-    };
-
-    let entry_concept_id = match &staged.entry_concept {
-        EntryConcept::Existing(id) => *id,
-        EntryConcept::Draft(title) => *concept_id_by_title.get(title).ok_or(JourneyError::Internal)?,
-    };
-
-    let concept_rows: Vec<(Uuid, Option<i32>)> = match &staged.subject {
-        SubjectContext::New { draft, .. } => draft
-            .concepts
-            .iter()
-            .enumerate()
-            .filter_map(|(i, c)| concept_id_by_title.get(&c.title).map(|&id| (id, Some(i as i32))))
-            .collect(),
-        SubjectContext::Existing { .. } => {
-            sqlx::query_as("SELECT concept_id, order_index FROM subject_concepts WHERE subject_id = $1 AND dag_version = $2")
-                .bind(subject_id)
-                .bind(dag_version)
-                .fetch_all(&state.pool)
-                .await?
-        }
-    };
-
-    let by_title = &concept_id_by_title;
-    let prereq_pairs: Vec<(Uuid, Uuid)> = match &staged.subject {
-        SubjectContext::New { draft, .. } => draft
-            .concepts
-            .iter()
-            .flat_map(move |c| {
-                let concept_id = by_title.get(&c.title).copied();
-                c.prerequisites
+        } => match persist_new_subject(&state.pool, normalized_name, subject_title, draft).await? {
+            PersistOutcome::Created { subject_id, dag_version, concept_id_by_title } => {
+                let entry_concept_id = match entry_concept {
+                    EntryConcept::Existing(id) => *id, // shouldn't happen for a New subject; defensive only.
+                    EntryConcept::Draft(title) => {
+                        *concept_id_by_title.get(title).ok_or(JourneyError::Internal)?
+                    }
+                };
+                let concept_rows = draft
+                    .concepts
                     .iter()
-                    .filter_map(move |title| Some((concept_id?, by_title.get(title).copied()?)))
-            })
-            .collect(),
-        SubjectContext::Existing { .. } => sqlx::query_as(
-            "SELECT concept_id, prereq_concept_id FROM subject_prerequisites WHERE subject_id = $1 AND dag_version = $2",
-        )
-        .bind(subject_id)
-        .bind(dag_version)
-        .fetch_all(&state.pool)
-        .await?,
+                    .enumerate()
+                    .filter_map(|(i, c)| concept_id_by_title.get(&c.title).map(|&id| (id, Some(i as i32))))
+                    .collect();
+                let by_title = &concept_id_by_title;
+                let prereq_pairs = draft
+                    .concepts
+                    .iter()
+                    .flat_map(move |c| {
+                        let concept_id = by_title.get(&c.title).copied();
+                        c.prerequisites
+                            .iter()
+                            .filter_map(move |title| Some((concept_id?, by_title.get(title).copied()?)))
+                    })
+                    .collect();
+                (subject_id, dag_version, entry_concept_id, concept_rows, prereq_pairs)
+            }
+            PersistOutcome::AlreadyExisted { subject_id, dag_version, entry_concept_id } => {
+                let concept_rows = fetch_subject_concept_rows(&state.pool, subject_id, dag_version).await?;
+                let prereq_pairs = fetch_subject_prereq_pairs(&state.pool, subject_id, dag_version).await?;
+                (subject_id, dag_version, entry_concept_id, concept_rows, prereq_pairs)
+            }
+        },
     };
 
     let mut tx = begin_rls_transaction(&state.pool, user_id).await?;
 
-    let initial_level_diagnostic_result = match result {
-        InitialLevelResult::Confirmed => "confirmed",
-        InitialLevelResult::Downgraded => "downgraded",
+    let initial_level_diagnostic_result: Option<&str> = match result {
+        InitialLevelResult::Confirmed => Some("confirmed"),
+        InitialLevelResult::Downgraded => Some("downgraded"),
+        InitialLevelResult::Skipped => None,
     };
 
     let journey_id: Uuid = sqlx::query_scalar(
@@ -594,8 +846,8 @@ async fn finalize(
     )
     .bind(user_id)
     .bind(subject_id)
-    .bind(&staged.intake.goal)
-    .bind(&staged.intake.level)
+    .bind(goal)
+    .bind(self_report_level)
     .bind(initial_level_diagnostic_result)
     .fetch_one(&mut *tx)
     .await?;

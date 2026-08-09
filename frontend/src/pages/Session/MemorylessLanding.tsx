@@ -2,6 +2,7 @@ import { useRef, useState, type DragEvent } from 'react';
 import { Composer } from '../../components/conversation/Composer/Composer';
 import { DragOverlay } from '../../components/conversation/Composer/DragOverlay/DragOverlay';
 import { MessageList } from '../../components/conversation/Messages/MessageList';
+import { TrackHeader } from '../../components/conversation/TrackBar/TrackHeader';
 import { useMemorylessChat } from '../../hooks/useMemorylessChat';
 
 interface MemorylessLandingProps {
@@ -14,6 +15,11 @@ interface MemorylessLandingProps {
   // bare /chat, threadId prop null) gets its first real id back from
   // the backend — lets the caller push /chat/:id via router history.
   onThreadCreated?: (threadId: string) => void;
+  // deferred.md #8: the student accepted the "start a study thread?"
+  // nudge — the caller opens TrackModal seeded with this thread_id so
+  // it can call POST .../convert (deferred.md #17) once a real journey
+  // exists.
+  onConvert?: (threadId: string) => void;
 }
 
 // The /chat route's no-active-track state (deferred.md #51). Renders the
@@ -22,7 +28,7 @@ interface MemorylessLandingProps {
 // POST /memoryless/messages (no track, no journey — same bare-turn scope
 // as the rest of Block 11/12; TrackHeader/ActivePanel are track-specific
 // and don't apply here).
-export function MemorylessLanding({ onStartTrack, threadId = null, onThreadCreated }: MemorylessLandingProps) {
+export function MemorylessLanding({ onStartTrack, threadId = null, onThreadCreated, onConvert }: MemorylessLandingProps) {
   const {
     messages,
     isSending,
@@ -38,7 +44,7 @@ export function MemorylessLanding({ onStartTrack, threadId = null, onThreadCreat
     cancelPendingFile,
     retryAttachment,
     removeAttachment,
-  } = useMemorylessChat(threadId, onThreadCreated);
+  } = useMemorylessChat(threadId, onThreadCreated, onConvert);
 
   // deferred.md #37: dragenter/dragleave fire on every child element the
   // cursor crosses while dragging over the container, not just on
@@ -110,7 +116,7 @@ export function MemorylessLanding({ onStartTrack, threadId = null, onThreadCreat
           {...attachProps}
         />
 
-        <button className="start-track-pill" onClick={onStartTrack}>
+        <button className="start-track-pill" onClick={() => onStartTrack()}>
           <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2}>
             <line x1="12" y1="5" x2="12" y2="19" />
             <line x1="5" y1="12" x2="19" y2="12" />
@@ -124,6 +130,27 @@ export function MemorylessLanding({ onStartTrack, threadId = null, onThreadCreat
   return (
     <main className="conversation" {...dragHandlers}>
       <DragOverlay active={isDraggingOver} />
+      {/* Gated on the real thread_id (the threadId PROP, which only
+          becomes non-null once the URL has updated to /chat/:id — see
+          onThreadCreated above), not on messages.length: the student's
+          own message is added to `messages` optimistically before the
+          backend has assigned anything, so gating on message count
+          would make "Add to a track" clickable for a moment before
+          there's a real thread_id for it to act on. */}
+      {threadId !== null && (
+        <TrackHeader
+          title="New chat"
+          conceptTitle={null}
+          // Reuses the exact same "open the track-creation modal"
+          // trigger as the "Start a track" pill below (both are real,
+          // working entry points to TrackModal today) — it does NOT yet
+          // carry this conversation's own content into the resulting
+          // track. Attaching THIS thread to the new track depends on
+          // deferred.md #74's still-pending backend wiring (itself
+          // gated on #17), not built here.
+          onAddToTrack={onStartTrack}
+        />
+      )}
       <MessageList messages={messages} />
       <Composer
         onSend={send}

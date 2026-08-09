@@ -12,6 +12,7 @@ interface SidebarProps {
   tracks: Track[];
   activeTrackId: string;
   onSelectTrack: (trackId: string) => void;
+  onNewChat?: () => void;
   onNewTrack?: () => void;
   profileName: string;
   email: string;
@@ -60,10 +61,21 @@ const COMPOSE_ICON = (
   </svg>
 );
 
+// Plain speech-bubble outline (Lucide's "message-square" shape) —
+// deliberately distinct from New track's COMPOSE_ICON (square + pencil)
+// despite both being top-of-sidebar action rows, so the two aren't
+// visually interchangeable at a glance.
+const CHAT_ICON = (
+  <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.7} strokeLinecap="round" strokeLinejoin="round">
+    <path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z" />
+  </svg>
+);
+
 export function Sidebar({
   tracks,
   activeTrackId,
   onSelectTrack,
+  onNewChat,
   onNewTrack,
   profileName,
   email,
@@ -88,6 +100,7 @@ export function Sidebar({
         </button>
       </div>
 
+      <NavItem icon={CHAT_ICON} label="New chat" onClick={onNewChat} />
       <NavItem icon={COMPOSE_ICON} label="New track" onClick={onNewTrack} />
 
       <NavItem

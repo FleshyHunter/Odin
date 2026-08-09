@@ -1,6 +1,25 @@
 import { apiFetch, API_BASE_URL, getAccessToken, silentRefresh } from './client';
 import type { ChatMessage } from '../types';
 
+interface ConvertResponse {
+  thread_id: string;
+  converted: boolean;
+}
+
+// POST /memoryless/threads/:id/convert (backend/src/memoryless/
+// handlers.rs::convert) — deferred.md #17: links this memoryless thread
+// to a real, already-created journey (built via TrackModal's existing
+// #4/#40 flow), committing its messages/audit_logs, flipping the entry
+// concept to in_progress, and — if a prompt_upload was staged in this
+// same conversation — its sources/chunks too. Called BEFORE
+// onJourneyCreated in TrackModal, once a real journeyId exists.
+export async function convertMemorylessThread(threadId: string, journeyId: string): Promise<void> {
+  await apiFetch<ConvertResponse>(`/memoryless/threads/${threadId}/convert`, {
+    method: 'POST',
+    body: JSON.stringify({ journey_id: journeyId }),
+  });
+}
+
 export interface MemorylessStreamHandlers {
   onThreadId: (threadId: string) => void;
   onDelta: (text: string) => void;

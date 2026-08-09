@@ -3,6 +3,13 @@ import * as memorylessApi from '../api/memoryless';
 import * as uploadsApi from '../api/uploads';
 import type { Attachment, ChatMessage, ComposerNoticeData, PendingFile, UploadRole } from '../types';
 
+// deferred.md #8: PRD.md's own "3-5" range has no exact number — the
+// middle, picked once as a fixed UX value (same "not an operational
+// knob" reasoning turn.rs already uses for its own HISTORY_WINDOW_MESSAGES,
+// not a Rule 12 env var). One exchange == one student + one tutor
+// message, so this compares against Math.floor(messages.length / 2).
+const NUDGE_AFTER_EXCHANGES = 4;
+
 // Real memoryless chat (deferred.md #51) — the /chat landing composer's
 // previous onSend={() => {}} no-op replaced with the actual backend
 // turn (POST /memoryless/messages, streamed). thread_id lives in a ref,
@@ -20,7 +27,16 @@ import type { Attachment, ChatMessage, ComposerNoticeData, PendingFile, UploadRo
 // /chat/:id via router history exactly once, matching DESIGN.md's
 // "URL updates via router history API only... never a full page
 // reload" spec.
-export function useMemorylessChat(initialThreadId: string | null = null, onThreadId?: (threadId: string) => void) {
+//
+// onNudgeAccept (deferred.md #8): fires when the student accepts the
+// "start a study thread?" nudge below — the caller is responsible for
+// opening TrackModal with this thread_id so it can call
+// POST .../convert (deferred.md #17) once a real journey exists.
+export function useMemorylessChat(
+  initialThreadId: string | null = null,
+  onThreadId?: (threadId: string) => void,
+  onNudgeAccept?: (threadId: string) => void,
+) {
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [isSending, setIsSending] = useState(false);
   const [isHydrating, setIsHydrating] = useState(initialThreadId !== null);
@@ -39,6 +55,12 @@ export function useMemorylessChat(initialThreadId: string | null = null, onThrea
   // would discard state that's already more current than anything Redis
   // has yet.
   const justCreatedRef = useRef(false);
+  // deferred.md #8: whether the nudge has already fired for whichever
+  // thread threadIdRef currently points at — reset below alongside
+  // threadIdRef itself, on a genuine thread switch (not on the
+  // "our own navigate() just caught up" branch, which is still the
+  // same thread continuing forward).
+  const hasNudgedRef = useRef(false);
 
   useEffect(() => {
     if (justCreatedRef.current && initialThreadId === threadIdRef.current) {
@@ -46,6 +68,7 @@ export function useMemorylessChat(initialThreadId: string | null = null, onThrea
       return;
     }
     threadIdRef.current = initialThreadId;
+    hasNudgedRef.current = false;
     if (initialThreadId === null) {
       setMessages([]);
       setIsHydrating(false);
@@ -75,6 +98,30 @@ export function useMemorylessChat(initialThreadId: string | null = null, onThrea
       cancelled = true;
     };
   }, [initialThreadId]);
+
+  // deferred.md #8: fires once per thread, whenever `messages` crosses
+  // the threshold — covers both a live conversation (after a successful
+  // turn adds messages) and a reloaded thread that already has enough
+  // history on hydration, with one check instead of duplicating it at
+  // both call sites. A turn that fails with no delta only adds the
+  // student's own message back (see onError below), never the tutor's,
+  // so a failed exchange correctly never counts toward the threshold.
+  useEffect(() => {
+    if (hasNudgedRef.current) return;
+    if (Math.floor(messages.length / 2) < NUDGE_AFTER_EXCHANGES) return;
+    const threadId = threadIdRef.current;
+    if (!threadId) return;
+    hasNudgedRef.current = true;
+    setComposerNotice({
+      tone: 'warning',
+      message: 'You seem to be getting into this. Want to start a study thread?',
+      actionLabel: 'Start a study thread',
+      onAction: () => {
+        setComposerNotice(null);
+        onNudgeAccept?.(threadId);
+      },
+    });
+  }, [messages, onNudgeAccept]);
 
   const send = useCallback(async (text: string) => {
     setComposerNotice(null);

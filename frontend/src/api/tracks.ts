@@ -1,4 +1,4 @@
-import type { ChatMessage, Track, TrackIntake } from '../types';
+import type { ChatMessage, Track } from '../types';
 import { ApiError, simulateDelay } from './client';
 
 // In-memory only — stands in for a real backend/DB row set. Normally
@@ -17,6 +17,7 @@ const tracks: Track[] = [
     pinned: false,
     projectId: null,
     lastActiveAt: new Date().toISOString(),
+    journeyId: null, // predates real journey wiring (deferred.md #4/#40) — a demo seed row, not a real journey.
   },
 ];
 
@@ -25,15 +26,17 @@ export async function listTracks(): Promise<Track[]> {
   return simulateDelay([...tracks]);
 }
 
-// Real contract: POST /journeys/start { topic, level, goal, background }
-// (backend/src/journeys — deferred.md #4), not yet wired up here —
-// `intake` is accepted so TrackModal's real Level/Goal/Background fields
-// (deferred.md #40) have somewhere to go, but this mock discards it and
-// keeps behaving exactly as before. subjectTitle mirrors title for now —
-// there's no real subject/DAG creation flow wired to the frontend yet
-// (Flow 4, ARCHITECTURE_LOCK.md), so a fresh track has no canonical
-// subject or concept assigned until that happens.
-export async function createTrack(title: string, _intake: TrackIntake | null): Promise<Track> {
+// Called once TrackModal's wizard (deferred.md #40) has already driven
+// the real Onboarding Diagnostic through to a real journey_id
+// (POST /journeys/start + /respond/confirm-downgrade/retry-backup,
+// api/journeys.ts — deferred.md #4). This function itself is still a
+// local mock, same as every other track operation here — journey
+// LISTING/DETAIL and real track-mode teaching are still out of #4's own
+// scope — but it now carries a REAL journeyId through, rather than
+// discarding it. subjectTitle mirrors title for now, same reason as
+// before: no real subject/DAG detail is wired to the frontend to read
+// back yet.
+export async function createTrackFromJourney(title: string, journeyId: string): Promise<Track> {
   const track: Track = {
     id: `track-${Date.now()}`,
     title,
@@ -43,6 +46,7 @@ export async function createTrack(title: string, _intake: TrackIntake | null): P
     pinned: false,
     projectId: null,
     lastActiveAt: new Date().toISOString(),
+    journeyId,
   };
   tracks.push(track);
   return simulateDelay(track, 300);

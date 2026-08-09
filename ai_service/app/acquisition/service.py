@@ -3,6 +3,7 @@ import logging
 import random
 
 import sympy
+from pydantic import ValidationError
 
 from app.acquisition.dify_client import call_dify_workflow, parse_json_output
 from app.acquisition.models import (
@@ -206,28 +207,42 @@ async def generate_dag(topic: str, intake_context: IntakeContext | None = None) 
     validation_error = ""
     result: dict = {}
     concepts: list[ConceptNode] = []
-    diagnostic_primary_raw = None
-    diagnostic_backup_raw = None
+    diagnostic_primary: ExerciseTemplate | None = None
+    diagnostic_backup: ExerciseTemplate | None = None
 
     for attempt in range(MAX_VALIDATION_RETRIES + 1):
         prompt = _build_generate_dag_prompt(topic, intake_context, validation_error)
         outputs = await call_dify_workflow(DIFY_DAG_API_KEY_ENV, {"prompt": prompt})
-        result = parse_json_output(outputs.get("result", "{}"))
-        concepts = [ConceptNode(**c) for c in result.get("concepts", [])]
-
-        diagnostic_primary_raw = result.get("diagnostic_primary") if intake_context is not None else None
-        diagnostic_backup_raw = result.get("diagnostic_backup") if intake_context is not None else None
+        diagnostic_primary = None
+        diagnostic_backup = None
 
         try:
+            # parse_json_output/ConceptNode(**c)/ExerciseTemplate(**raw)
+            # all belong inside this try, not before/after it: a
+            # truncated or malformed Dify response raises
+            # json.JSONDecodeError, and a schema-mismatched concept or
+            # diagnostic raises pydantic's own ValidationError — neither
+            # is a TemplateValidationError, so both used to escape this
+            # loop entirely uncaught, skipping the retry-then-fail-open
+            # logic below and crashing the whole request with a bare
+            # 500 instead (found live: an "advanced"/"exam_prep" combo
+            # reproduced this on every attempt).
+            result = parse_json_output(outputs.get("result", "{}"))
+            concepts = [ConceptNode(**c) for c in result.get("concepts", [])]
             _validate_dag_prerequisites(concepts)
+
+            diagnostic_primary_raw = result.get("diagnostic_primary") if intake_context is not None else None
+            diagnostic_backup_raw = result.get("diagnostic_backup") if intake_context is not None else None
             if diagnostic_primary_raw:
                 _validate_schema(diagnostic_primary_raw)
                 _sanity_check_instantiation(diagnostic_primary_raw)
+                diagnostic_primary = ExerciseTemplate(**diagnostic_primary_raw)
             if diagnostic_backup_raw:
                 _validate_schema(diagnostic_backup_raw)
                 _sanity_check_instantiation(diagnostic_backup_raw)
+                diagnostic_backup = ExerciseTemplate(**diagnostic_backup_raw)
             break
-        except TemplateValidationError as e:
+        except (TemplateValidationError, ValidationError, json.JSONDecodeError) as e:
             validation_error = str(e)
             logger.info(
                 "generate_dag: validation failed (attempt %d): %s",
@@ -235,20 +250,27 @@ async def generate_dag(topic: str, intake_context: IntakeContext | None = None) 
                 validation_error,
             )
             if attempt >= MAX_VALIDATION_RETRIES:
-                # A dangling-prerequisite failure means the DAG itself
-                # is unusable — re-check in isolation so it can't be
-                # masked by (and can't itself mask) a diagnostic-only
-                # failure, which CAN still fail open below.
-                _validate_dag_prerequisites(concepts)
-                diagnostic_primary_raw = None
-                diagnostic_backup_raw = None
+                # A malformed concepts list or dangling-prerequisite
+                # failure means the DAG itself is unusable — re-check in
+                # isolation so it can't be masked by (and can't itself
+                # mask) a diagnostic-only failure, which CAN still fail
+                # open below. Any failure here is real and unrecoverable
+                # (no DAG left to teach from) — normalized to
+                # TemplateValidationError so it still gets the router's
+                # existing clean 422 handling, same as a plain dangling-
+                # prerequisite failure already did.
+                try:
+                    result = parse_json_output(outputs.get("result", "{}"))
+                    concepts = [ConceptNode(**c) for c in result.get("concepts", [])]
+                    _validate_dag_prerequisites(concepts)
+                except (ValidationError, json.JSONDecodeError) as inner_e:
+                    raise TemplateValidationError(str(inner_e)) from inner_e
+                diagnostic_primary = None
+                diagnostic_backup = None
                 logger.info(
                     "generate_dag: fail-open on diagnostics after %d attempt(s) — DAG itself is unaffected",
                     MAX_VALIDATION_RETRIES + 1,
                 )
-
-    diagnostic_primary = ExerciseTemplate(**diagnostic_primary_raw) if diagnostic_primary_raw else None
-    diagnostic_backup = ExerciseTemplate(**diagnostic_backup_raw) if diagnostic_backup_raw else None
 
     return DAGResult(
         concepts=concepts,
@@ -321,18 +343,22 @@ async def adjust_dag(topic: str, draft: DAGResult, reason: str) -> DAGResult:
     "concepts" and "entry_concept" only, no diagnostic fields).
     """
     validation_error = ""
-    result: dict = {}
 
     for attempt in range(MAX_VALIDATION_RETRIES + 1):
         prompt = _build_adjust_dag_prompt(topic, draft, reason, validation_error)
         outputs = await call_dify_workflow(DIFY_DAG_API_KEY_ENV, {"prompt": prompt})
-        result = parse_json_output(outputs.get("result", "{}"))
 
         try:
+            # Same fix as generate_dag(): parse_json_output/ConceptNode(**c)
+            # belong inside this try — a malformed/truncated response
+            # raises json.JSONDecodeError or pydantic's ValidationError,
+            # neither a TemplateValidationError, so both used to escape
+            # this loop uncaught instead of getting a retry.
+            result = parse_json_output(outputs.get("result", "{}"))
             concepts = [ConceptNode(**c) for c in result.get("concepts", [])]
             _validate_dag_prerequisites(concepts)
             return DAGResult(concepts=concepts, entry_concept=result.get("entry_concept", ""))
-        except TemplateValidationError as e:
+        except (TemplateValidationError, ValidationError, json.JSONDecodeError) as e:
             validation_error = str(e)
             logger.info("adjust_dag: validation failed (attempt %d): %s", attempt + 1, validation_error)
 
@@ -542,14 +568,20 @@ async def generate_exercise_template(
     for attempt in range(MAX_VALIDATION_RETRIES + 1):
         prompt = _build_generate_exercise_template_prompt(concept_meta, top_chunks, batch_children, validation_error)
         outputs = await call_dify_workflow(DIFY_EXERCISE_TEMPLATE_API_KEY_ENV, {"prompt": prompt})
-        raw_templates = parse_json_output(outputs.get("templates", "[]"))
 
         try:
+            # Same fix as generate_dag()/adjust_dag(): parse_json_output/
+            # ExerciseTemplate(**raw) belong inside this try so a
+            # malformed/truncated response (json.JSONDecodeError) or a
+            # schema-mismatched field pydantic itself rejects
+            # (ValidationError) hits the existing fail-open path below
+            # instead of crashing the request outright.
+            raw_templates = parse_json_output(outputs.get("templates", "[]"))
             for raw in raw_templates:
                 _validate_schema(raw)
                 _sanity_check_instantiation(raw)
             return [ExerciseTemplate(**raw) for raw in raw_templates]
-        except TemplateValidationError as e:
+        except (TemplateValidationError, ValidationError, json.JSONDecodeError) as e:
             validation_error = str(e)
             logger.info(
                 "generate_exercise_template: validation failed for concept_id=%s (attempt %d): %s",
