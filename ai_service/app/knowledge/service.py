@@ -1,5 +1,6 @@
 import os
 from dataclasses import dataclass
+from enum import Enum
 
 import numpy as np
 
@@ -10,6 +11,14 @@ from app.knowledge.client import get_concept_embeddings, get_knowledge_global
 # on why hnsw:space=cosine is what makes that arithmetic correct.
 RETRIEVAL_MIN_SCORE = float(os.environ.get("RETRIEVAL_MIN_SCORE", "0.60"))
 CHUNK_CONCEPT_MIN_SIMILARITY = float(os.environ.get("CHUNK_CONCEPT_MIN_SIMILARITY", "0.50"))
+# deferred.md #2b — the confident-off-topic floor for classify_topic_gap's
+# 3-way band below CHUNK_CONCEPT_MIN_SIMILARITY (reused here as the
+# confident "matches an existing concept" ceiling, not redefined). Below
+# this, a reply is dissimilar enough from EVERY concept in the subject
+# that no LLM call is needed to know it's unrelated. Between the two
+# thresholds is genuinely ambiguous — that band is what #2b's Stage 2
+# (classify_gap, acquisition/service.py) exists to resolve.
+GAP_OFFTOPIC_MAX_SIMILARITY = float(os.environ.get("GAP_OFFTOPIC_MAX_SIMILARITY", "0.30"))
 
 
 @dataclass
@@ -128,6 +137,76 @@ def is_reply_on_topic_for_concept(
 
     similarity = float(np.dot(concept_vector, reply_vector) / denom)
     return similarity >= CHUNK_CONCEPT_MIN_SIMILARITY
+
+
+class GapBand(str, Enum):
+    """deferred.md #2b's 3-way split, Stage 1 (cheap, deterministic)
+    output. ON_TOPIC_ELSEWHERE and OFF_TOPIC are both confident enough
+    to resolve WITHOUT an LLM call; AMBIGUOUS is the only band Stage 2
+    (classify_gap, acquisition/service.py) ever needs to run for."""
+
+    ON_TOPIC_ELSEWHERE = "on_topic_elsewhere"
+    OFF_TOPIC = "off_topic"
+    AMBIGUOUS = "ambiguous"
+
+
+@dataclass
+class GapSignal:
+    band: GapBand
+    best_concept_id: str | None
+    best_similarity: float
+
+
+def classify_topic_gap(reply_embedding: list[float], subject_id: str, dag_version: int) -> GapSignal:
+    """deferred.md #2b Stage 1 — only meaningful once is_on_topic is
+    STILL False after is_reply_on_topic_for_concept's own current-
+    concept-only check above (analyze_input/service.py calls both, in
+    that order). Broadens the same "how similar is this reply to a
+    concept" question from ONE concept to the whole subject: argmax
+    cosine similarity against every concept_embeddings document scoped
+    to (subject_id, dag_version), same query shape as assign_concept()
+    below, just subject-scoped and returning the actual score instead
+    of a bare bool.
+
+    Three bands, not two, because "similar to some concept" splits
+    further depending on WHICH concept:
+    - similarity >= CHUNK_CONCEPT_MIN_SIMILARITY: the best match can't
+      be the current concept (is_reply_on_topic_for_concept already
+      tested it below this exact threshold), so it must be a DIFFERENT
+      existing concept — the student is "asking ahead," not raising a
+      gap. Not really #2b's classification to make at all; the caller
+      should just treat this as on-topic.
+    - similarity < GAP_OFFTOPIC_MAX_SIMILARITY: dissimilar from EVERY
+      concept in the subject — confidently unrelated, no LLM call
+      needed.
+    - in between: genuinely ambiguous, Stage 2's job.
+
+    Returns OFF_TOPIC (not AMBIGUOUS) when the subject has zero stored
+    concept embeddings at all (e.g. a subject created before #75) —
+    same "purely additive, never a false negative on its own" posture
+    as is_reply_on_topic_for_concept, and there's nothing to compare
+    against anyway.
+    """
+    result = get_concept_embeddings().query(
+        query_embeddings=[reply_embedding],
+        n_results=1,
+        where=_build_where({"subject_id": subject_id, "dag_version": dag_version}),
+        include=["distances", "metadatas"],
+    )
+    ids = result["ids"][0]
+    if not ids:
+        return GapSignal(band=GapBand.OFF_TOPIC, best_concept_id=None, best_similarity=0.0)
+
+    similarity = 1 - result["distances"][0][0]
+    best_concept_id = result["metadatas"][0][0]["concept_id"]
+
+    if similarity >= CHUNK_CONCEPT_MIN_SIMILARITY:
+        band = GapBand.ON_TOPIC_ELSEWHERE
+    elif similarity < GAP_OFFTOPIC_MAX_SIMILARITY:
+        band = GapBand.OFF_TOPIC
+    else:
+        band = GapBand.AMBIGUOUS
+    return GapSignal(band=band, best_concept_id=best_concept_id, best_similarity=similarity)
 
 
 @dataclass
