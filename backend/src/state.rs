@@ -80,6 +80,10 @@ pub struct AppState {
     // deferred.md #4: TTL for Redis-staged onboarding diagnostics — see
     // config.rs's own comment.
     pub onboarding_diagnostic_ttl_minutes: i64,
+    // deferred.md #78 — see config.rs's own comment.
+    pub journey_start_rate_limit: (u32, u64),
+    pub journey_message_rate_limit: (u32, u64),
+    pub memoryless_message_rate_limit: (u32, u64),
 }
 
 impl AppState {
@@ -116,6 +120,9 @@ impl AppState {
             password_reset_rate_limit: config.password_reset_rate_limit,
             otp_verify_attempt_limit: config.otp_verify_attempt_limit,
             onboarding_diagnostic_ttl_minutes: config.onboarding_diagnostic_ttl_minutes,
+            journey_start_rate_limit: config.journey_start_rate_limit,
+            journey_message_rate_limit: config.journey_message_rate_limit,
+            memoryless_message_rate_limit: config.memoryless_message_rate_limit,
         }
     }
 

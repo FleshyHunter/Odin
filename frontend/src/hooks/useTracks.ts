@@ -117,5 +117,13 @@ export function useTrackMessages(trackId: string) {
 
   const dismissComposerNotice = useCallback(() => setComposerNotice(null), []);
 
-  return { messages, isLoading, isSending, send, composerNotice, dismissComposerNotice };
+  // deferred.md #79: a harmless no-op, not a real cancel — this hook has
+  // no real network call to abort (`tracksApi.sendMessage` is a
+  // `simulateDelay` stub, same as the rest of this still-mocked Track
+  // system). Exists purely so `ChatView.tsx` can destructure `cancel`
+  // identically from whichever chat hook is active (this one, or the
+  // real `useJourneyChat`) without a conditional per call site.
+  const cancel = useCallback(() => {}, []);
+
+  return { messages, isLoading, isSending, send, cancel, composerNotice, dismissComposerNotice };
 }

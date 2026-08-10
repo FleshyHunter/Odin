@@ -1,7 +1,12 @@
 from fastapi import APIRouter
 from pydantic import BaseModel
 
-from app.knowledge.service import ChunkRecord, add_chunks, query_knowledge_global
+from app.knowledge.service import (
+    ChunkRecord,
+    add_chunks,
+    add_concept_embedding,
+    query_knowledge_global,
+)
 
 router = APIRouter()
 
@@ -69,3 +74,28 @@ def add_chunks_endpoint(request: AddChunksRequest) -> AddChunksResponse:
     records = [ChunkRecord(**record.model_dump()) for record in request.records]
     add_chunks(records)
     return AddChunksResponse(added=len(records))
+
+
+# deferred.md #75/2b — populates concept_embeddings, the collection
+# add_concept_embedding() has always been able to write to but that
+# nothing has ever called (same "capability before caller" gap #18b
+# closed for knowledge_global). One call site: journeys::service's
+# persist_new_subject, right after a brand-new subject's concepts commit.
+class AddConceptEmbeddingRequest(BaseModel):
+    concept_id: str
+    subject_id: str
+    dag_version: int
+    title: str
+    embedding: list[float]
+
+
+class AddConceptEmbeddingResponse(BaseModel):
+    added: bool
+
+
+@router.post("/knowledge/add_concept_embedding", response_model=AddConceptEmbeddingResponse)
+def add_concept_embedding_endpoint(request: AddConceptEmbeddingRequest) -> AddConceptEmbeddingResponse:
+    add_concept_embedding(
+        request.concept_id, request.subject_id, request.dag_version, request.title, request.embedding
+    )
+    return AddConceptEmbeddingResponse(added=True)

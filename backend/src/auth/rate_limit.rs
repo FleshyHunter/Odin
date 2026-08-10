@@ -7,6 +7,7 @@
 use std::net::IpAddr;
 
 use redis::{aio::MultiplexedConnection, AsyncCommands, RedisResult};
+use uuid::Uuid;
 
 /// Parses the locked "N:Xm"/"N:Xh"/"N:Xs" env var shape (e.g. "5:15m")
 /// into (max_count, window_seconds). Panics on a malformed value —
@@ -76,4 +77,22 @@ pub fn signup_key(ip: &IpAddr) -> String {
 
 pub fn password_reset_key(email: &str) -> String {
     format!("rate_limit:password_reset:{email}")
+}
+
+// deferred.md #78: the three real, GPU-triggering generation endpoints
+// (#4/#18/#20) that were never given a rate limit once they stopped
+// being bare, uncalled functions. User-keyed, not IP-keyed, like the
+// email-keyed auth limits above — every caller here is already
+// authenticated by the time these run, so the account itself (not the
+// network address) is the meaningful identity to throttle.
+pub fn journey_start_key(user_id: Uuid) -> String {
+    format!("rate_limit:journey_start:{user_id}")
+}
+
+pub fn journey_message_key(user_id: Uuid) -> String {
+    format!("rate_limit:journey_message:{user_id}")
+}
+
+pub fn memoryless_message_key(user_id: Uuid) -> String {
+    format!("rate_limit:memoryless_message:{user_id}")
 }

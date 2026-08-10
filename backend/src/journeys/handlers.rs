@@ -10,6 +10,7 @@ use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
 use crate::auth::middleware::AuthUser;
+use crate::auth::rate_limit;
 use crate::state::AppState;
 
 use super::errors::JourneyError;
@@ -71,6 +72,15 @@ pub async fn start(
     State(state): State<AppState>,
     Json(req): Json<StartRequest>,
 ) -> Result<Json<StartResponse>, JourneyError> {
+    // deferred.md #78: this triggers a real generate_dag() call (via
+    // #13's own lock) — rate-limited before any of that real work
+    // starts, same "check first" placement as the auth endpoints.
+    let mut conn = state.get_redis_connection().await?;
+    let (max, window) = state.journey_start_rate_limit;
+    if !rate_limit::check_and_increment(&mut conn, &rate_limit::journey_start_key(user_id), max, window).await? {
+        return Err(JourneyError::RateLimited);
+    }
+
     let outcome = service::start(&state, user_id, req.topic, req.level, req.goal, req.background).await?;
     Ok(Json(outcome.into()))
 }
@@ -197,6 +207,14 @@ pub async fn send_journey_message(
     if req.message.trim().is_empty() {
         return Err(JourneyError::Validation("message must not be empty".to_string()));
     }
+
+    // deferred.md #78: a real generate_stream() call against Ollama.
+    let mut conn = state.get_redis_connection().await?;
+    let (max, window) = state.journey_message_rate_limit;
+    if !rate_limit::check_and_increment(&mut conn, &rate_limit::journey_message_key(user_id), max, window).await? {
+        return Err(JourneyError::RateLimited);
+    }
+
     let think = req.think.unwrap_or(true);
     let mut rx = turn::send_journey_message(&state, user_id, journey_id, req.message, think).await?;
 

@@ -262,6 +262,11 @@ struct AnalyzeInputRequest {
     text: String,
     known_terms: Vec<String>,
     current_concept_id: Option<Uuid>,
+    // deferred.md #75/2b — only meaningful alongside current_concept_id;
+    // together they let ai_service look up that concept's own stored
+    // embedding for a richer on-topic signal than word-match alone.
+    subject_id: Option<Uuid>,
+    dag_version: Option<i32>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -292,12 +297,22 @@ pub struct AnalyzeInputResponse {
 /// never parsed or validated there) — Some(_) signals "mid-journey"
 /// for the TANGENT vs OUT_OF_SCOPE split, None signals no journey
 /// context.
+///
+/// subject_id/dag_version (deferred.md #75/2b): only meaningful
+/// alongside current_concept_id — pass all three or none. memoryless/
+/// turn.rs passes None for all three, same as before; journeys/turn.rs
+/// already has subject_id/dag_version in scope right where it already
+/// calls this (both were being fetched for other reasons — known_terms
+/// itself needs dag_version already), so this is free at that call
+/// site, not a new lookup.
 pub async fn analyze_input(
     client: &reqwest::Client,
     ai_service_url: &str,
     text: String,
     known_terms: Vec<String>,
     current_concept_id: Option<Uuid>,
+    subject_id: Option<Uuid>,
+    dag_version: Option<i32>,
 ) -> Result<AnalyzeInputResponse, AiClientError> {
     let url = format!("{ai_service_url}/analyze_input");
 
@@ -307,6 +322,8 @@ pub async fn analyze_input(
             text,
             known_terms,
             current_concept_id,
+            subject_id,
+            dag_version,
         })
         .send()
         .await
@@ -1027,6 +1044,67 @@ pub async fn add_chunks(
     Ok(())
 }
 
+#[derive(Serialize)]
+struct AddConceptEmbeddingRequest {
+    concept_id: String,
+    subject_id: String,
+    dag_version: i32,
+    title: String,
+    embedding: Vec<f32>,
+}
+
+#[derive(Deserialize)]
+struct AddConceptEmbeddingResponse {
+    #[allow(dead_code)] // Informational only, same as AddChunksResponse's own unused `added`.
+    added: bool,
+}
+
+/// Calls FastAPI's POST /knowledge/add_concept_embedding (deferred.md
+/// #75/2b) — populates the `concept_embeddings` collection
+/// `add_concept_embedding()` has always been able to write to but
+/// nothing has ever called (same "capability before caller" gap #18b
+/// closed for `knowledge_global`). One real caller:
+/// journeys::service::persist_new_subject, right after a brand-new
+/// subject's concepts commit.
+pub async fn add_concept_embedding(
+    client: &reqwest::Client,
+    ai_service_url: &str,
+    concept_id: Uuid,
+    subject_id: Uuid,
+    dag_version: i32,
+    title: String,
+    embedding: Vec<f32>,
+) -> Result<(), AiClientError> {
+    let url = format!("{ai_service_url}/knowledge/add_concept_embedding");
+
+    let response = client
+        .post(&url)
+        .json(&AddConceptEmbeddingRequest {
+            concept_id: concept_id.to_string(),
+            subject_id: subject_id.to_string(),
+            dag_version,
+            title,
+            embedding,
+        })
+        .send()
+        .await
+        .map_err(|_| AiClientError::ServiceUnavailable)?;
+
+    if !response.status().is_success() {
+        return Err(AiClientError::UnexpectedResponse(format!(
+            "status {}",
+            response.status()
+        )));
+    }
+
+    let _body: AddConceptEmbeddingResponse = response
+        .json()
+        .await
+        .map_err(|err| AiClientError::UnexpectedResponse(err.to_string()))?;
+
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     // Real end-to-end proof against the actual Windows-hosted FastAPI —
@@ -1114,6 +1192,8 @@ mod tests {
             AI_SERVICE_URL,
             "what is a matrix".to_string(),
             vec!["matrix".to_string()],
+            None,
+            None,
             None,
         )
         .await

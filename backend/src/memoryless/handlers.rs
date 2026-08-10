@@ -12,6 +12,7 @@ use serde_json::json;
 use uuid::Uuid;
 
 use crate::auth::middleware::{begin_rls_transaction, AuthUser};
+use crate::auth::rate_limit;
 use crate::journeys;
 use crate::state::AppState;
 
@@ -49,6 +50,16 @@ pub async fn send_message(
     State(state): State<AppState>,
     Json(req): Json<SendMessageRequest>,
 ) -> Result<Sse<impl Stream<Item = Result<Event, Infallible>>>, MemorylessError> {
+    // deferred.md #78: a real generate_stream() call against Ollama —
+    // checked before even loading/creating the staged thread, same
+    // "reject cheaply, before any real work" placement as the auth
+    // endpoints.
+    let mut conn = state.get_redis_connection().await?;
+    let (max, window) = state.memoryless_message_rate_limit;
+    if !rate_limit::check_and_increment(&mut conn, &rate_limit::memoryless_message_key(user_id), max, window).await? {
+        return Err(MemorylessError::RateLimited);
+    }
+
     let thread = match req.thread_id {
         Some(thread_id) => load_owned(&state, thread_id, user_id).await?,
         None => StagedThread::new(Uuid::new_v4(), user_id),

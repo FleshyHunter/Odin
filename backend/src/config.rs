@@ -88,6 +88,15 @@ pub struct Config {
     pub otp_resend_rate_limit: (u32, u64),
     pub signup_rate_limit: (u32, u64),
     pub password_reset_rate_limit: (u32, u64),
+    // deferred.md #78: no PRD-locked values exist for these three (all
+    // postdate PRD.md's own NC7 rate-limit list) — defaults picked as
+    // generous-but-real: journey creation is a heavier, rarer action
+    // (10/hour); a real chat message rate limit needs to comfortably
+    // clear fast human typing while still blocking a tight automated
+    // loop (30/minute).
+    pub journey_start_rate_limit: (u32, u64),
+    pub journey_message_rate_limit: (u32, u64),
+    pub memoryless_message_rate_limit: (u32, u64),
     // A bare count, not a window — "5 OTP verify attempts before
     // forcing a fresh code," not "5 per some time period."
     pub otp_verify_attempt_limit: u32,
@@ -221,6 +230,18 @@ impl Config {
             .ok()
             .and_then(|v| v.parse().ok())
             .unwrap_or(30);
+        let journey_start_rate_limit = env::var("JOURNEY_START_RATE_LIMIT")
+            .ok()
+            .map(|v| parse_rate_limit(&v))
+            .unwrap_or((10, 3600));
+        let journey_message_rate_limit = env::var("JOURNEY_MESSAGE_RATE_LIMIT")
+            .ok()
+            .map(|v| parse_rate_limit(&v))
+            .unwrap_or((30, 60));
+        let memoryless_message_rate_limit = env::var("MEMORYLESS_MESSAGE_RATE_LIMIT")
+            .ok()
+            .map(|v| parse_rate_limit(&v))
+            .unwrap_or((30, 60));
 
         Self {
             database_url,
@@ -250,6 +271,9 @@ impl Config {
             password_reset_rate_limit,
             otp_verify_attempt_limit,
             onboarding_diagnostic_ttl_minutes,
+            journey_start_rate_limit,
+            journey_message_rate_limit,
+            memoryless_message_rate_limit,
         }
     }
 }

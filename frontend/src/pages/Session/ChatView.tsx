@@ -37,7 +37,10 @@ export function ChatView() {
   // an optional real-vs-mock split.
   const mockChat = useTrackMessages(activeTrackId);
   const journeyChat = useJourneyChat(activeTrack?.journeyId ?? null);
-  const { messages, isSending, send, composerNotice, dismissComposerNotice } = activeTrack?.journeyId
+  // deferred.md #79: `cancel` is now destructured and wired too — both
+  // hooks return one (a real AbortController.abort() for journeyChat,
+  // a harmless no-op for mockChat, see useTrackMessages's own comment).
+  const { messages, isSending, send, cancel, composerNotice, dismissComposerNotice } = activeTrack?.journeyId
     ? journeyChat
     : mockChat;
   const { width: panelWidth, setWidth: setPanelWidth, isOpen: isPanelOpen, toggle: togglePanel } = useActivePanel();
@@ -185,10 +188,11 @@ export function ChatView() {
           isPanelOpen={isPanelOpen}
           onTogglePanel={togglePanel}
         />
-        <MessageList messages={messages} />
+        <MessageList messages={messages} onRetry={send} />
         <Composer
           onSend={send}
           isSending={isSending}
+          onStop={cancel}
           notice={composerNotice}
           onDismissNotice={dismissComposerNotice}
         />

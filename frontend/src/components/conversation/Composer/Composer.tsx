@@ -46,7 +46,7 @@ export function Composer({
   onRetryAttachment,
 }: ComposerProps) {
   const [value, setValue] = useState('');
-  const { status, startRecording, stopRecording } = useVoiceInput();
+  const { status, error: voiceError, startRecording, stopRecording } = useVoiceInput();
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const attachEnabled = onAttachFiles !== undefined;
@@ -85,15 +85,22 @@ export function Composer({
 
   const handleMicClick = async () => {
     if (status === 'idle') {
-      startRecording();
+      // Not awaited — getUserMedia()/permission prompt resolves
+      // asynchronously; the hook's own status/error state drives the UI
+      // from here, this click handler doesn't need to wait on it.
+      void startRecording();
       return;
     }
     if (status === 'recording') {
       const transcribed = await stopRecording();
       // Locked Voice Input UX: transcribed text drops into the input box
       // for the user to review/edit — never auto-sent (ARCHITECTURE_LOCK.md,
-      // Upload System — Voice Input, step 6).
-      setValue((prev) => (prev ? `${prev} ${transcribed}` : transcribed));
+      // Upload System — Voice Input, step 6). Empty on any failure (see
+      // useVoiceInput's own error state, rendered separately below) —
+      // nothing to insert in that case.
+      if (transcribed) {
+        setValue((prev) => (prev ? `${prev} ${transcribed}` : transcribed));
+      }
     }
   };
 
@@ -214,6 +221,10 @@ export function Composer({
                 </button>
               </div>
             </div>
+            {/* deferred.md #80 — scoped down deliberately: no retry
+                affordance, no dedicated error component, just a small
+                inline message near the mic button that caused it. */}
+            {voiceError && <p className="composer-voice-error">{voiceError}</p>}
           </div>
       </div>
     </div>

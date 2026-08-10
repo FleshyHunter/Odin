@@ -25,6 +25,12 @@ pillow-heif>=0.18
 # collections — chromadb's own HttpClient talks to the ChromaDB server
 # container (docker-compose.windows.yml), not an embedded/local mode.
 chromadb>=0.5
+# deferred.md #75/2b: cosine similarity for is_reply_on_topic_for_concept
+# (knowledge/service.py) — was already a hard transitive dependency of
+# both sentence-transformers and chromadb above, but this is the first
+# DIRECT import of it, so it's declared explicitly now rather than
+# relying silently on transitive resolution.
+numpy>=1.26
 # Redis Phase 3 (deferred.md #9-11) — embedding/spaCy result caching.
 # ai_service's first-ever Redis dependency; optional at runtime (see
 # app/cache/service.py — no REDIS_URL just means caching is silently

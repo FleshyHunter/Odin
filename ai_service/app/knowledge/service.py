@@ -1,6 +1,8 @@
 import os
 from dataclasses import dataclass
 
+import numpy as np
+
 from app.knowledge.client import get_concept_embeddings, get_knowledge_global
 
 # ARCHITECTURE.md's Environment Variables [LOCKED] list — both written
@@ -81,6 +83,51 @@ def add_concept_embedding(
             "title": title,
         },
     )
+
+
+def is_reply_on_topic_for_concept(
+    reply_embedding: list[float],
+    concept_id: str,
+    subject_id: str,
+    dag_version: int,
+) -> bool:
+    """deferred.md #75/2b — a richer, embedding-based on-topic signal
+    for the mid-journey case, ALONGSIDE (never replacing) Step 5's own
+    coarse word-match (nlp/spacy_pipe.py's own is_on_topic docstring
+    already named embedding similarity as the eventual fix, before
+    Milestone 9/#18 existed to build it). Found live: a plainly on-topic
+    reply ("The red ones have more, that is 3 vs 2") shares zero
+    vocabulary with its concept's title, so word-match alone can't see
+    the relationship word-match was never going to catch.
+
+    Fetches the ONE known concept_embeddings document directly (`.get`,
+    not a similarity search — the caller already knows exactly which
+    concept this is via current_concept_id) and computes cosine
+    similarity by hand, since `.get()` has no distance/similarity output
+    of its own (unlike `query_knowledge_global`'s `.query()` above).
+    Reuses CHUNK_CONCEPT_MIN_SIMILARITY (already a real, if previously
+    uncalled, env var here) rather than inventing a second threshold for
+    the same "how similar is X to a concept" question.
+
+    Returns False — not True — if the concept has no stored embedding
+    yet (e.g. a subject created before this feature existed): this
+    signal is purely additive to word-match, never a source of false
+    negatives on its own.
+    """
+    doc_id = f"{concept_id}:{subject_id}:{dag_version}"
+    result = get_concept_embeddings().get(ids=[doc_id], include=["embeddings"])
+    embeddings = result.get("embeddings")
+    if embeddings is None or len(embeddings) == 0:
+        return False
+
+    concept_vector = np.array(embeddings[0], dtype=float)
+    reply_vector = np.array(reply_embedding, dtype=float)
+    denom = float(np.linalg.norm(concept_vector) * np.linalg.norm(reply_vector))
+    if denom == 0:
+        return False
+
+    similarity = float(np.dot(concept_vector, reply_vector) / denom)
+    return similarity >= CHUNK_CONCEPT_MIN_SIMILARITY
 
 
 @dataclass

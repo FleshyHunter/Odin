@@ -4,11 +4,11 @@
 // this pass's explicit scope (code only, not yet wired to a route).
 // analyze_input()/generate()/generate_stream() (memoryless chat turns),
 // generate_exercise_template()/ingest() (Block 12: exercises/, uploads/),
-// generate_dag()/adjust_dag()/grade() (deferred.md #4: journeys::), and
+// generate_dag()/adjust_dag()/grade() (deferred.md #4: journeys::),
 // embed() (deferred.md #18/#19: staged-upload + knowledge_global
-// retrieval, both memoryless and journey chat turns) are now used;
-// transcribe()/acquire() still have no Rust caller (deferred.md #80,
-// #12) — the module-level allow still covers those two.
+// retrieval, both memoryless and journey chat turns), and transcribe()
+// (deferred.md #80: voice::) are now used; acquire() still has no Rust
+// caller (deferred.md #12) — the module-level allow still covers that one.
 #[allow(dead_code)]
 mod ai_client;
 mod auth;
@@ -23,6 +23,7 @@ mod models;
 mod routes;
 mod state;
 mod uploads;
+mod voice;
 
 use std::net::SocketAddr;
 use std::sync::Arc;
@@ -129,6 +130,7 @@ async fn main() {
         .merge(exercises::router())
         .merge(content_flags::router())
         .merge(journeys::router())
+        .merge(voice::router())
         .layer(cors)
         .with_state(app_state);
 

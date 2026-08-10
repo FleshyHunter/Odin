@@ -609,7 +609,7 @@ async fn fetch_subject_prereq_pairs(
 /// (a separate, unbuilt mechanism) is the intended home for any future
 /// cross-subject concept matching — not naive title comparison here.
 async fn persist_new_subject(
-    pool: &PgPool,
+    state: &AppState,
     normalized_name: &str,
     subject_title: &str,
     draft: &DAGResult,
@@ -642,7 +642,7 @@ async fn persist_new_subject(
     // through used to leave orphaned canonical_concepts/subject_concepts
     // rows with no matching subjects.entry_concept_id ever set — now
     // rolls back cleanly instead.
-    let mut tx = pool.begin().await?;
+    let mut tx = state.pool.begin().await?;
 
     let insert_result: Result<Uuid, sqlx::Error> =
         sqlx::query_scalar("INSERT INTO subjects (title, normalized_name) VALUES ($1, $2) RETURNING subject_id")
@@ -662,7 +662,7 @@ async fn persist_new_subject(
                 "SELECT subject_id, dag_version, entry_concept_id FROM subjects WHERE normalized_name = $1",
             )
             .bind(normalized_name)
-            .fetch_one(pool)
+            .fetch_one(&state.pool)
             .await?;
             // With the transaction fix above, a concurrent winner's row
             // is only ever visible here fully committed — NULL now
@@ -743,6 +743,46 @@ async fn persist_new_subject(
 
     tx.commit().await?;
 
+    // deferred.md #75/2b: populates concept_embeddings — best-effort,
+    // after the real commit above, same "commit real data first, then
+    // fail-soft enrichment" shape as write_through_material_upload's
+    // own knowledge_global write (#18b). A failure here never blocks
+    // subject creation; it only means is_on_topic's richer embedding
+    // check has nothing to compare against for these concepts yet,
+    // falling back to word-match alone — exactly today's behavior, not
+    // a regression. Batch-embeds every concept in ONE call
+    // (ai_client::embed already batches), title+description as the
+    // concept's semantic representation.
+    match ai_client::embed(
+        &state.http_client,
+        &state.ai_service_url,
+        draft.concepts.iter().map(|c| format!("{}. {}", c.title, c.description)).collect(),
+    )
+    .await
+    {
+        Ok(embeddings) => {
+            for (concept, embedding) in draft.concepts.iter().zip(embeddings) {
+                let Some(&concept_id) = concept_id_by_title.get(&concept.title) else { continue };
+                if let Err(err) = ai_client::add_concept_embedding(
+                    &state.http_client,
+                    &state.ai_service_url,
+                    concept_id,
+                    subject_id,
+                    dag_version,
+                    concept.title.clone(),
+                    embedding,
+                )
+                .await
+                {
+                    tracing::warn!(?err, %concept_id, "failed to write concept embedding, continuing");
+                }
+            }
+        }
+        Err(err) => {
+            tracing::warn!(?err, %subject_id, "failed to batch-embed new subject's concepts, continuing without concept_embeddings");
+        }
+    }
+
     Ok(PersistOutcome::Created { subject_id, dag_version, concept_id_by_title })
 }
 
@@ -797,7 +837,7 @@ async fn finalize(
             normalized_name,
             subject_title,
             draft,
-        } => match persist_new_subject(&state.pool, normalized_name, subject_title, draft).await? {
+        } => match persist_new_subject(state, normalized_name, subject_title, draft).await? {
             PersistOutcome::Created { subject_id, dag_version, concept_id_by_title } => {
                 let entry_concept_id = match entry_concept {
                     EntryConcept::Existing(id) => *id, // shouldn't happen for a New subject; defensive only.

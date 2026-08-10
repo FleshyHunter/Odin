@@ -15,6 +15,12 @@ class AnalyzeInputRequest(BaseModel):
     # mid-journey. Presence-only signal (not validated as a real UUID;
     # ai_service has no DB access to check it against anything).
     current_concept_id: str | None = None
+    # deferred.md #75/2b — only meaningful alongside current_concept_id;
+    # together they locate that concept's own stored embedding for the
+    # richer on-topic check (see service.py's own doc comment). None for
+    # memoryless mode, same as current_concept_id always was.
+    subject_id: str | None = None
+    dag_version: int | None = None
 
 
 class AnalyzeInputResponse(BaseModel):
@@ -29,5 +35,11 @@ class AnalyzeInputResponse(BaseModel):
 
 @router.post("/analyze_input", response_model=AnalyzeInputResponse)
 def analyze_input_endpoint(request: AnalyzeInputRequest) -> AnalyzeInputResponse:
-    result = analyze_input(request.text, request.known_terms, request.current_concept_id)
+    result = analyze_input(
+        request.text,
+        request.known_terms,
+        request.current_concept_id,
+        request.subject_id,
+        request.dag_version,
+    )
     return AnalyzeInputResponse(**result)

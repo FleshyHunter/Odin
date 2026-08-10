@@ -183,6 +183,8 @@ pub async fn start_turn_stream(
         raw_input.clone(),
         Vec::new(),
         None,
+        None,
+        None,
     )
     .await?;
 

@@ -17,6 +17,11 @@ export function useJourneyChat(journeyId: string | null) {
   const [composerNotice, setComposerNotice] = useState<ComposerNoticeData | null>(null);
   const threadIdRef = useRef<string | null>(null);
   const abortRef = useRef<AbortController | null>(null);
+  // deferred.md #79: mirrors useMemorylessChat.ts's own #76 fix — a
+  // real, synchronous "is a turn already running" guard, not just
+  // relying on Composer having disabled its input in time. Only send()
+  // needs it; beginOpening has no user-facing trigger to race against.
+  const isSendingRef = useRef(false);
 
   const beginOpening = useCallback(() => {
     if (!journeyId) return;
@@ -92,6 +97,10 @@ export function useJourneyChat(journeyId: string | null) {
   const send = useCallback(
     async (text: string) => {
       if (!journeyId) return;
+      // See isSendingRef's own comment.
+      if (isSendingRef.current) return;
+      isSendingRef.current = true;
+
       setComposerNotice(null);
       const studentMessage: ChatMessage = {
         id: `local-${Date.now()}`,
@@ -132,7 +141,16 @@ export function useJourneyChat(journeyId: string | null) {
           controller.signal,
         );
 
-        if (!receivedDelta && !controller.signal.aborted) {
+        if (controller.signal.aborted) {
+          // deferred.md #79: mirrors #76's fix exactly — mark the
+          // placeholder interrupted (stops MessageBubble's musing
+          // animation immediately, whether or not any text had already
+          // streamed in) instead of leaving it to cycle "musing"
+          // forever, and instead of the old silent no-op here.
+          setMessages((prev) =>
+            prev.map((m) => (m.id === tutorMessageId ? { ...m, interrupted: true, promptText: text } : m)),
+          );
+        } else if (!receivedDelta) {
           setMessages((prev) => prev.filter((m) => m.id !== tutorMessageId));
           setComposerNotice({
             tone: 'error',
@@ -142,6 +160,7 @@ export function useJourneyChat(journeyId: string | null) {
           });
         }
       } finally {
+        isSendingRef.current = false;
         setIsSending(false);
         abortRef.current = null;
       }

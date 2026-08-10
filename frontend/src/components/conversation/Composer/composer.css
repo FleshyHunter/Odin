@@ -86,6 +86,13 @@
   display: flex; align-items: center; gap: 0.4rem;
 }
 
+/* deferred.md #80 — a mic-permission/transcription failure message,
+   deliberately plain (no icon, no dismiss button, no retry affordance)
+   per this feature's own scoped-down error UX decision. */
+.composer .composer-voice-error {
+  margin: 0 0.55rem 0.5rem; font-size: 0.78rem; color: var(--error);
+}
+
 .composer .icon-btn {
   background: none; border: none; color: var(--text);
   display: flex; align-items: center; justify-content: center;

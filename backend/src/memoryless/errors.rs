@@ -31,6 +31,11 @@ pub enum MemorylessError {
     // offline mode... a clear failure is more honest than a hang").
     #[error("{0}")]
     ServiceUnavailable(&'static str),
+    // deferred.md #78 — same shape as AuthError::RateLimited, applied to
+    // POST /memoryless/messages now that it's a real, GPU-triggering
+    // generation call.
+    #[error("too many requests")]
+    RateLimited,
 }
 
 impl IntoResponse for MemorylessError {
@@ -41,6 +46,7 @@ impl IntoResponse for MemorylessError {
             MemorylessError::NotFound => StatusCode::NOT_FOUND,
             MemorylessError::Internal => StatusCode::INTERNAL_SERVER_ERROR,
             MemorylessError::ServiceUnavailable(_) => StatusCode::SERVICE_UNAVAILABLE,
+            MemorylessError::RateLimited => StatusCode::TOO_MANY_REQUESTS,
         };
         (status, Json(json!({ "error": self.to_string() }))).into_response()
     }
@@ -119,6 +125,12 @@ impl From<JourneyError> for MemorylessError {
             }
             JourneyError::Internal => MemorylessError::Internal,
             JourneyError::ServiceUnavailable(msg) => MemorylessError::ServiceUnavailable(msg),
+            // deferred.md #78: convert()'s own reuse of these journeys::
+            // turn helpers doesn't itself call the NEW rate-limited
+            // routes, so this arm should be unreachable in practice —
+            // mapped straight through regardless, for an exhaustive,
+            // honest match rather than a silent Internal fallback.
+            JourneyError::RateLimited => MemorylessError::RateLimited,
         }
     }
 }

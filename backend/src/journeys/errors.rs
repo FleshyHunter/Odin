@@ -23,6 +23,11 @@ pub enum JourneyError {
     Internal,
     #[error("{0}")]
     ServiceUnavailable(&'static str),
+    // deferred.md #78 — same shape as AuthError::RateLimited, applied to
+    // POST /journeys/start and POST /journeys/{id}/messages now that
+    // both are real, GPU-triggering generation calls.
+    #[error("too many requests")]
+    RateLimited,
 }
 
 impl IntoResponse for JourneyError {
@@ -34,6 +39,7 @@ impl IntoResponse for JourneyError {
             JourneyError::GenerationFailed(_) => StatusCode::BAD_GATEWAY,
             JourneyError::Internal => StatusCode::INTERNAL_SERVER_ERROR,
             JourneyError::ServiceUnavailable(_) => StatusCode::SERVICE_UNAVAILABLE,
+            JourneyError::RateLimited => StatusCode::TOO_MANY_REQUESTS,
         };
         (status, Json(json!({ "error": self.to_string() }))).into_response()
     }

@@ -396,6 +396,10 @@ pub async fn send_journey_message(
         raw_input.clone(),
         known_terms,
         Some(current_concept_id),
+        // deferred.md #75/2b — both already fetched above for other
+        // reasons (dag_version for known_terms itself), free here.
+        Some(subject_id),
+        Some(dag_version),
     )
     .await?;
 
