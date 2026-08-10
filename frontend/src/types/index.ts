@@ -101,6 +101,15 @@ export interface ChatMessage {
   role: MessageRole;
   text: string;
   timestamp: string;
+  // Set on a tutor message whose turn was cancelled by the user (not a
+  // failure) — MessageBubble renders a distinct "response was
+  // interrupted" container instead of (or after, if some text already
+  // streamed in) the normal bubble content. `promptText` is the
+  // original student message that produced this turn, carried directly
+  // on the message so "Try again" can resend it without depending on
+  // message-list ordering to find it.
+  interrupted?: boolean;
+  promptText?: string;
 }
 
 // A graceful, dismissible banner that attaches to the top of the

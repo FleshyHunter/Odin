@@ -32,5 +32,11 @@ def transcribe_audio(audio_bytes: bytes, filename: str) -> str:
     with tempfile.NamedTemporaryFile(suffix=suffix) as tmp:
         tmp.write(audio_bytes)
         tmp.flush()
-        result = model.transcribe(tmp.name)
+        # deferred.md #67 — pinned English, same failure class as the
+        # already-fixed langdetect bug (problems.md #25): Whisper's own
+        # language-ID is unreliable on short utterances, exactly what a
+        # voice question looks like, and PRD.md's Voice Input section
+        # locks English-only. Without this, Whisper ran its own
+        # auto-detection (and paid for that extra pass) on every clip.
+        result = model.transcribe(tmp.name, language="en")
     return result["text"].strip()

@@ -5,6 +5,7 @@ import { useTracks } from '../../hooks/useTracks';
 import { useProjects } from '../../hooks/useProjects';
 import { TrackModal } from '../../components/tracks/TrackModal/TrackModal';
 import { ChangeProjectModal } from '../../components/tracks/ChangeProjectModal/ChangeProjectModal';
+import { Modal } from '../../components/ui/Modal/Modal';
 import type { Track } from '../../types';
 import './Session.css';
 
@@ -52,8 +53,14 @@ export function SessionLayout({ profileName, email, onSignOut }: SessionLayoutPr
   const [isTrackModalOpen, setIsTrackModalOpen] = useState(false);
   const [trackModalThreadId, setTrackModalThreadId] = useState<string | null>(null);
   const [changeProjectTrackId, setChangeProjectTrackId] = useState<string | null>(null);
+  // deferred.md #73 — set only when guardedNavigate below intercepts a
+  // real navigation away from a live, unconverted memoryless thread.
+  // `proceed` is the original navigation, deferred until the student
+  // actually confirms leaving.
+  const [pendingLeave, setPendingLeave] = useState<{ threadId: string; proceed: () => void } | null>(null);
   const location = useLocation();
   const navigate = useNavigate();
+  const activeTrack = tracks.find((track) => track.id === activeTrackId) ?? null;
 
   // "Tracks" nav now mirrors "Projects" exactly: both point at their own
   // browse-all page. /chat (bare) is reached by opening a track from any
@@ -61,25 +68,56 @@ export function SessionLayout({ profileName, email, onSignOut }: SessionLayoutPr
   const urlSection: SidebarSection = location.pathname.startsWith('/projects') ? 'projects' : 'tracks';
   const activeSection: SidebarSection = pinnedActive ? 'pinned' : urlSection;
 
+  // /chat/:id is either a real track or a real memoryless thread (see
+  // ChatView's own comment) — activeTrack stays null for the latter, so
+  // "an id is present in the URL AND it matches no known track" IS
+  // exactly "currently viewing a live memoryless conversation." Derived
+  // straight from state SessionLayout already has — no new prop
+  // threading from MemorylessLanding needed.
+  const currentMemorylessThreadId = (() => {
+    const match = location.pathname.match(/^\/chat\/([^/]+)$/);
+    return match && activeTrack === null ? match[1] : null;
+  })();
+
+  // Wraps every real navigate()-away action (clicking a different track,
+  // New chat, Tracks/Projects) — if leaving right now would abandon a
+  // live memoryless thread, the action is held until the student
+  // confirms via the modal below instead of running immediately.
+  const guardedNavigate = (action: () => void) => {
+    if (currentMemorylessThreadId) {
+      setPendingLeave({ threadId: currentMemorylessThreadId, proceed: action });
+    } else {
+      action();
+    }
+  };
+
   const handleSectionChange = (section: SidebarSection) => {
+    // Doesn't navigate at all (RecentsList's own filter, same route) —
+    // nothing to guard.
     if (section === 'pinned') {
       setPinnedActive(true);
       return;
     }
-    setPinnedActive(false);
-    navigate(section === 'projects' ? '/projects' : '/tracks');
+    guardedNavigate(() => {
+      setPinnedActive(false);
+      navigate(section === 'projects' ? '/projects' : '/tracks');
+    });
   };
 
   const handleSelectTrack = (trackId: string) => {
-    setPinnedActive(false);
-    navigate(`/chat/${trackId}`);
-    setActiveTrackId(trackId);
+    guardedNavigate(() => {
+      setPinnedActive(false);
+      navigate(`/chat/${trackId}`);
+      setActiveTrackId(trackId);
+    });
   };
 
   const handleHome = () => {
-    setPinnedActive(false);
-    setActiveTrackId('');
-    navigate('/chat');
+    guardedNavigate(() => {
+      setPinnedActive(false);
+      setActiveTrackId('');
+      navigate('/chat');
+    });
   };
 
   const openCreateTrackModal = (initialThreadId?: string) => {
@@ -95,8 +133,6 @@ export function SessionLayout({ profileName, email, onSignOut }: SessionLayoutPr
     navigate(`/chat/${track.id}`);
     setActiveTrackId(track.id);
   };
-
-  const activeTrack = tracks.find((track) => track.id === activeTrackId) ?? null;
 
   return (
     <div className="session-page">
@@ -156,6 +192,43 @@ export function SessionLayout({ profileName, email, onSignOut }: SessionLayoutPr
         currentProjectId={changeProjectTrack?.projectId ?? null}
         onSelect={(projectId) => setTrackProject(changeProjectTrackId as string, projectId)}
       />
+
+      {/* deferred.md #73 — the accurate framing, not "your data will be
+          lost": write-through already persists messages durably; the
+          real problem is there's no route back to this thread once you
+          leave (it never appears in Recents, and GET /memoryless/
+          threads/:id only reads Redis, which eventually expires). */}
+      <Modal open={pendingLeave !== null} title="Leave this chat?" onClose={() => setPendingLeave(null)}>
+        <p className="modal-hint">
+          This chat isn't part of a track yet — once you leave, you won't be able to get back to it.
+        </p>
+        <div className="modal-actions">
+          <button type="button" className="btn-primary" onClick={() => setPendingLeave(null)}>
+            Stay
+          </button>
+          <button
+            type="button"
+            className="btn-secondary"
+            onClick={() => {
+              const threadId = pendingLeave?.threadId;
+              setPendingLeave(null);
+              if (threadId) openCreateTrackModal(threadId);
+            }}
+          >
+            Add to a track
+          </button>
+          <button
+            type="button"
+            className="btn-secondary"
+            onClick={() => {
+              pendingLeave?.proceed();
+              setPendingLeave(null);
+            }}
+          >
+            Leave anyway
+          </button>
+        </div>
+      </Modal>
     </div>
   );
 }

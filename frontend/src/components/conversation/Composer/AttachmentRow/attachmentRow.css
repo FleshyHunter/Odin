@@ -1,13 +1,11 @@
-/* Sits inside .composer-frame, above .composer-box (see Composer.tsx) —
-   reuses composer-frame's existing 80%-width column layout rather than
-   introducing a second width rule. Visually separate from the box itself
-   (own margin, not merged into its border), matching the reference design's
-   floating card row rather than ComposerNotice's merged-into-the-box style. */
+/* Sits at the top of .composer-box (see Composer.tsx), below any mounted
+   notice. The inset keeps cards aligned with the textarea content while
+   preserving all attachment behavior. */
 .attachment-row {
   display: flex;
   flex-wrap: wrap;
   gap: 0.5rem;
-  margin-bottom: 0.6rem;
+  padding: 0.65rem 0.9rem 0;
 }
 
 .attachment-card {

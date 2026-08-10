@@ -5,6 +5,7 @@ use axum::{
     response::sse::{Event, KeepAlive, Sse},
     Json,
 };
+use chrono::{DateTime, Utc};
 use futures_util::Stream;
 use serde::{Deserialize, Serialize};
 use serde_json::json;
@@ -15,7 +16,7 @@ use crate::journeys;
 use crate::state::AppState;
 
 use super::errors::MemorylessError;
-use super::staging::{self, load_owned, StagedThread};
+use super::staging::{self, load_owned, StagedAuditEvent, StagedMessage, StagedThread};
 use super::turn;
 use super::write_through;
 
@@ -81,13 +82,73 @@ pub async fn send_message(
     Ok(Sse::new(sse_stream).keep_alive(KeepAlive::default()))
 }
 
+// deferred.md #70 — a separate wire-facing shape, not #[serde(skip)] on
+// StagedChunk itself: that same struct is also what gets serialized to
+// Redis (staging::save), and skip_serializing there would silently
+// drop the embedding from STORAGE too, breaking #19's real
+// rank_by_similarity() retrieval — this DTO only affects what THIS one
+// HTTP response ships, nothing persisted.
+#[derive(Serialize)]
+pub struct ThreadResponseChunk {
+    pub text: String,
+    pub token_count: i32,
+}
+
+#[derive(Serialize)]
+pub struct ThreadResponseUpload {
+    pub content_hash: String,
+    pub filename: String,
+    pub upload_role: String,
+    pub extracted_text: String,
+    pub chunks: Vec<ThreadResponseChunk>,
+    pub created_at: DateTime<Utc>,
+}
+
+#[derive(Serialize)]
+pub struct ThreadResponse {
+    pub thread_id: Uuid,
+    pub user_id: Uuid,
+    pub messages: Vec<StagedMessage>,
+    pub audit_events: Vec<StagedAuditEvent>,
+    pub staged_uploads: Vec<ThreadResponseUpload>,
+    pub created_at: DateTime<Utc>,
+}
+
+impl From<StagedThread> for ThreadResponse {
+    fn from(thread: StagedThread) -> Self {
+        Self {
+            thread_id: thread.thread_id,
+            user_id: thread.user_id,
+            messages: thread.messages,
+            audit_events: thread.audit_events,
+            staged_uploads: thread
+                .staged_uploads
+                .into_iter()
+                .map(|u| ThreadResponseUpload {
+                    content_hash: u.content_hash,
+                    filename: u.filename,
+                    upload_role: u.upload_role,
+                    extracted_text: u.extracted_text,
+                    chunks: u
+                        .chunks
+                        .into_iter()
+                        .map(|c| ThreadResponseChunk { text: c.text, token_count: c.token_count })
+                        .collect(),
+                    created_at: u.created_at,
+                })
+                .collect(),
+            created_at: thread.created_at,
+        }
+    }
+}
+
 pub async fn get_thread(
     AuthUser(user_id): AuthUser,
     State(state): State<AppState>,
     Path(thread_id): Path<Uuid>,
-) -> Result<Json<StagedThread>, MemorylessError> {
+) -> Result<Json<ThreadResponse>, MemorylessError> {
     let thread = load_owned(&state, thread_id, user_id).await?;
-    Ok(Json(thread))
+    Ok(Json(thread.into()))
 }
 
 #[derive(Deserialize)]

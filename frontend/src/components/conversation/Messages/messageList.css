@@ -26,3 +26,10 @@
   padding-inline: 1.125rem;
   display: flex; flex-direction: column; gap: 1.4rem;
 }
+
+/* Reserved-scroll-room spacer (MessageList.tsx) — min-height is set/reset
+   imperatively via ref, never through CSS. flex-shrink: 0 so .messages'
+   flex layout never compresses the reservation back down on its own. */
+.messages-spacer {
+  flex-shrink: 0;
+}

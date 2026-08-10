@@ -54,8 +54,14 @@ export function AttachmentCard({ attachment, onRemove, onRetry }: AttachmentCard
   // Once the real chunk_count comes back, prefer it over the pre-upload
   // line-count guess — it's the server's own account of what actually got
   // ingested, not just a client-side approximation of the raw file.
+  // deferred.md #71 — `chunkCount > 0`, not just `!== undefined`: both
+  // dedup fast-paths in uploads/handlers.rs respond with chunk_count: 0
+  // (nothing was re-chunked/embedded, the file already existed), and 0
+  // counted as "defined" — a deduped file's card read "0 chunks · already
+  // added" instead of falling back to the pre-upload estimate, implying
+  // the file were empty rather than "already had this."
   const detail =
-    chunkCount !== undefined
+    chunkCount !== undefined && chunkCount > 0
       ? `${chunkCount} chunk${chunkCount === 1 ? '' : 's'}`
       : lineCount !== null
         ? `${lineCount} line${lineCount === 1 ? '' : 's'}`

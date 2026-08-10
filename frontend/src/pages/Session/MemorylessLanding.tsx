@@ -6,7 +6,13 @@ import { TrackHeader } from '../../components/conversation/TrackBar/TrackHeader'
 import { useMemorylessChat } from '../../hooks/useMemorylessChat';
 
 interface MemorylessLandingProps {
-  onStartTrack: () => void;
+  // deferred.md #74: accepts an optional thread_id now — the "Start a
+  // track" pill below still calls this with zero args (start something
+  // new, nothing to attach), but TrackHeader's "Add to a track" passes
+  // the CURRENT thread_id so TrackModal seeds a real conversion
+  // (openCreateTrackModal(initialThreadId?) → TrackModal.initialThreadId
+  // → convertMemorylessThread) instead of just opening a blank modal.
+  onStartTrack: (threadId?: string) => void;
   // deferred.md #43: a /chat/:id URL that isn't a known mock track is
   // treated as a real memoryless thread id — this seeds the hook so it
   // fetches that thread's real history instead of starting blank.
@@ -141,17 +147,15 @@ export function MemorylessLanding({ onStartTrack, threadId = null, onThreadCreat
         <TrackHeader
           title="New chat"
           conceptTitle={null}
-          // Reuses the exact same "open the track-creation modal"
-          // trigger as the "Start a track" pill below (both are real,
-          // working entry points to TrackModal today) — it does NOT yet
-          // carry this conversation's own content into the resulting
-          // track. Attaching THIS thread to the new track depends on
-          // deferred.md #74's still-pending backend wiring (itself
-          // gated on #17), not built here.
-          onAddToTrack={onStartTrack}
+          // deferred.md #74 — now passes the real, live thread_id (the
+          // conditional above already narrows it to `string`), so
+          // TrackModal seeds a real conversion via convertMemorylessThread
+          // once the new journey exists, instead of just opening a blank
+          // "New track" flow with nothing to attach.
+          onAddToTrack={() => onStartTrack(threadId)}
         />
       )}
-      <MessageList messages={messages} />
+      <MessageList messages={messages} onRetry={send} />
       <Composer
         onSend={send}
         isSending={isSending}

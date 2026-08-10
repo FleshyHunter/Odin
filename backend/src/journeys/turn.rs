@@ -8,11 +8,12 @@
 // already treats it as real from message one, so this writes directly to
 // Postgres as the ONLY path, no Redis, no write-through catch-up.
 //
-// Deliberately bare against the permanent knowledge base (deferred.md
-// #18, still unwired for either mode) and against mastery/exercises
-// (a separate, already-real system) — same incremental-build philosophy
-// memoryless itself was built under (Block 11 first, retrieval/history
-// added later). TANGENT/OUT_OF_SCOPE turns are detected and recorded
+// Wired against the permanent knowledge base as of deferred.md #18 (see
+// query_knowledge_context) — subject-scoped, unlike memoryless mode's
+// unscoped search. Still bare against mastery/exercises (a separate,
+// already-real system) — same incremental-build philosophy memoryless
+// itself was built under (Block 11 first, retrieval/history added
+// later). TANGENT/OUT_OF_SCOPE turns are detected and recorded
 // faithfully (this is the first real caller of analyze_input's non-None
 // current_concept_id case) but given no special Flow 3 handling yet —
 // that's deferred.md #2b+'s own job once this exists for it to hook into.
@@ -27,6 +28,7 @@ use uuid::Uuid;
 
 use crate::ai_client::{self, AiClientError, HistoryMessage};
 use crate::auth::middleware::begin_rls_transaction;
+use crate::knowledge;
 use crate::state::AppState;
 
 use super::errors::JourneyError;
@@ -154,6 +156,28 @@ async fn load_recent_history(
         .collect())
 }
 
+// deferred.md #18: the permanent, shared knowledge base — subject-
+// scoped here (unlike memoryless mode's unscoped search), matching
+// ARCHITECTURE.md's "subject-scoped retrieval (filter subject_id)"
+// case. Own embed() call, same "not worth sharing across an unrelated
+// module boundary" reasoning as memoryless/turn.rs's own query_
+// knowledge_context. Fails open on any embedding-service error — a
+// retrieval ENHANCEMENT, not core functionality.
+async fn query_knowledge_context(
+    state: &AppState,
+    user_id: Uuid,
+    subject_id: Uuid,
+    query: &str,
+) -> Result<Option<String>, AiClientError> {
+    let query_embedding = ai_client::embed(&state.http_client, &state.ai_service_url, vec![query.to_string()])
+        .await?
+        .into_iter()
+        .next()
+        .ok_or_else(|| AiClientError::UnexpectedResponse("embed() returned no vectors for the query".to_string()))?;
+
+    knowledge::query_global_context(state, user_id, &query_embedding, Some(subject_id)).await
+}
+
 async fn stream_to_completion(
     chunks: impl Stream<Item = Result<String, AiClientError>> + Send + 'static,
     tx: &mpsc::Sender<TurnEvent>,
@@ -163,26 +187,53 @@ async fn stream_to_completion(
     tokio::pin!(chunks);
 
     loop {
-        match tokio::time::timeout(CHUNK_INACTIVITY_TIMEOUT, chunks.next()).await {
-            Ok(Some(Ok(delta))) => {
-                accumulated.push_str(&delta);
-                if tx.send(TurnEvent::Delta(delta)).await.is_err() {
-                    cutoff_reason = Some("cancelled by user".to_string());
-                    break;
+        // Checked FIRST (biased) and independently of chunks.next()
+        // below — same fix as memoryless/turn.rs's identical loop
+        // (deferred.md, found live 2026-08-10): the old code only ever
+        // noticed a cancelled turn reactively, via tx.send() failing,
+        // which only runs once chunks.next() actually yields something.
+        // For a "thinking" turn where ai_service/Ollama takes a while to
+        // produce even its first token, this loop would sit fully
+        // blocked on chunks.next() the whole time, unable to notice a
+        // cancellation that had already happened — confirmed live, over
+        // 13s of undetected delay in memoryless mode's own copy of this
+        // exact loop before this fix. tx.closed() resolves the instant
+        // the receiver (owned by the SSE stream in handlers.rs) is
+        // dropped, independent of whether anything is currently flowing
+        // through the channel.
+        tokio::select! {
+            biased;
+            _ = tx.closed() => {
+                cutoff_reason = Some("cancelled by user".to_string());
+                break;
+            }
+            result = tokio::time::timeout(CHUNK_INACTIVITY_TIMEOUT, chunks.next()) => {
+                match result {
+                    Ok(Some(Ok(delta))) => {
+                        accumulated.push_str(&delta);
+                        // tx.closed() above already covers the
+                        // cancellation case — this remains as a harmless
+                        // fallback for the rare timing where both
+                        // branches raced ready at once and this one won.
+                        if tx.send(TurnEvent::Delta(delta)).await.is_err() {
+                            cutoff_reason = Some("cancelled by user".to_string());
+                            break;
+                        }
+                    }
+                    Ok(Some(Err(err))) => {
+                        let reason = format!("ai service error mid-stream: {err}");
+                        let _ = tx.send(TurnEvent::Error(reason.clone())).await;
+                        cutoff_reason = Some(reason);
+                        break;
+                    }
+                    Ok(None) => break,
+                    Err(_) => {
+                        let reason = format!("generation stalled — no output for {}s", CHUNK_INACTIVITY_TIMEOUT.as_secs());
+                        let _ = tx.send(TurnEvent::Error(reason.clone())).await;
+                        cutoff_reason = Some(reason);
+                        break;
+                    }
                 }
-            }
-            Ok(Some(Err(err))) => {
-                let reason = format!("ai service error mid-stream: {err}");
-                let _ = tx.send(TurnEvent::Error(reason.clone())).await;
-                cutoff_reason = Some(reason);
-                break;
-            }
-            Ok(None) => break,
-            Err(_) => {
-                let reason = format!("generation stalled — no output for {}s", CHUNK_INACTIVITY_TIMEOUT.as_secs());
-                let _ = tx.send(TurnEvent::Error(reason.clone())).await;
-                cutoff_reason = Some(reason);
-                break;
             }
         }
     }
@@ -348,12 +399,31 @@ pub async fn send_journey_message(
     )
     .await?;
 
+    // deferred.md #18: subject-scoped retrieval against the permanent
+    // knowledge base — see query_knowledge_context's own doc comment.
+    // Fails open exactly like memoryless/turn.rs's own equivalent call.
+    let global_context = match query_knowledge_context(state, user_id, subject_id, &analysis.cleaned_query).await {
+        Ok(context) => context,
+        Err(err) => {
+            tracing::warn!(?err, %journey_id, %thread_id, "knowledge-base retrieval failed, continuing without it");
+            None
+        }
+    };
+    let prompt = match &global_context {
+        Some(context) => format!(
+            "Here is material from the knowledge base that may be relevant — use it if it helps, \
+             but you don't have to:\n{context}\n\nStudent's question: {}",
+            analysis.cleaned_query
+        ),
+        None => analysis.cleaned_query.clone(),
+    };
+
     let history = load_recent_history(&state.pool, user_id, thread_id).await?;
 
     let chunks = ai_client::generate_stream(
         &state.streaming_http_client,
         &state.ai_service_url,
-        analysis.cleaned_query.clone(),
+        prompt,
         think,
         history,
     )

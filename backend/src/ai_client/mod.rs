@@ -893,6 +893,140 @@ pub async fn ingest(
         .map_err(|err| AiClientError::UnexpectedResponse(err.to_string()))
 }
 
+#[derive(Serialize)]
+struct QueryKnowledgeGlobalRequest {
+    embedding: Vec<f32>,
+    subject_id: Option<Uuid>,
+    top_k: usize,
+}
+
+// Deliberately excludes chunk text — ai_service's knowledge_global
+// ChromaDB collection never stores it (metadata-only, per
+// ARCHITECTURE.md's locked schema); `chunk_id` matches
+// `chunks.chunk_id` exactly, so a caller resolves the actual content
+// via Postgres, not this response (see backend/src/knowledge/mod.rs).
+#[derive(Debug, Deserialize)]
+pub struct RetrievedChunk {
+    pub chunk_id: String,
+    pub similarity: f32,
+    pub metadata: Json,
+}
+
+#[derive(Deserialize)]
+struct QueryKnowledgeGlobalResponse {
+    chunks: Vec<RetrievedChunk>,
+}
+
+/// Calls FastAPI's POST /knowledge/query (deferred.md #18) — metadata-
+/// filtered similarity search against the permanent, shared
+/// `knowledge_global` ChromaDB collection. `embedding` is a precomputed
+/// query vector (callers already have one from their own `/embed` call,
+/// or need one anyway) — this never re-embeds. `subject_id` is the only
+/// filter exposed here: None searches the whole collection (memoryless
+/// mode, no subject context — ARCHITECTURE.md's "cross-subject tangent
+/// retrieval"); Some(_) scopes to one subject (journey mode). Results
+/// already below `RETRIEVAL_MIN_SCORE` are dropped server-side.
+pub async fn query_knowledge_global(
+    client: &reqwest::Client,
+    ai_service_url: &str,
+    embedding: Vec<f32>,
+    subject_id: Option<Uuid>,
+    top_k: usize,
+) -> Result<Vec<RetrievedChunk>, AiClientError> {
+    let url = format!("{ai_service_url}/knowledge/query");
+
+    let response = client
+        .post(&url)
+        .json(&QueryKnowledgeGlobalRequest { embedding, subject_id, top_k })
+        .send()
+        .await
+        .map_err(|_| AiClientError::ServiceUnavailable)?;
+
+    if !response.status().is_success() {
+        return Err(AiClientError::UnexpectedResponse(format!(
+            "status {}",
+            response.status()
+        )));
+    }
+
+    let body: QueryKnowledgeGlobalResponse = response
+        .json()
+        .await
+        .map_err(|err| AiClientError::UnexpectedResponse(err.to_string()))?;
+
+    Ok(body.chunks)
+}
+
+// deferred.md #18b — the write half. Field names/shape mirror
+// ai_service's own ChunkRecord exactly (ARCHITECTURE.md's ChromaDB
+// Collection [LOCKED] schema). chunk_id is a String on the wire (Chroma
+// document ids are strings), always a real chunks.chunk_id UUID's
+// to_string() from the caller's side.
+#[derive(Serialize)]
+pub struct ChunkRecord {
+    pub chunk_id: String,
+    pub embedding: Vec<f32>,
+    pub source_id: String,
+    pub upload_role: String,
+    pub trust_score: f32,
+    pub subject_id: Option<String>,
+    pub concept_id: Option<String>,
+    pub journey_id: Option<String>,
+    pub difficulty: Option<String>,
+    pub chunk_type: Option<String>,
+}
+
+#[derive(Serialize)]
+struct AddChunksRequest {
+    records: Vec<ChunkRecord>,
+}
+
+#[derive(Deserialize)]
+struct AddChunksResponse {
+    #[allow(dead_code)] // Not consumed by the one real caller yet — the count is informational only.
+    added: usize,
+}
+
+/// Calls FastAPI's POST /knowledge/add_chunks (deferred.md #18b) —
+/// upserts real chunk documents into the permanent, shared
+/// `knowledge_global` collection. Fire-and-forget from the caller's own
+/// perspective is the RIGHT default here (see
+/// memoryless::write_through::write_through_material_upload's own
+/// fail-soft handling) — this function itself still surfaces a real
+/// `Err` on failure, same as every other ai_client function; it's the
+/// caller's job to decide fail-soft vs. fail-hard, not this one.
+pub async fn add_chunks(
+    client: &reqwest::Client,
+    ai_service_url: &str,
+    records: Vec<ChunkRecord>,
+) -> Result<(), AiClientError> {
+    if records.is_empty() {
+        return Ok(());
+    }
+    let url = format!("{ai_service_url}/knowledge/add_chunks");
+
+    let response = client
+        .post(&url)
+        .json(&AddChunksRequest { records })
+        .send()
+        .await
+        .map_err(|_| AiClientError::ServiceUnavailable)?;
+
+    if !response.status().is_success() {
+        return Err(AiClientError::UnexpectedResponse(format!(
+            "status {}",
+            response.status()
+        )));
+    }
+
+    let _body: AddChunksResponse = response
+        .json()
+        .await
+        .map_err(|err| AiClientError::UnexpectedResponse(err.to_string()))?;
+
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     // Real end-to-end proof against the actual Windows-hosted FastAPI —

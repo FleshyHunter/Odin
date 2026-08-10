@@ -4,10 +4,11 @@
 // this pass's explicit scope (code only, not yet wired to a route).
 // analyze_input()/generate()/generate_stream() (memoryless chat turns),
 // generate_exercise_template()/ingest() (Block 12: exercises/, uploads/),
-// and generate_dag()/adjust_dag()/grade() (deferred.md #4: journeys::)
-// are now used; embed()/transcribe()/acquire() still have no Rust caller
-// until later blocks wire ingestion/acquisition routes, hence the
-// module-level allow still covers the rest.
+// generate_dag()/adjust_dag()/grade() (deferred.md #4: journeys::), and
+// embed() (deferred.md #18/#19: staged-upload + knowledge_global
+// retrieval, both memoryless and journey chat turns) are now used;
+// transcribe()/acquire() still have no Rust caller (deferred.md #80,
+// #12) — the module-level allow still covers those two.
 #[allow(dead_code)]
 mod ai_client;
 mod auth;
@@ -16,6 +17,7 @@ mod content_flags;
 mod db;
 mod exercises;
 mod journeys;
+mod knowledge;
 mod memoryless;
 mod models;
 mod routes;

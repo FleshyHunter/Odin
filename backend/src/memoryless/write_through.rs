@@ -31,8 +31,10 @@ use sqlx::PgPool;
 use uuid::Uuid;
 
 use super::staging::{StagedAuditEvent, StagedMessage, StagedUpload};
+use crate::ai_client::{self, ChunkRecord};
 use crate::auth::middleware::begin_rls_transaction;
 use crate::memoryless::errors::MemorylessError;
+use crate::state::AppState;
 
 // PRD.md, Trust Score Default Policy: "user_upload (anything a person
 // uploads themselves, unverified) -> 0.35" — the one source_type every
@@ -130,12 +132,26 @@ pub async fn write_through_turn(
 /// against that earlier, separate-transaction dedup check is
 /// theoretically possible (not yet actually observed), and this makes
 /// a duplicate insert a harmless no-op rather than a hard failure.
+///
+/// deferred.md #18b: also the one real call site for the shared
+/// `knowledge_global` write — only `material_upload` writes there
+/// (`prompt_upload` stays journey-private by design, `sources_mixed_scope`'s
+/// whole point). Runs AFTER the Postgres commit, fail-soft (a warning,
+/// not a propagated error): the upload already succeeded from the
+/// student's point of view once the transaction below commits: a
+/// failure writing to the shared KB, or backfilling `chroma_id`, only
+/// means this content isn't retrievable via knowledge_global yet, not
+/// that the upload itself failed. `concept_id` is deliberately left
+/// NULL for every chunk — `assign_concept()` has zero real data in
+/// `concept_embeddings` anywhere yet (explicit, discussed scope cut,
+/// not an oversight); PRD's own "misc chunk — still retrievable, just
+/// unassigned" is an explicitly valid state.
 pub async fn write_through_material_upload(
-    pool: &PgPool,
+    state: &AppState,
     user_id: Uuid,
     upload: &StagedUpload,
 ) -> Result<(), MemorylessError> {
-    let mut tx = begin_rls_transaction(pool, user_id).await?;
+    let mut tx = begin_rls_transaction(&state.pool, user_id).await?;
 
     // The ON CONFLICT predicate below must match
     // sources_content_hash_global_unique's own WHERE clause EXACTLY
@@ -160,21 +176,78 @@ pub async fn write_through_material_upload(
     .fetch_optional(&mut *tx)
     .await?;
 
+    // (chunk_id, embedding) for every row this call actually inserted —
+    // captured via RETURNING so the knowledge_global write below can use
+    // Postgres's own chunk_id as ChromaDB's document id exactly
+    // (ARCHITECTURE.md's locked schema: "id: chunk_id (matches
+    // PostgreSQL chunks.chunk_id)").
+    let mut inserted_chunks: Vec<(Uuid, Vec<f32>)> = Vec::new();
+
     // A genuine conflict (no row returned) means another insert already
     // owns this content_hash — nothing left to chunk against here.
-    if let Some((source_id,)) = source_id {
+    let source_id_for_metadata = source_id.map(|(id,)| id);
+    if let Some(source_id) = source_id_for_metadata {
         for chunk in &upload.chunks {
-            sqlx::query("INSERT INTO chunks (source_id, text, token_count) VALUES ($1, $2, $3)")
-                .bind(source_id)
-                .bind(&chunk.text)
-                .bind(chunk.token_count)
-                .execute(&mut *tx)
-                .await?;
+            let chunk_id: Uuid = sqlx::query_scalar(
+                "INSERT INTO chunks (source_id, text, token_count) VALUES ($1, $2, $3) RETURNING chunk_id",
+            )
+            .bind(source_id)
+            .bind(&chunk.text)
+            .bind(chunk.token_count)
+            .fetch_one(&mut *tx)
+            .await?;
+            inserted_chunks.push((chunk_id, chunk.embedding.clone()));
         }
     }
 
     tx.commit().await?;
+
+    if let (Some(source_id), false) = (source_id_for_metadata, inserted_chunks.is_empty()) {
+        write_chunks_to_knowledge_global(state, source_id, &inserted_chunks).await;
+    }
+
     Ok(())
+}
+
+/// deferred.md #18b's fail-soft shared-KB write, split out of
+/// write_through_material_upload so that function's own control flow
+/// stays readable. Never returns an error — every failure (ai_service
+/// unreachable, the backfill UPDATE itself) is logged and swallowed, by
+/// design (see the caller's own doc comment on why fail-soft is correct
+/// here).
+async fn write_chunks_to_knowledge_global(state: &AppState, source_id: Uuid, chunks: &[(Uuid, Vec<f32>)]) {
+    let records: Vec<ChunkRecord> = chunks
+        .iter()
+        .map(|(chunk_id, embedding)| ChunkRecord {
+            chunk_id: chunk_id.to_string(),
+            embedding: embedding.clone(),
+            source_id: source_id.to_string(),
+            upload_role: "material_upload".to_string(),
+            trust_score: USER_UPLOAD_TRUST_SCORE,
+            subject_id: None,
+            concept_id: None,
+            journey_id: None,
+            difficulty: None,
+            chunk_type: None,
+        })
+        .collect();
+
+    if let Err(err) = ai_client::add_chunks(&state.http_client, &state.ai_service_url, records).await {
+        tracing::warn!(?err, %source_id, "failed to write material_upload chunks to knowledge_global, continuing");
+        return;
+    }
+
+    let chunk_ids: Vec<Uuid> = chunks.iter().map(|(id, _)| *id).collect();
+    // chroma_id is set to the chunk's own id (string form) — its only
+    // purpose is "has this been written to Chroma," not a distinct
+    // external identifier (the ChromaDB document id IS chunk_id).
+    if let Err(err) = sqlx::query("UPDATE chunks SET chroma_id = chunk_id::text WHERE chunk_id = ANY($1)")
+        .bind(&chunk_ids)
+        .execute(&state.pool)
+        .await
+    {
+        tracing::warn!(?err, %source_id, "wrote to knowledge_global but failed to backfill chunks.chroma_id");
+    }
 }
 
 /// Writes one `prompt_upload` staged upload through to Postgres — only

@@ -22,10 +22,9 @@
    shares one width with the conversation column above it, not its own
    independent formula). .composer-frame is a plain, invisible wrapper in
    the normal case (no notice) — .composer-box below keeps its own
-   border/radius/focus-glow exactly as before. Only composer-frame-with-
-   notice (see below) takes over the visual boundary, so the notice bar
-   and the input box below it read as one connected shape (matches
-   icons/ComposerError.png). */
+   border/radius/focus-glow exactly as before. When a notice exists it
+   remains an independent rounded element and overlaps the composer by a
+   few pixels, matching icons/ComposerError.png and UnsupportedError.png. */
 .composer .composer-frame {
   width: 100%;
   max-width: 780px;
@@ -46,25 +45,19 @@
     0 0 28px rgb(232 183 106 / 0.18);
 }
 
-/* When a notice is present, the FRAME owns the border/radius/glow as one
-   continuous shape — the box below drops its own border and only keeps
-   its bottom corners rounded, so the notice bar reads as this shape's
-   top section, not a separate floating banner. */
-.composer .composer-frame-with-notice {
-  border-radius: 14px;
-  overflow: hidden;
-}
-.composer .composer-frame-with-notice .composer-box {
-  border: none;
-  border-radius: 0;
-  box-shadow: none !important;
-}
-.composer .composer-frame-warning {
-  border: 1px solid var(--glow);
+/* Notice and composer are two complete, independently rounded components
+   (composerNotice.css's own border-radius now matches .composer-box's
+   14px exactly) stacked with zero gap — no overlap, no merge. Plain
+   flexbox column stacking with no margin between them already puts them
+   flush against each other, so .composer-frame-with-notice needs no
+   position/z-index treatment of its own; the class still gets applied
+   (Composer.tsx) but is purely a marker now, not load-bearing CSS. */
+.composer .composer-frame-warning .composer-box {
+  border-color: var(--glow);
   box-shadow: 0 0 0 1px rgb(232 183 106 / 0.08), 0 0 24px rgb(232 183 106 / 0.14);
 }
-.composer .composer-frame-error {
-  border: 1px solid var(--error);
+.composer .composer-frame-error .composer-box {
+  border-color: var(--error);
   box-shadow: 0 0 0 1px rgb(224 133 133 / 0.08), 0 0 24px rgb(224 133 133 / 0.14);
 }
 

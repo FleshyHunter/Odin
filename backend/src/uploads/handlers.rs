@@ -220,7 +220,7 @@ pub async fn upload(
     // usable immediately) — a write-through failure only means this
     // upload's durability rests on Redis alone for now.
     if staged_upload.upload_role == "material_upload" {
-        if let Err(err) = write_through::write_through_material_upload(&state.pool, user_id, &staged_upload).await {
+        if let Err(err) = write_through::write_through_material_upload(&state, user_id, &staged_upload).await {
             tracing::error!(?err, thread_id = %thread.thread_id, "failed to write material_upload through to Postgres");
         }
     }

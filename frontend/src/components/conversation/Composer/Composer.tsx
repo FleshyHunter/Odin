@@ -124,13 +124,6 @@ export function Composer({
         />
       )}
       <div className={frameClassName}>
-        {attachEnabled && attachments && attachments.length > 0 && (
-          <AttachmentRow
-            attachments={attachments}
-            onRemove={(id) => onRemoveAttachment?.(id)}
-            onRetry={(id) => onRetryAttachment?.(id)}
-          />
-        )}
         {notice && (
           <ComposerNotice
             tone={notice.tone}
@@ -141,6 +134,13 @@ export function Composer({
           />
         )}
         <div className="composer-box">
+            {attachEnabled && attachments && attachments.length > 0 && (
+              <AttachmentRow
+                attachments={attachments}
+                onRemove={(id) => onRemoveAttachment?.(id)}
+                onRetry={(id) => onRetryAttachment?.(id)}
+              />
+            )}
             <textarea
               ref={textareaRef}
               className="composer-textarea"
@@ -149,7 +149,11 @@ export function Composer({
               value={value}
               onChange={(event) => setValue(event.target.value)}
               onKeyDown={handleKeyDown}
-              disabled={disabled}
+              // isSending locks input (not just the send button, which
+              // stays clickable below so it can still act as Stop) — a
+              // turn is strictly one-at-a-time, never overlapping,
+              // matching handleSend's own isSending branch above.
+              disabled={disabled || isSending}
             />
 
             <div className="composer-toolbar">
@@ -167,7 +171,7 @@ export function Composer({
                   className="icon-btn"
                   aria-label="Add"
                   onClick={attachEnabled ? handleAttachClick : undefined}
-                  disabled={disabled || !attachEnabled}
+                  disabled={disabled || !attachEnabled || isSending}
                 >
                   <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.8}>
                     <line x1="12" y1="5" x2="12" y2="19" />
@@ -182,7 +186,7 @@ export function Composer({
                   aria-label={status === 'recording' ? 'Stop recording' : 'Voice input'}
                   aria-pressed={status === 'recording'}
                   onClick={handleMicClick}
-                  disabled={status === 'transcribing' || disabled}
+                  disabled={status === 'transcribing' || disabled || isSending}
                 >
                   <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.7}>
                     <path d="M12 1a3 3 0 0 0-3 3v8a3 3 0 0 0 6 0V4a3 3 0 0 0-3-3z" />

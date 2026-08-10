@@ -54,11 +54,18 @@ def get_cached(namespace: str, raw: str) -> Any | None:
         return None
     try:
         cached = client.get(_cache_key(namespace, raw))
-    except redis.RedisError:
+        if cached is None:
+            return None
+        return json.loads(cached)
+    except (redis.RedisError, json.JSONDecodeError):
+        # deferred.md #66 — json.loads() used to sit outside this
+        # try/except, contradicting the module's own stated design
+        # (this docstring's own "callers can't tell the difference and
+        # don't need to"): a value that's Redis-reachable but not valid
+        # JSON (e.g. a future schema change to what gets cached, with
+        # old entries still within their TTL) crashed the request
+        # instead of failing open like an unreachable Redis already did.
         return None
-    if cached is None:
-        return None
-    return json.loads(cached)
 
 
 def set_cached(namespace: str, raw: str, value: Any, ttl_seconds: int) -> None:

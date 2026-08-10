@@ -11,18 +11,54 @@
    wrap lets the browser break inside that run once it's actually out of
    room, rather than only ever breaking at whitespace. */
 .msg { max-width: 640px; display: flex; gap: 0.7rem; min-width: 0; }
-.msg .bubble { font-size: 0.92rem; line-height: 1.55; min-width: 0; overflow-wrap: break-word; }
+/* Fraunces, not Inter — matches claude.ai's own choice of a serif for
+   chat message text (their "Anthropic Serif") at the same 16px, rather
+   than the smaller sans-serif Odin's chat text used before. Reuses
+   Fraunces rather than importing a new face: it's already in the app
+   (display headings), and it's the variable OPTICAL-SIZE cut
+   (global.css's @import pulls opsz,wght@9..144) — built to render well
+   down at text sizes too, not just stretched-down display type. */
+.msg .bubble { font-family: 'Fraunces', serif; font-size: 1rem; line-height: 1.55; min-width: 0; overflow-wrap: break-word; }
 
 .msg.tutor .bubble-avatar {
   width: 26px; height: 26px; border-radius: 50%;
   background: var(--glow-dim); flex-shrink: 0; margin-top: 0.1rem;
   display: flex; align-items: center; justify-content: center;
+  filter: brightness(1.4);
 }
 
 .msg.tutor .bubble-avatar img {
   width: 21px;
   height: 21px;
   object-fit: contain;
+}
+
+/* Waiting state (MessageBubble's isMusing) — a gentle breathing pulse on
+   the raven avatar, matched by a fading cycle of raven-themed status
+   words in the bubble itself, while a placeholder tutor message (text:
+   '') sits waiting for its first real delta. */
+@keyframes bubble-avatar-musing {
+  0%, 100% { opacity: 1; transform: scale(1); }
+  50% { opacity: 0.55; transform: scale(0.9); }
+}
+.bubble-avatar.musing {
+  animation: bubble-avatar-musing 1.6s ease-in-out infinite;
+}
+
+@keyframes musing-text-fade {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+.musing-text {
+  display: inline-block;
+  color: var(--text);
+  font-style: italic;
+  animation: musing-text-fade 0.3s ease-out;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .bubble-avatar.musing { animation: none; }
+  .musing-text { animation: none; }
 }
 
 .msg.student { margin-left: auto; flex-direction: row-reverse; }
@@ -40,3 +76,58 @@
 .msg.tutor .bubble { color: var(--text); padding: 0.1rem 0.95rem 0 0; }
 
 .msg .bubble .term { color: var(--glow); font-style: normal; font-weight: 500; }
+
+/* react-markdown output (tutor bubbles only — student text stays plain).
+   Default user-agent spacing on p/ul/blockquote/etc. reads too loose
+   inside a compact chat bubble, so it's tightened here rather than left
+   at browser defaults. */
+.msg.tutor .bubble p { margin: 0 0 0.6em; }
+.msg.tutor .bubble p:last-child { margin-bottom: 0; }
+
+.msg.tutor .bubble ul,
+.msg.tutor .bubble ol {
+  margin: 0 0 0.6em; padding-left: 1.3em;
+}
+.msg.tutor .bubble li { margin-bottom: 0.25em; }
+.msg.tutor .bubble li:last-child { margin-bottom: 0; }
+.msg.tutor .bubble li > ul,
+.msg.tutor .bubble li > ol { margin-top: 0.25em; }
+
+.msg.tutor .bubble a {
+  color: var(--glow); text-decoration: underline; text-underline-offset: 2px;
+}
+
+/* Code stays monospace regardless of .bubble's own Fraunces serif body
+   font — inline chip vs. block distinguished purely by nesting (a fenced
+   block's <code> sits inside a <pre>), no JS component override needed. */
+.msg.tutor .bubble code {
+  font-family: ui-monospace, 'SF Mono', Menlo, Consolas, monospace;
+  font-size: 0.85em;
+  background: var(--surface); border: 1px solid var(--border);
+  padding: 0.12em 0.4em; border-radius: 5px;
+}
+.msg.tutor .bubble pre {
+  background: var(--surface); border: 1px solid var(--border);
+  border-radius: 8px; padding: 0.8em 1em; margin: 0 0 0.6em;
+  overflow-x: auto;
+}
+.msg.tutor .bubble pre code {
+  background: none; border: none; padding: 0; border-radius: 0;
+  font-size: 0.85em;
+}
+
+.msg.tutor .bubble blockquote {
+  margin: 0 0 0.6em; padding-left: 0.9em;
+  border-left: 3px solid var(--border-strong);
+  color: var(--text-secondary);
+}
+
+.msg.tutor .bubble hr {
+  border: none; border-top: 1px solid var(--border); margin: 0.8em 0;
+}
+
+/* remark-gfm table support */
+.msg.tutor .bubble table { border-collapse: collapse; margin: 0 0 0.6em; font-size: 0.9em; }
+.msg.tutor .bubble th,
+.msg.tutor .bubble td { border: 1px solid var(--border); padding: 0.35em 0.6em; text-align: left; }
+.msg.tutor .bubble th { color: var(--text); font-weight: 600; }

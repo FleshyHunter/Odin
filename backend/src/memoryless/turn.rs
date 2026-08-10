@@ -1,13 +1,14 @@
 // Chat-turn orchestration: receive one raw message -> analyze_input
 // (Block 8) -> STREAM a generate() reply (Blocks 5/6, Block 11 follow-up
 // — see markdown/deferred.md #20) -> append both message sides plus one
-// audit event to the staged thread once the stream ends. Deliberately
-// BARE against the permanent knowledge base and journey state, per the
-// negotiated Block 11 scope: no ChromaDB retrieval (deferred.md #18,
-// still unwired), no mastery_bank reads/writes, no prerequisite checks,
-// no completion-check logic — memoryless mode has no journey/subject to
-// scope any of that against yet. NOT bare against THIS thread's own
-// staged uploads, though (deferred.md #19) — see retrieve_staged_context.
+// audit event to the staged thread once the stream ends. Still BARE
+// against journey state specifically — no mastery_bank reads/writes, no
+// prerequisite checks, no completion-check logic — memoryless mode has
+// no journey/subject to scope any of that against. NOT bare against
+// retrieval, though: THIS thread's own staged uploads (deferred.md #19,
+// see retrieve_staged_context) AND the permanent global knowledge base
+// (deferred.md #18, see query_knowledge_context) are both wired in,
+// independently of each other and of one another's success/failure.
 //
 // Streaming architecture: the returned mpsc::Receiver feeds the HTTP
 // SSE response (handlers.rs); the actual generation + persistence runs
@@ -34,7 +35,9 @@ use super::similarity::rank_by_similarity;
 use super::staging::{self, StagedAuditEvent, StagedMessage, StagedThread, StagedUpload};
 use super::write_through;
 use crate::ai_client::{self, AiClientError};
+use crate::knowledge;
 use crate::state::AppState;
+use uuid::Uuid;
 
 // Matches ai_service/app/generation/service.py's MODEL_NAME literal.
 // /generate's response carries no model field of its own to read this
@@ -93,6 +96,28 @@ async fn retrieve_staged_context(
         return Ok(None);
     }
     Ok(Some(relevant.join("\n\n")))
+}
+
+// deferred.md #18: the other half of retrieval — the permanent, shared
+// ChromaDB knowledge_global collection, as opposed to retrieve_staged_
+// context's THIS-thread-only staged uploads above. Deliberately
+// independent of it (its own embed() call, not a shared one) — touching
+// #19's already-shipped, live-verified internals to shave one cheap
+// /embed round trip wasn't worth the risk against the multi-second
+// generation call this whole turn is actually bottlenecked on. Unscoped
+// (no subject_id) — memoryless mode has no subject/journey context,
+// matching ARCHITECTURE.md's "cross-subject tangent retrieval" case.
+// Fails open on any embedding-service error, same reasoning as
+// retrieve_staged_context: a retrieval ENHANCEMENT, not core
+// functionality.
+async fn query_knowledge_context(state: &AppState, user_id: Uuid, query: &str) -> Result<Option<String>, AiClientError> {
+    let query_embedding = ai_client::embed(&state.http_client, &state.ai_service_url, vec![query.to_string()])
+        .await?
+        .into_iter()
+        .next()
+        .ok_or_else(|| AiClientError::UnexpectedResponse("embed() returned no vectors for the query".to_string()))?;
+
+    knowledge::query_global_context(state, user_id, &query_embedding, None).await
 }
 
 // No longer a whole-request bound (streaming can legitimately run much
@@ -162,9 +187,8 @@ pub async fn start_turn_stream(
     .await?;
 
     // deferred.md #19: staged-upload retrieval — see
-    // retrieve_staged_context's own doc comment. Still BARE against the
-    // permanent global knowledge base (deferred.md #18, unchanged) —
-    // this only ever looks at chunks staged on THIS thread.
+    // retrieve_staged_context's own doc comment. Scoped to THIS
+    // thread's own staged chunks only.
     let retrieved_context = if thread.staged_uploads.iter().any(|upload| !upload.chunks.is_empty()) {
         match retrieve_staged_context(state, &analysis.cleaned_query, &thread.staged_uploads).await {
             Ok(context) => context,
@@ -177,14 +201,35 @@ pub async fn start_turn_stream(
         None
     };
 
-    let prompt = match &retrieved_context {
-        Some(context) => format!(
+    // deferred.md #18: the permanent, shared knowledge base — see
+    // query_knowledge_context's own doc comment. Independent of the
+    // staged-upload retrieval above (runs regardless of whether this
+    // thread has any staged uploads at all).
+    let global_context = match query_knowledge_context(state, thread.user_id, &analysis.cleaned_query).await {
+        Ok(context) => context,
+        Err(err) => {
+            tracing::warn!(?err, thread_id = %thread.thread_id, "knowledge-base retrieval failed, continuing without it");
+            None
+        }
+    };
+
+    let mut context_blocks: Vec<String> = Vec::new();
+    if let Some(context) = &retrieved_context {
+        context_blocks.push(format!(
             "The student uploaded a document earlier in this conversation. Here is material from it \
-             that may be relevant — use it if it helps, but you don't have to:\n{context}\n\n\
-             Student's question: {}",
-            analysis.cleaned_query
-        ),
-        None => analysis.cleaned_query.clone(),
+             that may be relevant — use it if it helps, but you don't have to:\n{context}"
+        ));
+    }
+    if let Some(context) = &global_context {
+        context_blocks.push(format!(
+            "Here is material from the knowledge base that may be relevant — use it if it helps, \
+             but you don't have to:\n{context}"
+        ));
+    }
+    let prompt = if context_blocks.is_empty() {
+        analysis.cleaned_query.clone()
+    } else {
+        format!("{}\n\nStudent's question: {}", context_blocks.join("\n\n"), analysis.cleaned_query)
     };
 
     let history = build_history(&thread.messages);
@@ -229,39 +274,69 @@ pub async fn start_turn_stream(
             tokio::pin!(chunks);
 
             loop {
-                match tokio::time::timeout(CHUNK_INACTIVITY_TIMEOUT, chunks.next()).await {
-                    Ok(Some(Ok(delta))) => {
-                        accumulated.push_str(&delta);
-                        // A failed send means the SSE receiver was
-                        // dropped — the client disconnected (or hit
-                        // pause). Stop pulling further chunks
-                        // immediately, but keep running past this point
-                        // to still persist whatever was generated so far.
-                        if tx.send(TurnEvent::Delta(delta)).await.is_err() {
-                            cutoff_reason = Some("cancelled by user".to_string());
-                            break;
+                tokio::select! {
+                    // Checked FIRST (biased — plain, unordered select
+                    // would let an already-ready chunk win the race
+                    // half the time even after cancellation) and
+                    // independently of chunks.next() below. Found live,
+                    // this session: the OLD code only ever noticed a
+                    // cancelled turn reactively, via THIS SAME tx.send()
+                    // failing — but that only runs once chunks.next()
+                    // actually yields something. For a "thinking" turn
+                    // where ai_service/Ollama takes a while to produce
+                    // even its first token, the loop was fully blocked
+                    // on chunks.next() the entire time, unable to notice
+                    // a cancellation that had already happened up to 13+
+                    // seconds earlier (axum itself drops the connection
+                    // within ~1s of the client disconnecting — confirmed
+                    // live — so the delay was entirely this gap, not a
+                    // slow disconnect signal). tx.closed() resolves the
+                    // instant the receiver (owned by the SSE stream in
+                    // handlers.rs) is dropped, independent of whether
+                    // anything is currently flowing through the channel.
+                    biased;
+                    _ = tx.closed() => {
+                        cutoff_reason = Some("cancelled by user".to_string());
+                        break;
+                    }
+                    result = tokio::time::timeout(CHUNK_INACTIVITY_TIMEOUT, chunks.next()) => {
+                        match result {
+                            Ok(Some(Ok(delta))) => {
+                                accumulated.push_str(&delta);
+                                // tx.closed() above already covers the
+                                // cancellation case for any turn that's
+                                // actually producing output — this
+                                // remains as a harmless fallback for the
+                                // rare timing where both branches raced
+                                // ready at once and this one still won.
+                                if tx.send(TurnEvent::Delta(delta)).await.is_err() {
+                                    cutoff_reason = Some("cancelled by user".to_string());
+                                    break;
+                                }
+                            }
+                            Ok(Some(Err(err))) => {
+                                let reason = format!("ai service error mid-stream: {err}");
+                                // deferred.md #53: best-effort — if the
+                                // receiver is already gone (client
+                                // disconnected right as this fired),
+                                // there's nothing left to tell; the
+                                // reason still lands in the staged audit
+                                // event below regardless.
+                                let _ = tx.send(TurnEvent::Error(reason.clone())).await;
+                                cutoff_reason = Some(reason);
+                                break;
+                            }
+                            Ok(None) => break, // stream ended normally — full response received
+                            Err(_) => {
+                                let reason = format!(
+                                    "generation stalled — no output for {}s",
+                                    CHUNK_INACTIVITY_TIMEOUT.as_secs()
+                                );
+                                let _ = tx.send(TurnEvent::Error(reason.clone())).await;
+                                cutoff_reason = Some(reason);
+                                break;
+                            }
                         }
-                    }
-                    Ok(Some(Err(err))) => {
-                        let reason = format!("ai service error mid-stream: {err}");
-                        // deferred.md #53: best-effort — if the receiver
-                        // is already gone (client disconnected right as
-                        // this fired), there's nothing left to tell; the
-                        // reason still lands in the staged audit event
-                        // below regardless.
-                        let _ = tx.send(TurnEvent::Error(reason.clone())).await;
-                        cutoff_reason = Some(reason);
-                        break;
-                    }
-                    Ok(None) => break, // stream ended normally — full response received
-                    Err(_) => {
-                        let reason = format!(
-                            "generation stalled — no output for {}s",
-                            CHUNK_INACTIVITY_TIMEOUT.as_secs()
-                        );
-                        let _ = tx.send(TurnEvent::Error(reason.clone())).await;
-                        cutoff_reason = Some(reason);
-                        break;
                     }
                 }
             }

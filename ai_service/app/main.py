@@ -9,6 +9,7 @@ from app.embedding.service import get_model
 from app.generation.router import router as generation_router
 from app.grading.router import router as grading_router
 from app.ingestion.router import router as ingestion_router
+from app.knowledge.router import router as knowledge_router
 from app.observability import get_active_generations
 from app.voice.router import router as voice_router
 
@@ -30,6 +31,7 @@ app.include_router(analyze_input_router)
 app.include_router(grading_router)
 app.include_router(acquisition_router)
 app.include_router(ingestion_router)
+app.include_router(knowledge_router)
 
 
 @app.get("/health")
@@ -41,8 +43,14 @@ def health() -> dict:
         "status": "ok",
         "embedding_model_loaded": model_loaded,
         # Observability — GPU Queuing (ARCHITECTURE.md, locked): a live
-        # count of in-flight Ollama generation calls (/generate and
-        # /generate/stream specifically — the actual GPU-contention
-        # signal this exists for, not embed/transcribe/analyze_input).
+        # count of in-flight Ollama generation calls — anything that ends
+        # up inside generation/service.py's track_generation(), which is
+        # every real call to generate_text()/generate_text_stream(). That
+        # includes /generate and /generate/stream, but ALSO
+        # intent/classifier.py's Step 6 qwen fallback, which calls
+        # generate_text() directly and so increments/decrements this same
+        # counter too (deferred.md #72 — a prior version of this comment
+        # claimed analyze_input never touched it; confirmed it does,
+        # pairing itself stays correct either way).
         "active_generations": get_active_generations(),
     }

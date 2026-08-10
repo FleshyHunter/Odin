@@ -45,13 +45,24 @@ export async function uploadFile(
   // api/memoryless.ts's streamMessage for thread_id.
   if (threadId) body.append('thread_id', threadId);
 
-  const response = await fetch(`${API_BASE_URL}/uploads`, {
-    method: 'POST',
-    credentials: 'include',
-    signal,
-    headers: accessToken ? { Authorization: `Bearer ${accessToken}` } : {},
-    body,
-  });
+  // deferred.md #71 — previously unguarded: a network failure here (no
+  // connectivity, DNS, CORS) surfaced the raw browser error string (e.g.
+  // "TypeError: Failed to fetch") on the attachment card instead of a
+  // friendly message, unlike every other real network path in this app
+  // (matches api/memoryless.ts's streamMessage's own try/catch here).
+  let response: Response;
+  try {
+    response = await fetch(`${API_BASE_URL}/uploads`, {
+      method: 'POST',
+      credentials: 'include',
+      signal,
+      headers: accessToken ? { Authorization: `Bearer ${accessToken}` } : {},
+      body,
+    });
+  } catch (err) {
+    if (signal?.aborted) throw err; // user-initiated cancel, not a real failure
+    throw new Error('Could not reach the tutor. Check your connection and try again.');
+  }
 
   if (response.status === 401 && !isRetry && accessToken) {
     const refreshed = await silentRefresh();

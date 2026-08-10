@@ -2,9 +2,10 @@
 // Onboarding Diagnostic, Steps 1-4) — the one remaining foundation
 // blocking most of the rest of the backlog (deferred_sequence.md):
 // nothing before this ever created a real journeys/journey_concepts
-// row. Frontend stays on the existing mocked createTrack() this pass
-// (deferred.md #40's intake UI collects real fields but doesn't call
-// this yet) — this module is built and verified standalone.
+// row. #40's intake UI (`TrackModal`/`api/journeys.ts`) now calls this
+// for real, end to end — the mocked `createTrackFromJourney` only wraps
+// the resulting real `journey_id` into this app's still-partially-mocked
+// local Track model, not a stand-in for this module itself.
 
 pub mod errors;
 mod handlers;

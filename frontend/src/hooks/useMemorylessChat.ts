@@ -45,6 +45,14 @@ export function useMemorylessChat(
   const [attachments, setAttachments] = useState<Attachment[]>([]);
   const threadIdRef = useRef<string | null>(initialThreadId);
   const abortRef = useRef<AbortController | null>(null);
+  // Synchronous guard against overlapping turns — a turn is strictly
+  // one-at-a-time, never overlapping. `isSending` state alone isn't
+  // enough: Composer already disables input while sending, but that
+  // depends on React having committed the re-render; a state variable
+  // read inside send()'s own closure would be exactly as stale. A ref
+  // updates immediately, so this catches the same-tick race regardless
+  // of render timing, not just the normal UI-gated path.
+  const isSendingRef = useRef(false);
   // Set right when THIS hook's own send() learns a brand new thread_id
   // (see onThreadId below) — distinguishes "initialThreadId just changed
   // because our own navigate() caught up to a thread we already fully
@@ -69,6 +77,15 @@ export function useMemorylessChat(
     }
     threadIdRef.current = initialThreadId;
     hasNudgedRef.current = false;
+    // deferred.md #63: attachments/pendingFiles fell into the same
+    // pre-existing hole composerNotice/isSending sit in — this effect
+    // only ever reset messages/isHydrating, so a file staged for thread
+    // A stayed visible above the composer after switching to thread B.
+    // Reset here, once per genuine switch (this line already runs
+    // exactly once per real switch, never on the justCreatedRef skip
+    // branch above), not duplicated across each branch below.
+    setAttachments([]);
+    setPendingFiles([]);
     if (initialThreadId === null) {
       setMessages([]);
       setIsHydrating(false);
@@ -124,6 +141,12 @@ export function useMemorylessChat(
   }, [messages, onNudgeAccept]);
 
   const send = useCallback(async (text: string) => {
+    // See isSendingRef's own comment — a real, synchronous "is a turn
+    // already running" check, not just relying on the UI having
+    // disabled itself in time.
+    if (isSendingRef.current) return;
+    isSendingRef.current = true;
+
     setComposerNotice(null);
     const studentMessage: ChatMessage = {
       id: `local-${Date.now()}`,
@@ -184,14 +207,24 @@ export function useMemorylessChat(
         controller.signal,
       );
 
-      // Defensive backstop only, should rarely fire now: the backend
-      // itself emits a real `event: error` for a mid-generation failure
-      // as of deferred.md #53 (previously it didn't — the stream just
-      // ended with zero deltas and a bare "done," indistinguishable from
-      // an empty-but-successful reply, which is what this check was
-      // originally built to catch). Kept in case some future failure
-      // mode still ends the stream silently without an explicit error.
-      if (!receivedDelta && !sawError && !controller.signal.aborted) {
+      if (controller.signal.aborted) {
+        // User-initiated stop — not a failure, no composerNotice. Marks
+        // the placeholder (whatever text it has, empty or partial) as
+        // interrupted; MessageBubble renders the real inline "response
+        // was interrupted" + Try again UI for this, and `!interrupted`
+        // stops `isMusing` from cycling forever on an empty placeholder
+        // that will otherwise never receive a real delta or removal.
+        setMessages((prev) =>
+          prev.map((m) => (m.id === tutorMessageId ? { ...m, interrupted: true, promptText: text } : m)),
+        );
+      } else if (!receivedDelta && !sawError) {
+        // Defensive backstop only, should rarely fire now: the backend
+        // itself emits a real `event: error` for a mid-generation failure
+        // as of deferred.md #53 (previously it didn't — the stream just
+        // ended with zero deltas and a bare "done," indistinguishable from
+        // an empty-but-successful reply, which is what this check was
+        // originally built to catch). Kept in case some future failure
+        // mode still ends the stream silently without an explicit error.
         setMessages((prev) => prev.filter((m) => m.id !== tutorMessageId));
         setComposerNotice({
           tone: 'error',
@@ -201,6 +234,7 @@ export function useMemorylessChat(
         });
       }
     } finally {
+      isSendingRef.current = false;
       setIsSending(false);
       abortRef.current = null;
     }
@@ -208,9 +242,14 @@ export function useMemorylessChat(
 
   // Aborting the fetch IS the cancel signal the backend listens for
   // (see api/memoryless.ts's doc comment) — no separate endpoint call.
-  // Silent on purpose: a user-initiated stop isn't an error, so no
-  // composerNotice; whatever text streamed in before the stop stays on
-  // screen, matching industrial (Claude/ChatGPT) partial-response behavior.
+  // The actual "interrupted" UI (whatever text streamed in before the
+  // stop stays on screen, matching industrial Claude/ChatGPT partial-
+  // response behavior, plus a real inline notice + Try again) is handled
+  // by send() itself once the aborted streamMessage() call settles — see
+  // its `controller.signal.aborted` branch above — not here; only one
+  // AbortController is ever live at a time (see the input-lock in
+  // Composer, deferred.md's send/stop discussion), so there is nothing
+  // else for this function itself to do.
   const cancel = useCallback(() => {
     abortRef.current?.abort();
   }, []);
