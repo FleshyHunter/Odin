@@ -43,3 +43,28 @@ pub async fn find_committed(pool: &PgPool, user_id: Uuid, content_hash: &str) ->
     tx.commit().await?;
     Ok(row.map(|(id,)| id))
 }
+
+/// deferred.md #37 — journey-mode's own dedup scope for `prompt_upload`,
+/// deliberately NOT the same as `find_committed` above: the same file
+/// uploaded to two different journeys is two legitimate, separate rows
+/// (the real `sources_content_hash_journey_unique` index is scoped to
+/// `(journey_id, content_hash)`, not globally unique) — `find_committed`
+/// would wrongly report a duplicate across journeys here.
+pub async fn find_committed_in_journey(
+    pool: &PgPool,
+    user_id: Uuid,
+    journey_id: Uuid,
+    content_hash: &str,
+) -> Result<Option<Uuid>, MemorylessError> {
+    let mut tx = begin_rls_transaction(pool, user_id).await?;
+    let row: Option<(Uuid,)> = sqlx::query_as(
+        "SELECT source_id FROM sources \
+         WHERE journey_id = $1 AND content_hash = $2 AND upload_role = 'prompt_upload' LIMIT 1",
+    )
+    .bind(journey_id)
+    .bind(content_hash)
+    .fetch_optional(&mut *tx)
+    .await?;
+    tx.commit().await?;
+    Ok(row.map(|(id,)| id))
+}

@@ -125,5 +125,26 @@ export function useTrackMessages(trackId: string) {
   // real `useJourneyChat`) without a conditional per call site.
   const cancel = useCallback(() => {}, []);
 
-  return { messages, isLoading, isSending, send, cancel, composerNotice, dismissComposerNotice };
+  // deferred.md #37: same no-op-for-parity reasoning as `cancel` above —
+  // this mocked track has no real upload endpoint to call, but
+  // ChatView.tsx destructures these identically from whichever hook is
+  // active, so the shape has to match `useJourneyChat`'s real ones.
+  const noop = useCallback(() => {}, []);
+
+  return {
+    messages,
+    isLoading,
+    isSending,
+    send,
+    cancel,
+    composerNotice,
+    dismissComposerNotice,
+    pendingFiles: [],
+    attachments: [],
+    requestAttach: noop,
+    confirmAttachRole: noop,
+    cancelPendingFile: noop,
+    retryAttachment: noop,
+    removeAttachment: noop,
+  };
 }

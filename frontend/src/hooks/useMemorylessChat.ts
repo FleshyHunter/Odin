@@ -264,7 +264,7 @@ export function useMemorylessChat(
   const runUpload = useCallback(
     async (id: string, file: File, role: UploadRole) => {
       try {
-        const result = await uploadsApi.uploadFile(file, role, threadIdRef.current);
+        const result = await uploadsApi.uploadFile(file, role, threadIdRef.current, null);
         // Same reconciliation as send()'s onThreadId handler above: a
         // staged upload can create a brand-new thread just as easily as a
         // message can, if this is the very first thing the user does.

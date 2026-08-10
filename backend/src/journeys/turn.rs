@@ -26,8 +26,9 @@ use sqlx::PgPool;
 use tokio::sync::mpsc;
 use uuid::Uuid;
 
-use crate::ai_client::{self, AiClientError, HistoryMessage};
+use crate::ai_client::{self, AiClientError, ConceptMeta, HistoryMessage};
 use crate::auth::middleware::begin_rls_transaction;
+use crate::exercises;
 use crate::knowledge;
 use crate::state::AppState;
 
@@ -113,6 +114,59 @@ pub(crate) async fn fetch_entry_concept(
     Ok(EntryConceptInfo { concept_id, title, description, learning_objective })
 }
 
+/// deferred.md #26 — the "1-3 immediate child concepts" exercise-template
+/// generation wants for context (ai_service/app/acquisition/service.py's
+/// batch_children_block). RLS-scoped: journey_prerequisites is per-journey,
+/// same table shape as subject_prerequisites just without dag_version.
+async fn fetch_batch_children(
+    pool: &PgPool,
+    user_id: Uuid,
+    journey_id: Uuid,
+    concept_id: Uuid,
+) -> Result<Vec<Uuid>, JourneyError> {
+    let mut tx = begin_rls_transaction(pool, user_id).await?;
+    let rows: Vec<(Uuid,)> = sqlx::query_as(
+        "SELECT concept_id FROM journey_prerequisites WHERE journey_id = $1 AND prereq_concept_id = $2",
+    )
+    .bind(journey_id)
+    .bind(concept_id)
+    .fetch_all(&mut *tx)
+    .await?;
+    tx.commit().await?;
+    Ok(rows.into_iter().map(|(id,)| id).collect())
+}
+
+/// deferred.md #26 — "the moment a concept becomes the active teaching
+/// target... the template call fires concurrently" (PRD.md, Exercise
+/// Template Generation). Fire-and-forget: exercise-template prefetch is
+/// an optimization, not core to the turn succeeding, same posture as
+/// every other write-through call in this codebase. `top_chunks` is
+/// deliberately empty, not a shortcut — write_through.rs already
+/// documents that no chunk anywhere in the live system has a concept_id
+/// assigned yet (explicit scope cut; "misc chunk, still retrievable,
+/// just unassigned" is a valid PRD state).
+fn spawn_exercise_prefetch(state: AppState, user_id: Uuid, journey_id: Uuid, entry: &EntryConceptInfo) {
+    let concept_id = entry.concept_id;
+    let concept_meta = ConceptMeta {
+        title: entry.title.clone(),
+        description: entry.description.clone().unwrap_or_default(),
+    };
+    tokio::spawn(async move {
+        let batch_children = match fetch_batch_children(&state.pool, user_id, journey_id, concept_id).await {
+            Ok(children) => children,
+            Err(err) => {
+                tracing::warn!(?err, %concept_id, "exercise-template prefetch: failed to fetch batch_children, proceeding without them");
+                Vec::new()
+            }
+        };
+        if let Err(err) =
+            exercises::service::get_or_generate(&state, concept_id, concept_meta, Vec::new(), batch_children).await
+        {
+            tracing::warn!(?err, %concept_id, "exercise-template prefetch-on-arrival failed");
+        }
+    });
+}
+
 async fn fetch_known_terms(pool: &PgPool, subject_id: Uuid, dag_version: i32) -> Result<Vec<String>, JourneyError> {
     let titles: Vec<(String,)> = sqlx::query_as(
         "SELECT cc.title FROM subject_concepts sc \
@@ -124,6 +178,17 @@ async fn fetch_known_terms(pool: &PgPool, subject_id: Uuid, dag_version: i32) ->
     .fetch_all(pool)
     .await?;
     Ok(titles.into_iter().map(|(t,)| t).collect())
+}
+
+/// deferred.md #2b — display name for ai_service's Stage 2 classify_gap()
+/// prompt. Not RLS-scoped — canonical_concepts is globally shared, same
+/// as fetch_known_terms/fetch_entry_concept's own joins against it.
+async fn fetch_concept_title(pool: &PgPool, concept_id: Uuid) -> Result<String, JourneyError> {
+    let (title,): (String,) = sqlx::query_as("SELECT title FROM canonical_concepts WHERE concept_id = $1")
+        .bind(concept_id)
+        .fetch_one(pool)
+        .await?;
+    Ok(title)
 }
 
 /// RLS-scoped. Real Postgres history (not a Redis-staged Vec, unlike
@@ -262,6 +327,12 @@ pub async fn start_journey_thread(
         .await?;
     let entry = fetch_entry_concept(&state.pool, user_id, journey_id, subject_id, dag_version).await?;
 
+    // deferred.md #26: fired here, not after the stream completes below —
+    // this is the exact moment the entry concept becomes the active
+    // teaching target, and PRD.md wants the template call concurrent with
+    // the tutor's own opening-turn generation, not sequential after it.
+    spawn_exercise_prefetch(state.clone(), user_id, journey_id, &entry);
+
     let prompt = format!(
         "You are a tutor starting a brand-new session with a student. Introduce and begin teaching \
          the concept \"{}\".{}{} Write a warm, engaging opening that introduces the concept and starts \
@@ -363,6 +434,139 @@ async fn persist_opening_turn(
     Ok(())
 }
 
+/// deferred.md #2c — persists ONE new concept into a specific journey's
+/// DAG. Two-phase, mirroring journeys::service::finalize()'s exact same
+/// shape for a whole new subject, just for one concept: canonical_concepts
+/// (global, plain pool, same "globally shared, not RLS" reasoning as
+/// persist_new_subject) first, then journey_concepts/journey_prerequisites
+/// (RLS, this student's own journey only) in one transaction. Deliberately
+/// scoped to journey_prerequisites, NOT subject_prerequisites/
+/// subject_concepts (deferred.md #2c's own decided dag_version semantics:
+/// personal to this student, not canonical) — no dag_version bump, no
+/// other journey on this subject is ever affected. New concept starts
+/// 'available' immediately (the student is actively asking about it right
+/// now), same status the entry concept itself starts with.
+async fn fold_concept_into_journey(
+    pool: &PgPool,
+    user_id: Uuid,
+    journey_id: Uuid,
+    subject_id: Uuid,
+    dag_version: i32,
+    current_concept_id: Uuid,
+    folded: &ai_client::FoldedConcept,
+) -> Result<Uuid, JourneyError> {
+    let concept_id: Uuid = sqlx::query_scalar(
+        "INSERT INTO canonical_concepts (title, description) VALUES ($1, $2) RETURNING concept_id",
+    )
+    .bind(&folded.title)
+    .bind(&folded.description)
+    .fetch_one(pool)
+    .await?;
+
+    // Resolve prerequisite titles -> concept_ids against THIS subject's
+    // existing concepts — same title-based convention as ConceptNode's
+    // own prerequisites, same defensive "skip a dangling reference"
+    // fallback as persist_new_subject's own loop (a folded concept
+    // having fewer prerequisites than intended isn't catastrophic, unlike
+    // a whole corrupted DAG). current_concept_id is always included even
+    // if the LLM didn't name it by title — the gap was raised while the
+    // student was on it.
+    let mut prereq_ids: Vec<Uuid> = Vec::new();
+    for title in &folded.prerequisites {
+        let existing: Option<(Uuid,)> = sqlx::query_as(
+            "SELECT cc.concept_id FROM subject_concepts sc \
+             JOIN canonical_concepts cc ON cc.concept_id = sc.concept_id \
+             WHERE sc.subject_id = $1 AND sc.dag_version = $2 AND cc.title = $3",
+        )
+        .bind(subject_id)
+        .bind(dag_version)
+        .bind(title)
+        .fetch_optional(pool)
+        .await?;
+        match existing {
+            Some((id,)) => prereq_ids.push(id),
+            None => tracing::warn!(%title, "fold_concept_into_journey: dangling prerequisite title, skipping"),
+        }
+    }
+    if !prereq_ids.contains(&current_concept_id) {
+        prereq_ids.push(current_concept_id);
+    }
+
+    let mut tx = begin_rls_transaction(pool, user_id).await?;
+
+    let order_index: i32 =
+        sqlx::query_scalar("SELECT COALESCE(MAX(order_index), 0) + 1 FROM journey_concepts WHERE journey_id = $1")
+            .bind(journey_id)
+            .fetch_one(&mut *tx)
+            .await?;
+
+    sqlx::query(
+        "INSERT INTO journey_concepts (journey_id, concept_id, status, order_index) VALUES ($1, $2, 'available', $3)",
+    )
+    .bind(journey_id)
+    .bind(concept_id)
+    .bind(order_index)
+    .execute(&mut *tx)
+    .await?;
+
+    for prereq_id in &prereq_ids {
+        sqlx::query("INSERT INTO journey_prerequisites (journey_id, concept_id, prereq_concept_id) VALUES ($1, $2, $3)")
+            .bind(journey_id)
+            .bind(concept_id)
+            .bind(prereq_id)
+            .execute(&mut *tx)
+            .await?;
+    }
+
+    tx.commit().await?;
+    Ok(concept_id)
+}
+
+/// deferred.md #2c — the fold_gap trigger: calls ai_service's fold
+/// capability, then persists the result via fold_concept_into_journey
+/// above. Returns the new concept's title on success, for the SAME
+/// turn's response to briefly acknowledge (deferred.md #2e: "case
+/// (b)-fold probably wants SOME acknowledgment, even if it's small").
+/// Callers are expected to fail soft on any Err — a failed fold costs
+/// nothing beyond staying a plain TANGENT for this one turn, same as a
+/// failed classify_gap() Stage 2 call already does.
+#[allow(clippy::too_many_arguments)]
+async fn fold_gap_into_journey(
+    state: &AppState,
+    user_id: Uuid,
+    journey_id: Uuid,
+    subject_id: Uuid,
+    dag_version: i32,
+    current_concept_id: Uuid,
+    subject_title: &str,
+    concept_titles: &[String],
+    current_concept_title: &str,
+    reply_text: &str,
+) -> Result<String, JourneyError> {
+    let folded = ai_client::fold_concept_into_dag(
+        &state.http_client,
+        &state.ai_service_url,
+        subject_title.to_string(),
+        concept_titles.to_vec(),
+        current_concept_title.to_string(),
+        reply_text.to_string(),
+    )
+    .await?;
+
+    fold_concept_into_journey(
+        &state.pool,
+        user_id,
+        journey_id,
+        subject_id,
+        dag_version,
+        current_concept_id,
+        &folded,
+    )
+    .await?;
+
+    Ok(folded.title)
+}
+
 /// POST /journeys/{journey_id}/messages — every turn after the opening.
 pub async fn send_journey_message(
     state: &AppState,
@@ -384,24 +588,67 @@ pub async fn send_journey_message(
     tx.commit().await?;
 
     let subject_id = verify_journey_and_subject(&state.pool, user_id, journey_id).await?;
-    let dag_version: i32 = sqlx::query_scalar("SELECT dag_version FROM subjects WHERE subject_id = $1")
-        .bind(subject_id)
-        .fetch_one(&state.pool)
-        .await?;
+    let (subject_title, dag_version): (String, i32) =
+        sqlx::query_as("SELECT title, dag_version FROM subjects WHERE subject_id = $1")
+            .bind(subject_id)
+            .fetch_one(&state.pool)
+            .await?;
     let known_terms = fetch_known_terms(&state.pool, subject_id, dag_version).await?;
+    let current_concept_title = fetch_concept_title(&state.pool, current_concept_id).await?;
 
     let analysis = ai_client::analyze_input(
         &state.http_client,
         &state.ai_service_url,
         raw_input.clone(),
-        known_terms,
+        // Cloned, not moved — the fold_gap trigger below needs its own
+        // copies of subject_title/known_terms/current_concept_title
+        // after this call consumes these ones.
+        known_terms.clone(),
         Some(current_concept_id),
         // deferred.md #75/2b — both already fetched above for other
         // reasons (dag_version for known_terms itself), free here.
         Some(subject_id),
         Some(dag_version),
+        // deferred.md #2b — same "already fetched above, free here"
+        // reasoning; subject_title piggybacks on the dag_version query,
+        // current_concept_title is one small additional lookup.
+        Some(subject_title.clone()),
+        Some(current_concept_title.clone()),
     )
     .await?;
+
+    // deferred.md #2b/#2c — off_topic/branch_gap: observability only for
+    // now (2d's trigger-UX question is still open, see its own entry —
+    // creating a whole new journey unprompted has a much bigger blast
+    // radius than folding one concept in). fold_gap: wired live below —
+    // small, contained (this journey only, per #2c's own decided
+    // dag_version scoping), matches #2e's own "case (b)-fold probably
+    // wants SOME acknowledgment" framing.
+    let mut fold_acknowledgment: Option<String> = None;
+    if let Some(gap) = &analysis.gap_classification {
+        tracing::info!(%journey_id, %thread_id, gap_classification = %gap, "deferred.md #2b gap signal");
+        if gap == "fold_gap" {
+            match fold_gap_into_journey(
+                state,
+                user_id,
+                journey_id,
+                subject_id,
+                dag_version,
+                current_concept_id,
+                &subject_title,
+                &known_terms,
+                &current_concept_title,
+                &analysis.cleaned_query,
+            )
+            .await
+            {
+                Ok(title) => fold_acknowledgment = Some(title),
+                Err(err) => {
+                    tracing::warn!(?err, %journey_id, %thread_id, "deferred.md #2c: fold_gap failed, continuing without it");
+                }
+            }
+        }
+    }
 
     // deferred.md #18: subject-scoped retrieval against the permanent
     // knowledge base — see query_knowledge_context's own doc comment.
@@ -413,13 +660,24 @@ pub async fn send_journey_message(
             None
         }
     };
-    let prompt = match &global_context {
-        Some(context) => format!(
+    let prompt = match (&global_context, &fold_acknowledgment) {
+        (Some(context), Some(title)) => format!(
+            "Here is material from the knowledge base that may be relevant — use it if it helps, \
+             but you don't have to:\n{context}\n\n(You just added a related concept, \"{title}\", to the \
+             student's learning path — briefly acknowledge this in your reply.)\n\nStudent's question: {}",
+            analysis.cleaned_query
+        ),
+        (Some(context), None) => format!(
             "Here is material from the knowledge base that may be relevant — use it if it helps, \
              but you don't have to:\n{context}\n\nStudent's question: {}",
             analysis.cleaned_query
         ),
-        None => analysis.cleaned_query.clone(),
+        (None, Some(title)) => format!(
+            "(You just added a related concept, \"{title}\", to the student's learning path — briefly \
+             acknowledge this in your reply.)\n\nStudent's question: {}",
+            analysis.cleaned_query
+        ),
+        (None, None) => analysis.cleaned_query.clone(),
     };
 
     let history = load_recent_history(&state.pool, user_id, thread_id).await?;

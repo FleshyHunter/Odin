@@ -203,7 +203,7 @@ pub async fn write_through_material_upload(
     tx.commit().await?;
 
     if let (Some(source_id), false) = (source_id_for_metadata, inserted_chunks.is_empty()) {
-        write_chunks_to_knowledge_global(state, source_id, &inserted_chunks).await;
+        write_chunks_to_knowledge_global(state, source_id, &inserted_chunks, "material_upload", None, None).await;
     }
 
     Ok(())
@@ -215,25 +215,39 @@ pub async fn write_through_material_upload(
 /// unreachable, the backfill UPDATE itself) is logged and swallowed, by
 /// design (see the caller's own doc comment on why fail-soft is correct
 /// here).
-async fn write_chunks_to_knowledge_global(state: &AppState, source_id: Uuid, chunks: &[(Uuid, Vec<f32>)]) {
+///
+/// deferred.md #37: generalized beyond material_upload's own always-
+/// global shape — `upload_role`/`subject_id`/`journey_id` are now
+/// caller-supplied, so `write_through_prompt_upload` below can reuse
+/// this same write+chroma_id-backfill logic for its own journey-scoped
+/// documents instead of duplicating it.
+#[allow(clippy::too_many_arguments)]
+async fn write_chunks_to_knowledge_global(
+    state: &AppState,
+    source_id: Uuid,
+    chunks: &[(Uuid, Vec<f32>)],
+    upload_role: &str,
+    subject_id: Option<Uuid>,
+    journey_id: Option<Uuid>,
+) {
     let records: Vec<ChunkRecord> = chunks
         .iter()
         .map(|(chunk_id, embedding)| ChunkRecord {
             chunk_id: chunk_id.to_string(),
             embedding: embedding.clone(),
             source_id: source_id.to_string(),
-            upload_role: "material_upload".to_string(),
+            upload_role: upload_role.to_string(),
             trust_score: USER_UPLOAD_TRUST_SCORE,
-            subject_id: None,
+            subject_id: subject_id.map(|id| id.to_string()),
             concept_id: None,
-            journey_id: None,
+            journey_id: journey_id.map(|id| id.to_string()),
             difficulty: None,
             chunk_type: None,
         })
         .collect();
 
     if let Err(err) = ai_client::add_chunks(&state.http_client, &state.ai_service_url, records).await {
-        tracing::warn!(?err, %source_id, "failed to write material_upload chunks to knowledge_global, continuing");
+        tracing::warn!(?err, %source_id, upload_role, "failed to write chunks to knowledge_global, continuing");
         return;
     }
 
@@ -252,21 +266,33 @@ async fn write_chunks_to_knowledge_global(state: &AppState, source_id: Uuid, chu
 
 /// Writes one `prompt_upload` staged upload through to Postgres — only
 /// callable once a real journey_id exists (memoryless::handlers::convert,
-/// deferred.md #17), since `sources`' own CHECK constraint requires
-/// `upload_scope = 'journey' AND journey_id IS NOT NULL` for this role.
-/// Mirrors write_through_material_upload's shape exactly, just scoped to
-/// journey_id via its own dedup index, `sources_content_hash_journey_unique`
-/// (ON `(journey_id, content_hash)` — a syntactically exact match to that
+/// deferred.md #17, and now also uploads::handlers::upload's own
+/// "commit immediately" journey-mode branch, deferred.md #37), since
+/// `sources`' own CHECK constraint requires `upload_scope = 'journey'
+/// AND journey_id IS NOT NULL` for this role. Mirrors
+/// write_through_material_upload's shape, scoped to journey_id via its
+/// own dedup index, `sources_content_hash_journey_unique` (ON
+/// `(journey_id, content_hash)` — a syntactically exact match to that
 /// index's own WHERE clause is required for Postgres to infer it as the
 /// ON CONFLICT target, same requirement already confirmed live for the
 /// material_upload sibling above).
+///
+/// deferred.md #37: now also pushes to ChromaDB (journey-scoped
+/// metadata), closing a real pre-existing gap — this function
+/// previously only ever wrote Postgres, never reaching the vector store
+/// despite PRD.md's own "journey mode: store immediately (ChromaDB +
+/// PostgreSQL)" line. Postgres write stays hard-propagated (`?`,
+/// required by the `convert()` caller's own "commit-then-delete"
+/// guarantee); the ChromaDB write stays fail-soft, same posture as its
+/// material_upload sibling.
 pub async fn write_through_prompt_upload(
-    pool: &PgPool,
+    state: &AppState,
     user_id: Uuid,
     journey_id: Uuid,
+    subject_id: Uuid,
     upload: &StagedUpload,
 ) -> Result<(), MemorylessError> {
-    let mut tx = begin_rls_transaction(pool, user_id).await?;
+    let mut tx = begin_rls_transaction(&state.pool, user_id).await?;
 
     let source_id: Option<(Uuid,)> = sqlx::query_as(
         "INSERT INTO sources \
@@ -284,17 +310,35 @@ pub async fn write_through_prompt_upload(
     .fetch_optional(&mut *tx)
     .await?;
 
-    if let Some((source_id,)) = source_id {
+    let mut inserted_chunks: Vec<(Uuid, Vec<f32>)> = Vec::new();
+    let source_id_for_metadata = source_id.map(|(id,)| id);
+    if let Some(source_id) = source_id_for_metadata {
         for chunk in &upload.chunks {
-            sqlx::query("INSERT INTO chunks (source_id, text, token_count) VALUES ($1, $2, $3)")
-                .bind(source_id)
-                .bind(&chunk.text)
-                .bind(chunk.token_count)
-                .execute(&mut *tx)
-                .await?;
+            let chunk_id: Uuid = sqlx::query_scalar(
+                "INSERT INTO chunks (source_id, text, token_count) VALUES ($1, $2, $3) RETURNING chunk_id",
+            )
+            .bind(source_id)
+            .bind(&chunk.text)
+            .bind(chunk.token_count)
+            .fetch_one(&mut *tx)
+            .await?;
+            inserted_chunks.push((chunk_id, chunk.embedding.clone()));
         }
     }
 
     tx.commit().await?;
+
+    if let (Some(source_id), false) = (source_id_for_metadata, inserted_chunks.is_empty()) {
+        write_chunks_to_knowledge_global(
+            state,
+            source_id,
+            &inserted_chunks,
+            "prompt_upload",
+            Some(subject_id),
+            Some(journey_id),
+        )
+        .await;
+    }
+
     Ok(())
 }

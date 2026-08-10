@@ -305,7 +305,7 @@ pub async fn convert(
     // merely delayed (same "commit-then-delete" guarantee as the rest
     // of this function).
     for upload in thread.staged_uploads.iter().filter(|u| u.upload_role == "prompt_upload") {
-        write_through::write_through_prompt_upload(&state.pool, user_id, req.journey_id, upload).await?;
+        write_through::write_through_prompt_upload(&state, user_id, req.journey_id, subject_id, upload).await?;
     }
 
     // Only remove the Redis entry once Postgres durably has everything.

@@ -29,10 +29,14 @@ async function extractErrorMessage(response: Response): Promise<string> {
 // streamed), so api/memoryless.ts's raw-fetch SSE reader isn't the right
 // model either — this sits in between, raw fetch for the multipart
 // request, one response.json() for the reply.
+// deferred.md #37: journeyId is mutually exclusive with threadId — the
+// backend's own uploads/handlers.rs branches on journey_id first when
+// both would somehow be present. Real callers only ever pass one.
 export async function uploadFile(
   file: File,
   role: UploadRole,
   threadId: string | null,
+  journeyId: string | null = null,
   signal?: AbortSignal,
   isRetry = false,
 ): Promise<UploadResult> {
@@ -44,6 +48,7 @@ export async function uploadFile(
   // the backend's Option<Uuid> field, same convention already used by
   // api/memoryless.ts's streamMessage for thread_id.
   if (threadId) body.append('thread_id', threadId);
+  if (journeyId) body.append('journey_id', journeyId);
 
   // deferred.md #71 — previously unguarded: a network failure here (no
   // connectivity, DNS, CORS) surfaced the raw browser error string (e.g.
@@ -67,7 +72,7 @@ export async function uploadFile(
   if (response.status === 401 && !isRetry && accessToken) {
     const refreshed = await silentRefresh();
     if (refreshed) {
-      return uploadFile(file, role, threadId, signal, true);
+      return uploadFile(file, role, threadId, journeyId, signal, true);
     }
   }
 

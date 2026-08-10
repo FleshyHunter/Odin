@@ -267,6 +267,12 @@ struct AnalyzeInputRequest {
     // embedding for a richer on-topic signal than word-match alone.
     subject_id: Option<Uuid>,
     dag_version: Option<i32>,
+    // deferred.md #2b — display names for Stage 2's classify_gap()
+    // prompt if the ambiguous band is ever reached. Independent of
+    // subject_id/dag_version above: pass whenever available, None is
+    // safe (Stage 2 just stays unreachable, same as missing IDs).
+    subject_title: Option<String>,
+    current_concept_title: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -278,6 +284,10 @@ pub struct AnalyzeInputResponse {
     pub is_on_topic: bool,
     pub matched_concepts: Vec<String>,
     pub detected_intent: String,
+    // deferred.md #2b — "on_topic_elsewhere" | "off_topic" | "ambiguous"
+    // | "dag_gap" | None. Additive only, not yet consumed by anything
+    // (2c/2d are the real callers) — see this fn's own doc comment.
+    pub gap_classification: Option<String>,
 }
 
 /// Calls FastAPI's POST /analyze_input (Block 8) — the 6-step
@@ -305,6 +315,12 @@ pub struct AnalyzeInputResponse {
 /// calls this (both were being fetched for other reasons — known_terms
 /// itself needs dag_version already), so this is free at that call
 /// site, not a new lookup.
+///
+/// subject_title/current_concept_title (deferred.md #2b): display
+/// names for ai_service's Stage 2 classify_gap() prompt, only ever used
+/// if the ambiguous band is reached. memoryless/turn.rs passes None for
+/// both, same as subject_id/dag_version.
+#[allow(clippy::too_many_arguments)]
 pub async fn analyze_input(
     client: &reqwest::Client,
     ai_service_url: &str,
@@ -313,6 +329,8 @@ pub async fn analyze_input(
     current_concept_id: Option<Uuid>,
     subject_id: Option<Uuid>,
     dag_version: Option<i32>,
+    subject_title: Option<String>,
+    current_concept_title: Option<String>,
 ) -> Result<AnalyzeInputResponse, AiClientError> {
     let url = format!("{ai_service_url}/analyze_input");
 
@@ -324,6 +342,8 @@ pub async fn analyze_input(
             current_concept_id,
             subject_id,
             dag_version,
+            subject_title,
+            current_concept_title,
         })
         .send()
         .await
@@ -528,11 +548,15 @@ pub struct DAGResult {
 // or infra problem. This lets #4/#40's wiring actually be built and
 // exercised end-to-end without a live Dify account. REMOVE ONCE DIFY
 // CREDITS ARE RESTORED — never meant to ship enabled; default is off.
-// Scoped to the three Dify-backed calls reachable from the Onboarding
-// Diagnostic flow — generate_dag()/adjust_dag()/generate_exercise_template()
-// (the last one only via journeys::service's existing-subject reuse path,
-// exercises/service.rs::get_or_generate) — does not touch ai_service, and
-// does not affect acquire() at all.
+// Scoped to the Dify-backed calls that need a real DAG-shaped result to
+// keep their callers exercisable: generate_dag()/adjust_dag()/
+// generate_exercise_template() (Onboarding Diagnostic flow — the last one
+// only via journeys::service's existing-subject reuse path,
+// exercises/service.rs::get_or_generate) and fold_concept_into_dag()
+// (deferred.md #2c, journeys/turn.rs's live turn loop). Does not touch
+// ai_service, and does not affect acquire()/classify_gap() at all — both
+// already fail soft on a Dify error with zero loss of caller
+// exercisability (classify_gap()'s caller just stays "ambiguous").
 // ============================================================
 fn mock_dify_enabled() -> bool {
     std::env::var("AI_CLIENT_MOCK_DIFY").map(|v| v == "true").unwrap_or(false)
@@ -737,6 +761,90 @@ pub async fn adjust_dag(
     Ok(body)
 }
 
+/// deferred.md #2c — the ONE new concept to fold into a journey's
+/// existing DAG. Mirrors ConceptNode's own title-based prerequisites
+/// convention (the caller resolves titles back to concept_ids).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct FoldedConcept {
+    pub title: String,
+    pub description: String,
+    pub difficulty_level: i32,
+    pub learning_objective: Option<String>,
+    #[serde(default)]
+    pub prerequisites: Vec<String>,
+}
+
+/// Synthetic but structurally valid FoldedConcept — same TEMPORARY mock
+/// posture as mock_dag_result/mock_adjust_dag_result (AI_CLIENT_MOCK_DIFY,
+/// Dify out of credits). prerequisites names current_concept_title
+/// verbatim, matching what a real fold response would almost always do.
+fn mock_folded_concept(current_concept_title: &str) -> FoldedConcept {
+    FoldedConcept {
+        title: format!("{current_concept_title} — related detail"),
+        description: "A small, related concept the student asked about mid-conversation.".to_string(),
+        difficulty_level: 2,
+        learning_objective: Some("Understand this related detail well enough to connect it back to the main path.".to_string()),
+        prerequisites: vec![current_concept_title.to_string()],
+    }
+}
+
+#[derive(Serialize)]
+struct FoldConceptRequest {
+    subject_title: String,
+    concept_titles: Vec<String>,
+    current_concept_title: String,
+    reply_text: String,
+}
+
+/// Calls FastAPI's POST /fold_concept (deferred.md #2c) — Dify -> Claude
+/// designs ONE new concept to extend a journey's DAG with, for the
+/// "fold_gap" classification specifically. Reuses the SAME
+/// AI_CLIENT_MOCK_DIFY posture as generate_dag()/adjust_dag() — this is
+/// a DAG-authoring call against the same generic-passthrough Dify app
+/// (see ai_service's own fold_concept_into_dag() comment for why it
+/// reuses DIFY_DAG_API_KEY, not a new key).
+pub async fn fold_concept_into_dag(
+    client: &reqwest::Client,
+    ai_service_url: &str,
+    subject_title: String,
+    concept_titles: Vec<String>,
+    current_concept_title: String,
+    reply_text: String,
+) -> Result<FoldedConcept, AiClientError> {
+    if mock_dify_enabled() {
+        tracing::warn!(%current_concept_title, "AI_CLIENT_MOCK_DIFY enabled — returning a fake FoldedConcept, not a real Dify call");
+        return Ok(mock_folded_concept(&current_concept_title));
+    }
+
+    let url = format!("{ai_service_url}/fold_concept");
+
+    let response = client
+        .post(&url)
+        .json(&FoldConceptRequest {
+            subject_title,
+            concept_titles,
+            current_concept_title,
+            reply_text,
+        })
+        .send()
+        .await
+        .map_err(|_| AiClientError::ServiceUnavailable)?;
+
+    if !response.status().is_success() {
+        return Err(AiClientError::UnexpectedResponse(format!(
+            "status {}",
+            response.status()
+        )));
+    }
+
+    let body: FoldedConcept = response
+        .json()
+        .await
+        .map_err(|err| AiClientError::UnexpectedResponse(err.to_string()))?;
+
+    Ok(body)
+}
+
 #[derive(Serialize, Deserialize, Debug, Clone)]
 pub struct ConceptMeta {
     pub title: String,
@@ -874,6 +982,15 @@ pub struct IngestResponse {
 /// design had Rust check chunk_count on the RETURNED result, by which
 /// point ai_service had already embedded everything; that check is
 /// gone now (uploads/handlers.rs), superseded by this.
+///
+/// subject_id/dag_version (deferred.md #24): only known for journey-mode
+/// uploads (uploads/handlers.rs's new "commit immediately" branch) —
+/// omitted entirely, not sent as empty strings, for every other caller
+/// (memoryless staging, ephemeral), same convention already used for
+/// max_chunks-adjacent optional fields elsewhere in this file. When
+/// present, ai_service runs a real topic-relevance check against them;
+/// when absent, that check is skipped, same as it always has been.
+#[allow(clippy::too_many_arguments)]
 pub async fn ingest(
     client: &reqwest::Client,
     ai_service_url: &str,
@@ -881,14 +998,22 @@ pub async fn ingest(
     filename: &str,
     role: &str,
     max_chunks: usize,
+    subject_id: Option<Uuid>,
+    dag_version: Option<i32>,
 ) -> Result<IngestResponse, AiClientError> {
     let url = format!("{ai_service_url}/ingest");
 
     let part = reqwest::multipart::Part::bytes(file_bytes).file_name(filename.to_string());
-    let form = reqwest::multipart::Form::new()
+    let mut form = reqwest::multipart::Form::new()
         .part("file", part)
         .text("role", role.to_string())
         .text("max_chunks", max_chunks.to_string());
+    if let Some(subject_id) = subject_id {
+        form = form.text("subject_id", subject_id.to_string());
+    }
+    if let Some(dag_version) = dag_version {
+        form = form.text("dag_version", dag_version.to_string());
+    }
 
     let response = client
         .post(&url)
@@ -1192,6 +1317,8 @@ mod tests {
             AI_SERVICE_URL,
             "what is a matrix".to_string(),
             vec!["matrix".to_string()],
+            None,
+            None,
             None,
             None,
             None,

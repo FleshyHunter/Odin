@@ -1,8 +1,9 @@
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useRef, useState, type DragEvent } from 'react';
 import { useNavigate, useOutletContext, useParams } from 'react-router-dom';
 import { TrackHeader } from '../../components/conversation/TrackBar/TrackHeader';
 import { MessageList } from '../../components/conversation/Messages/MessageList';
 import { Composer } from '../../components/conversation/Composer/Composer';
+import { DragOverlay } from '../../components/conversation/Composer/DragOverlay/DragOverlay';
 import { ActivePanel } from '../../components/active-panel/ActivePanel';
 import { MemorylessLanding } from './MemorylessLanding';
 import { useTrackMessages } from '../../hooks/useTracks';
@@ -40,9 +41,24 @@ export function ChatView() {
   // deferred.md #79: `cancel` is now destructured and wired too — both
   // hooks return one (a real AbortController.abort() for journeyChat,
   // a harmless no-op for mockChat, see useTrackMessages's own comment).
-  const { messages, isSending, send, cancel, composerNotice, dismissComposerNotice } = activeTrack?.journeyId
-    ? journeyChat
-    : mockChat;
+  // deferred.md #37: same treatment for the attach fields — journeyChat
+  // now has a real attachment state machine (mirrors
+  // useMemorylessChat.ts's own), mockChat has matching no-ops.
+  const {
+    messages,
+    isSending,
+    send,
+    cancel,
+    composerNotice,
+    dismissComposerNotice,
+    pendingFiles,
+    attachments,
+    requestAttach,
+    confirmAttachRole,
+    cancelPendingFile,
+    retryAttachment,
+    removeAttachment,
+  } = activeTrack?.journeyId ? journeyChat : mockChat;
   const { width: panelWidth, setWidth: setPanelWidth, isOpen: isPanelOpen, toggle: togglePanel } = useActivePanel();
   const resizeHandleRef = useRef<HTMLDivElement>(null);
   const activePanelShellRef = useRef<HTMLDivElement>(null);
@@ -157,6 +173,50 @@ export function ChatView() {
     document.addEventListener('mouseup', handleMouseUp);
   };
 
+  // deferred.md #37: same depth-counter drag-overlay pattern as
+  // MemorylessLanding.tsx — see that file's own comment for why a plain
+  // boolean flickers.
+  const [isDraggingOver, setIsDraggingOver] = useState(false);
+  const dragCounterRef = useRef(0);
+
+  const handleDragEnter = (event: DragEvent<HTMLElement>) => {
+    event.preventDefault();
+    if (!event.dataTransfer.types.includes('Files')) return;
+    dragCounterRef.current += 1;
+    setIsDraggingOver(true);
+  };
+  const handleDragOver = (event: DragEvent<HTMLElement>) => {
+    event.preventDefault();
+  };
+  const handleDragLeave = (event: DragEvent<HTMLElement>) => {
+    event.preventDefault();
+    dragCounterRef.current = Math.max(0, dragCounterRef.current - 1);
+    if (dragCounterRef.current === 0) setIsDraggingOver(false);
+  };
+  const handleDrop = (event: DragEvent<HTMLElement>) => {
+    event.preventDefault();
+    dragCounterRef.current = 0;
+    setIsDraggingOver(false);
+    if (event.dataTransfer.files.length > 0) {
+      requestAttach(Array.from(event.dataTransfer.files));
+    }
+  };
+  const dragHandlers = {
+    onDragEnter: handleDragEnter,
+    onDragOver: handleDragOver,
+    onDragLeave: handleDragLeave,
+    onDrop: handleDrop,
+  };
+  const attachProps = {
+    attachments,
+    pendingFiles,
+    onAttachFiles: requestAttach,
+    onConfirmAttachRole: confirmAttachRole,
+    onCancelPendingFile: cancelPendingFile,
+    onRemoveAttachment: removeAttachment,
+    onRetryAttachment: retryAttachment,
+  };
+
   if (!activeTrack) {
     // routeId itself (not activeTrackId) is the real signal here: once a
     // brand new thread's id is learned and the URL updates to /chat/:id,
@@ -175,7 +235,8 @@ export function ChatView() {
 
   return (
     <>
-      <main className="conversation">
+      <main className="conversation" {...dragHandlers}>
+        <DragOverlay active={isDraggingOver} />
         <TrackHeader
           title={activeTrack.title}
           conceptTitle={activeTrack.currentConceptTitle}
@@ -195,6 +256,7 @@ export function ChatView() {
           onStop={cancel}
           notice={composerNotice}
           onDismissNotice={dismissComposerNotice}
+          {...attachProps}
         />
       </main>
 

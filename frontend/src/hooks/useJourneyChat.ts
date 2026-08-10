@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import * as journeyChatApi from '../api/journeyChat';
-import type { ChatMessage, ComposerNoticeData } from '../types';
+import * as uploadsApi from '../api/uploads';
+import type { Attachment, ChatMessage, ComposerNoticeData, PendingFile, UploadRole } from '../types';
 
 // Real journey-mode chat (deferred.md #2a) — mirrors useMemorylessChat.ts's
 // shape closely, with one real difference: the tutor speaks first. On
@@ -15,6 +16,8 @@ export function useJourneyChat(journeyId: string | null) {
   const [isSending, setIsSending] = useState(false);
   const [isHydrating, setIsHydrating] = useState(journeyId !== null);
   const [composerNotice, setComposerNotice] = useState<ComposerNoticeData | null>(null);
+  const [pendingFiles, setPendingFiles] = useState<PendingFile[]>([]);
+  const [attachments, setAttachments] = useState<Attachment[]>([]);
   const threadIdRef = useRef<string | null>(null);
   const abortRef = useRef<AbortController | null>(null);
   // deferred.md #79: mirrors useMemorylessChat.ts's own #76 fix — a
@@ -174,5 +177,83 @@ export function useJourneyChat(journeyId: string | null) {
 
   const dismissComposerNotice = useCallback(() => setComposerNotice(null), []);
 
-  return { messages, isSending, isHydrating, send, cancel, composerNotice, dismissComposerNotice };
+  // deferred.md #37: mirrors useMemorylessChat.ts's own attachment state
+  // machine exactly, simpler here since journeyId is already known
+  // upfront — no "did this upload just create a brand-new thread"
+  // reconciliation needed (uploadFile's journeyId branch never returns
+  // a thread_id at all, see api/uploads.ts).
+  const runUpload = useCallback(
+    async (id: string, file: File, role: UploadRole) => {
+      try {
+        const result = await uploadsApi.uploadFile(file, role, null, journeyId);
+        setAttachments((prev) =>
+          prev.map((a) =>
+            a.id === id ? { ...a, status: 'ready', chunkCount: result.chunkCount, deduped: result.deduped } : a,
+          ),
+        );
+      } catch (err) {
+        setAttachments((prev) =>
+          prev.map((a) =>
+            a.id === id
+              ? { ...a, status: 'error', errorMessage: err instanceof Error ? err.message : 'Upload failed.' }
+              : a,
+          ),
+        );
+      }
+    },
+    [journeyId],
+  );
+
+  const requestAttach = useCallback((files: File[]) => {
+    const queued = files.map((file) => ({ id: crypto.randomUUID(), file }));
+    setPendingFiles((prev) => [...prev, ...queued]);
+  }, []);
+
+  const confirmAttachRole = useCallback(
+    (pendingId: string, role: UploadRole) => {
+      const pending = pendingFiles.find((p) => p.id === pendingId);
+      if (!pending) return;
+      setPendingFiles((prev) => prev.filter((p) => p.id !== pendingId));
+      setAttachments((prev) => [...prev, { id: pending.id, file: pending.file, role, status: 'uploading' }]);
+      void runUpload(pending.id, pending.file, role);
+    },
+    [pendingFiles, runUpload],
+  );
+
+  const cancelPendingFile = useCallback((pendingId: string) => {
+    setPendingFiles((prev) => prev.filter((p) => p.id !== pendingId));
+  }, []);
+
+  const retryAttachment = useCallback(
+    (attachmentId: string) => {
+      const attachment = attachments.find((a) => a.id === attachmentId);
+      if (!attachment) return;
+      setAttachments((prev) =>
+        prev.map((a) => (a.id === attachmentId ? { ...a, status: 'uploading', errorMessage: undefined } : a)),
+      );
+      void runUpload(attachment.id, attachment.file, attachment.role);
+    },
+    [attachments, runUpload],
+  );
+
+  const removeAttachment = useCallback((attachmentId: string) => {
+    setAttachments((prev) => prev.filter((a) => a.id !== attachmentId));
+  }, []);
+
+  return {
+    messages,
+    isSending,
+    isHydrating,
+    send,
+    cancel,
+    composerNotice,
+    dismissComposerNotice,
+    pendingFiles,
+    attachments,
+    requestAttach,
+    confirmAttachRole,
+    cancelPendingFile,
+    retryAttachment,
+    removeAttachment,
+  };
 }
