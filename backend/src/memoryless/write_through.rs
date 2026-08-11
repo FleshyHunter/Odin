@@ -203,7 +203,8 @@ pub async fn write_through_material_upload(
     tx.commit().await?;
 
     if let (Some(source_id), false) = (source_id_for_metadata, inserted_chunks.is_empty()) {
-        write_chunks_to_knowledge_global(state, source_id, &inserted_chunks, "material_upload", None, None).await;
+        write_chunks_to_knowledge_global(state, user_id, source_id, &inserted_chunks, "material_upload", None, None)
+            .await;
     }
 
     Ok(())
@@ -221,9 +222,24 @@ pub async fn write_through_material_upload(
 /// caller-supplied, so `write_through_prompt_upload` below can reuse
 /// this same write+chroma_id-backfill logic for its own journey-scoped
 /// documents instead of duplicating it.
+///
+/// deferred.md #37 — real bug found live once a real reachable
+/// ai_service finally let this backfill UPDATE actually run for the
+/// first time (every prior attempt failed at add_chunks() itself and
+/// returned before reaching it): running it against a bare
+/// `&state.pool` connection, outside any RLS transaction, hit
+/// `chunks_mixed_scope`/`sources_mixed_scope`'s own
+/// `current_setting('app.current_user_id', true)::uuid` cast with an
+/// empty string left over from an EARLIER request's `SET LOCAL` on that
+/// same pooled connection (not NULL — pooled connections are reused,
+/// unlike a fresh session) — `''::uuid` raises, not just "no rows
+/// match." Fixed by wrapping it in the same `begin_rls_transaction`
+/// pattern every other RLS-protected query in this codebase already
+/// uses, now that `user_id` is a real parameter here too.
 #[allow(clippy::too_many_arguments)]
 async fn write_chunks_to_knowledge_global(
     state: &AppState,
+    user_id: Uuid,
     source_id: Uuid,
     chunks: &[(Uuid, Vec<f32>)],
     upload_role: &str,
@@ -255,13 +271,19 @@ async fn write_chunks_to_knowledge_global(
     // chroma_id is set to the chunk's own id (string form) — its only
     // purpose is "has this been written to Chroma," not a distinct
     // external identifier (the ChromaDB document id IS chunk_id).
-    if let Err(err) = sqlx::query("UPDATE chunks SET chroma_id = chunk_id::text WHERE chunk_id = ANY($1)")
-        .bind(&chunk_ids)
-        .execute(&state.pool)
-        .await
-    {
+    if let Err(err) = backfill_chroma_ids(state, user_id, &chunk_ids).await {
         tracing::warn!(?err, %source_id, "wrote to knowledge_global but failed to backfill chunks.chroma_id");
     }
+}
+
+async fn backfill_chroma_ids(state: &AppState, user_id: Uuid, chunk_ids: &[Uuid]) -> Result<(), MemorylessError> {
+    let mut tx = begin_rls_transaction(&state.pool, user_id).await?;
+    sqlx::query("UPDATE chunks SET chroma_id = chunk_id::text WHERE chunk_id = ANY($1)")
+        .bind(chunk_ids)
+        .execute(&mut *tx)
+        .await?;
+    tx.commit().await?;
+    Ok(())
 }
 
 /// Writes one `prompt_upload` staged upload through to Postgres — only
@@ -331,6 +353,7 @@ pub async fn write_through_prompt_upload(
     if let (Some(source_id), false) = (source_id_for_metadata, inserted_chunks.is_empty()) {
         write_chunks_to_knowledge_global(
             state,
+            user_id,
             source_id,
             &inserted_chunks,
             "prompt_upload",
