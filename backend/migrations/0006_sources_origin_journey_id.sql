@@ -1,0 +1,11 @@
+-- Always-include journey-mode uploads in generation context (2026-08-13).
+-- New nullable origin tag for material_upload rows: WHICH journey this
+-- upload happened during, if any — purely informational, never a
+-- visibility scope (material_upload stays globally visible regardless
+-- of this value; sources_mixed_scope's own RLS policy never consults
+-- it, confirmed before adding this). Deliberately a SEPARATE column
+-- from the existing journey_id (which stays prompt_upload's real
+-- privacy scope, untouched) rather than overloading it with a second
+-- meaning depending on upload_role — same instinct as 0004's own
+-- entry_concept_id: a dedicated column beats an ambiguous shared one.
+ALTER TABLE sources ADD COLUMN origin_journey_id UUID REFERENCES journeys(journey_id);

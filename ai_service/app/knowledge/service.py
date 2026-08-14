@@ -11,6 +11,26 @@ from app.knowledge.client import get_concept_embeddings, get_knowledge_global
 # on why hnsw:space=cosine is what makes that arithmetic correct.
 RETRIEVAL_MIN_SCORE = float(os.environ.get("RETRIEVAL_MIN_SCORE", "0.60"))
 CHUNK_CONCEPT_MIN_SIMILARITY = float(os.environ.get("CHUNK_CONCEPT_MIN_SIMILARITY", "0.50"))
+# deferred.md #64 — Retrieval Ranking Formula [LOCKED], PRD.md:
+# "final_rank_score = similarity_score + source_quality_bonus (derived
+# from trust_score) + context_priority_bonus (prompt_upload within its
+# scope). All weighting constants are configurable env vars." Defaults
+# match ARCHITECTURE.md's own locked Environment Variables list exactly
+# — these three were already specified there, just never read anywhere
+# until now.
+SIMILARITY_WEIGHT = float(os.environ.get("SIMILARITY_WEIGHT", "1.0"))
+SOURCE_QUALITY_WEIGHT = float(os.environ.get("SOURCE_QUALITY_WEIGHT", "0.3"))
+CONTEXT_PRIORITY_WEIGHT = float(os.environ.get("CONTEXT_PRIORITY_WEIGHT", "0.5"))
+# How many extra candidates to pull from Chroma beyond the caller's own
+# top_k before re-ranking by final_rank_score — without this, Chroma's
+# own raw-similarity top-K cutoff could silently exclude a chunk that
+# the FULL formula (trust/context bonuses included) would have ranked
+# higher than something Chroma kept. A fixed multiplier, not a locked
+# value — PRD.md doesn't specify one; generous enough that the bonus
+# terms (max combined swing: SOURCE_QUALITY_WEIGHT + CONTEXT_PRIORITY_
+# WEIGHT = 0.8 at defaults) can plausibly reorder within the widened
+# pool without fetching the entire collection.
+OVER_FETCH_MULTIPLIER = 4
 # deferred.md #2b — the confident-off-topic floor for classify_topic_gap's
 # 3-way band below CHUNK_CONCEPT_MIN_SIMILARITY (reused here as the
 # confident "matches an existing concept" ceiling, not redefined). Below
@@ -230,6 +250,18 @@ def _build_where(filters: dict | None) -> dict | None:
     return {"$and": [{key: value} for key, value in filters.items()]}
 
 
+def final_rank_score(similarity: float, metadata: dict) -> float:
+    """deferred.md #64 — PRD.md's locked formula. trust_score/upload_role
+    are always-present fields on every real ChunkRecord (never optional,
+    see its own dataclass) — `.get()` with a conservative fallback only
+    guards a document written before this ever existed, not the normal
+    case."""
+    trust_score = metadata.get("trust_score", 0.0)
+    source_quality_bonus = SOURCE_QUALITY_WEIGHT * trust_score
+    context_priority_bonus = CONTEXT_PRIORITY_WEIGHT if metadata.get("upload_role") == "prompt_upload" else 0.0
+    return SIMILARITY_WEIGHT * similarity + source_quality_bonus + context_priority_bonus
+
+
 def query_knowledge_global(
     embedding: list[float],
     *,
@@ -243,14 +275,22 @@ def query_knowledge_global(
     difficulty, chunk_type} — converted to Chroma's `where` clause via
     _build_where (exact-match only — no locked caller needs range/
     comparison filters yet; multi-key filters get $and-wrapped, see
-    _build_where's own docstring). Returns similarity (1 - cosine
-    distance, so callers compare directly against RETRIEVAL_MIN_SCORE
-    without re-deriving the conversion themselves; results already below
-    that threshold are dropped here, since a sub-threshold result isn't
-    really a "match" at all. Whether too FEW matches (< RETRIEVAL_MIN_
-    CHUNKS) should trigger the acquisition fallback is the CALLER's
-    decision, not this function's — it only returns what actually
-    matched.
+    _build_where's own docstring). `similarity` on each returned chunk
+    is still the raw cosine similarity (1 - cosine distance) — callers
+    that care about the raw number still get it — but the RETURNED
+    ORDER is now `final_rank_score` (deferred.md #64: similarity +
+    trust-derived + context-priority bonuses), highest first, not raw
+    similarity order. Results below RETRIEVAL_MIN_SCORE are dropped
+    based on the RAW similarity_score component, before any bonus is
+    applied — the minimum relevance bar shouldn't be gameable by a
+    high-trust or prompt_upload chunk that isn't actually relevant.
+    Over-fetches (OVER_FETCH_MULTIPLIER * top_k) from Chroma before
+    re-ranking and truncating to top_k — Chroma's own raw-similarity
+    cutoff could otherwise silently exclude a chunk the full formula
+    would have ranked inside top_k. Whether too FEW matches (<
+    RETRIEVAL_MIN_CHUNKS) should trigger the acquisition fallback is the
+    CALLER's decision, not this function's — it only returns what
+    actually matched.
 
     SECURITY: `filters['journey_id']`, if present, must already be a
     Rust-verified, resource-ownership-checked value (ARCHITECTURE.md's
@@ -260,17 +300,23 @@ def query_knowledge_global(
     """
     result = get_knowledge_global().query(
         query_embeddings=[embedding],
-        n_results=top_k,
+        n_results=top_k * OVER_FETCH_MULTIPLIER,
         where=_build_where(filters),
         include=["distances", "metadatas"],
     )
     ids = result["ids"][0]
     distances = result["distances"][0]
     metadatas = result["metadatas"][0]
-    return [
-        RetrievedChunk(chunk_id=chunk_id, similarity=1 - distance, metadata=metadata)
+
+    candidates = [
+        (chunk_id, 1 - distance, metadata)
         for chunk_id, distance, metadata in zip(ids, distances, metadatas)
         if 1 - distance >= RETRIEVAL_MIN_SCORE
+    ]
+    ranked = sorted(candidates, key=lambda c: final_rank_score(c[1], c[2]), reverse=True)
+    return [
+        RetrievedChunk(chunk_id=chunk_id, similarity=similarity, metadata=metadata)
+        for chunk_id, similarity, metadata in ranked[:top_k]
     ]
 
 
