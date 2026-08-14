@@ -6,8 +6,9 @@
 // prerequisite checks, no completion-check logic — memoryless mode has
 // no journey/subject to scope any of that against. NOT bare against
 // retrieval, though: THIS thread's own staged uploads (deferred.md #19,
-// see retrieve_staged_context) AND the permanent global knowledge base
-// (deferred.md #18, see query_knowledge_context) are both wired in,
+// see all_staged_context — always included, unconditionally) AND the
+// permanent global knowledge base (deferred.md #18, see
+// query_knowledge_context, still similarity-gated) are both wired in,
 // independently of each other and of one another's success/failure.
 //
 // Streaming architecture: the returned mpsc::Receiver feeds the HTTP
@@ -31,7 +32,6 @@ use futures_util::StreamExt;
 use tokio::sync::mpsc;
 
 use super::errors::MemorylessError;
-use super::similarity::rank_by_similarity;
 use super::staging::{self, StagedAuditEvent, StagedMessage, StagedThread, StagedUpload};
 use super::write_through;
 use crate::ai_client::{self, AiClientError};
@@ -55,51 +55,33 @@ pub enum TurnEvent {
     Error(String),
 }
 
-// deferred.md #19: memoryless/similarity.rs's cosine-similarity scan,
-// built and unit-tested well ahead of this, its first real caller.
-// Scoped deliberately to JUST this thread's own staged-upload chunks
-// (PRD.md, Staged Upload Retrieval's second of two searches) — the
-// other half (a normal query against the permanent global ChromaDB) is
-// a separate, still-unwired piece of work (deferred.md #18), since
-// nothing today calls ChromaDB from a real chat turn at all. Fails
-// open on any embedding-service error: this is a retrieval
-// ENHANCEMENT, not core functionality, and the existing bare-query
-// behavior without it is already the accepted baseline (deferred.md #18).
-async fn retrieve_staged_context(
-    state: &AppState,
-    query: &str,
-    staged_uploads: &[StagedUpload],
-) -> Result<Option<String>, AiClientError> {
-    let candidates: Vec<(String, Vec<f32>)> = staged_uploads
+// Found live (2026-08-12): the previous similarity-gated design
+// (rank staged-upload chunks against the CURRENT message's embedding,
+// only include what scored >= RETRIEVAL_MIN_SCORE) silently dropped a
+// student's own just-uploaded document from the prompt whenever their
+// question was ABOUT the document rather than semantically similar TO
+// it — measured live, a completely ordinary "how do I answer this
+// worksheet" scored 0.44 against its own worksheet's content, well
+// below the 0.60 floor. That's the normal case, not an edge case.
+// Replaced with unconditional inclusion: everything staged in this
+// thread, any role, every turn — no embedding call, no threshold, no
+// failure mode (pure, synchronous). Token cost is accepted knowingly,
+// not something to work around with an arbitrary cap.
+fn all_staged_context(staged_uploads: &[StagedUpload]) -> Option<String> {
+    let texts: Vec<&str> = staged_uploads
         .iter()
         .flat_map(|upload| upload.chunks.iter())
-        .map(|chunk| (chunk.text.clone(), chunk.embedding.clone()))
+        .map(|chunk| chunk.text.as_str())
         .collect();
 
-    if candidates.is_empty() {
-        return Ok(None);
+    if texts.is_empty() {
+        return None;
     }
-
-    let query_embedding = ai_client::embed(&state.http_client, &state.ai_service_url, vec![query.to_string()])
-        .await?
-        .into_iter()
-        .next()
-        .ok_or_else(|| AiClientError::UnexpectedResponse("embed() returned no vectors for the query".to_string()))?;
-
-    let relevant: Vec<&str> = rank_by_similarity(&query_embedding, &candidates)
-        .into_iter()
-        .filter(|(_, score)| *score >= state.retrieval_min_score)
-        .map(|(text, _)| text.as_str())
-        .collect();
-
-    if relevant.is_empty() {
-        return Ok(None);
-    }
-    Ok(Some(relevant.join("\n\n")))
+    Some(texts.join("\n\n"))
 }
 
 // deferred.md #18: the other half of retrieval — the permanent, shared
-// ChromaDB knowledge_global collection, as opposed to retrieve_staged_
+// ChromaDB knowledge_global collection, as opposed to all_staged_
 // context's THIS-thread-only staged uploads above. Deliberately
 // independent of it (its own embed() call, not a shared one) — touching
 // #19's already-shipped, live-verified internals to shave one cheap
@@ -107,9 +89,9 @@ async fn retrieve_staged_context(
 // generation call this whole turn is actually bottlenecked on. Unscoped
 // (no subject_id) — memoryless mode has no subject/journey context,
 // matching ARCHITECTURE.md's "cross-subject tangent retrieval" case.
-// Fails open on any embedding-service error, same reasoning as
-// retrieve_staged_context: a retrieval ENHANCEMENT, not core
-// functionality.
+// Fails open on any embedding-service error — this one's still a
+// genuine retrieval ENHANCEMENT (broad KB search), not core, unlike
+// all_staged_context above which is now unconditional.
 async fn query_knowledge_context(state: &AppState, user_id: Uuid, query: &str) -> Result<Option<String>, AiClientError> {
     let query_embedding = ai_client::embed(&state.http_client, &state.ai_service_url, vec![query.to_string()])
         .await?
@@ -117,7 +99,7 @@ async fn query_knowledge_context(state: &AppState, user_id: Uuid, query: &str) -
         .next()
         .ok_or_else(|| AiClientError::UnexpectedResponse("embed() returned no vectors for the query".to_string()))?;
 
-    knowledge::query_global_context(state, user_id, &query_embedding, None).await
+    knowledge::query_global_context(state, user_id, &query_embedding, None, None).await
 }
 
 // No longer a whole-request bound (streaming can legitimately run much
@@ -185,23 +167,15 @@ pub async fn start_turn_stream(
         None,
         None,
         None,
+        None,
+        None,
     )
     .await?;
 
-    // deferred.md #19: staged-upload retrieval — see
-    // retrieve_staged_context's own doc comment. Scoped to THIS
-    // thread's own staged chunks only.
-    let retrieved_context = if thread.staged_uploads.iter().any(|upload| !upload.chunks.is_empty()) {
-        match retrieve_staged_context(state, &analysis.cleaned_query, &thread.staged_uploads).await {
-            Ok(context) => context,
-            Err(err) => {
-                tracing::warn!(?err, thread_id = %thread.thread_id, "staged-upload retrieval failed, continuing without it");
-                None
-            }
-        }
-    } else {
-        None
-    };
+    // deferred.md #19: staged-upload context — see all_staged_context's
+    // own doc comment. Scoped to THIS thread's own staged chunks only,
+    // always included, no ranking, no failure mode.
+    let retrieved_context = all_staged_context(&thread.staged_uploads);
 
     // deferred.md #18: the permanent, shared knowledge base — see
     // query_knowledge_context's own doc comment. Independent of the
@@ -218,8 +192,8 @@ pub async fn start_turn_stream(
     let mut context_blocks: Vec<String> = Vec::new();
     if let Some(context) = &retrieved_context {
         context_blocks.push(format!(
-            "The student uploaded a document earlier in this conversation. Here is material from it \
-             that may be relevant — use it if it helps, but you don't have to:\n{context}"
+            "The student uploaded this document to this conversation. Treat it as reference material \
+             for what they're asking about:\n{context}"
         ));
     }
     if let Some(context) = &global_context {

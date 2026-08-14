@@ -146,10 +146,28 @@ pub async fn write_through_turn(
 /// `concept_embeddings` anywhere yet (explicit, discussed scope cut,
 /// not an oversight); PRD's own "misc chunk — still retrievable, just
 /// unassigned" is an explicitly valid state.
+///
+/// `origin_journey_id` (2026-08-13, migration 0006): purely an origin
+/// tag — WHICH journey this upload happened during, if any — never a
+/// visibility scope. Deliberately its OWN column, not the existing
+/// `journey_id` (which stays `prompt_upload`'s real privacy scope,
+/// CHECK-constrained to `NULL` for `material_upload` — confirmed via
+/// the actual constraint, not assumed; overloading it would make one
+/// column mean two different things depending on `upload_role`, same
+/// trap this codebase already avoided once for `subjects.
+/// entry_concept_id`, migration 0004). `sources_mixed_scope`'s RLS
+/// policy for `material_upload` is `upload_role = 'material_upload'`
+/// unconditionally — it never consults either journey column — so
+/// setting this has zero effect on staying globally visible/searchable
+/// everywhere. Exists so `journeys::turn::fetch_journey_upload_context`
+/// can always-include "what was uploaded during THIS journey"
+/// regardless of role. `None` for memoryless-mode uploads (no journey
+/// context to tag).
 pub async fn write_through_material_upload(
     state: &AppState,
     user_id: Uuid,
     upload: &StagedUpload,
+    origin_journey_id: Option<Uuid>,
 ) -> Result<(), MemorylessError> {
     let mut tx = begin_rls_transaction(&state.pool, user_id).await?;
 
@@ -163,8 +181,8 @@ pub async fn write_through_material_upload(
     // exclusion constraint matching the ON CONFLICT specification."
     let source_id: Option<(Uuid,)> = sqlx::query_as(
         "INSERT INTO sources \
-         (filename, source_type, upload_role, upload_scope, trust_score, content_hash, retrieval_date) \
-         VALUES ($1, 'user_upload', 'material_upload', 'global', $2, $3, $4) \
+         (filename, source_type, upload_role, upload_scope, trust_score, content_hash, retrieval_date, origin_journey_id) \
+         VALUES ($1, 'user_upload', 'material_upload', 'global', $2, $3, $4, $5) \
          ON CONFLICT (content_hash) WHERE upload_role = 'material_upload' AND content_hash IS NOT NULL \
          DO NOTHING \
          RETURNING source_id",
@@ -173,6 +191,7 @@ pub async fn write_through_material_upload(
     .bind(USER_UPLOAD_TRUST_SCORE)
     .bind(&upload.content_hash)
     .bind(upload.created_at)
+    .bind(origin_journey_id)
     .fetch_optional(&mut *tx)
     .await?;
 

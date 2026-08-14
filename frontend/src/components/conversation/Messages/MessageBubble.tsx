@@ -2,8 +2,12 @@ import { Fragment, useEffect, useState, type AnchorHTMLAttributes, type ReactNod
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import remarkBreaks from 'remark-breaks';
+import remarkMath from 'remark-math';
+import rehypeKatex from 'rehype-katex';
 import type { ChatMessage } from '../../../types';
 import { InterruptedNotice } from './InterruptedNotice';
+import { MessageUtil } from './MessageUtil';
+import 'katex/dist/katex.min.css';
 import './messageBubble.css';
 
 interface MessageBubbleProps {
@@ -19,7 +23,24 @@ interface MessageBubbleProps {
 // send() adds one with text: '' the instant a message is sent, before any
 // real delta has arrived) — raven-themed to match the mascot, not generic
 // "Thinking..." text.
-const MUSING_PHRASES = ['Musing…', 'Preening thought…', 'Perching in thought…', 'Gathering whispers…'];
+const MUSING_PHRASES = [
+  // 1. Observation & Search (Starting broad)
+  'Scanning the horizon…',
+  'Peering through the dark…',
+  'Sifting through the shadows…',
+  'Sorting the glimmers…',
+
+  // 2. Gathering & Processing (Deepening thought)
+  'Gathering whispers…',
+  'Weaving the whispers…',
+  'Scrying…',
+  'Musing…',
+
+  // 3. Resting / Settling into the Answer (Refining)
+  'Preening thought…',
+  'Perching in thought…',
+];
+
 const MUSING_INTERVAL_MS = 2200;
 
 // Cycles through MUSING_PHRASES while `active`; always restarts from the
@@ -56,10 +77,20 @@ function MarkdownLink({ href, children }: AnchorHTMLAttributes<HTMLAnchorElement
 // strikethrough/autolinks on top of CommonMark; remark-breaks turns a
 // single '\n' into a hard line break (CommonMark's own default treats
 // one bare newline as just a space, joining lines into one paragraph) —
-// matches this app's prior behavior of always breaking on '\n'.
+// matches this app's prior behavior of always breaking on '\n'. remark-
+// math + rehype-katex render the LaTeX ($...$ inline, $$...$$ block)
+// the system prompt now explicitly asks qwen to use for math notation
+// (ai_service/app/generation/router.py) — qwen was already reaching for
+// LaTeX unprompted before this existed, it just had nowhere to render;
+// this also makes the bespoke active-panel MatrixRenderer redundant
+// (matrices are just one case of what this now handles generally).
 function renderTutorMarkdown(text: string): ReactNode {
   return (
-    <ReactMarkdown remarkPlugins={[remarkGfm, remarkBreaks]} components={{ a: MarkdownLink }}>
+    <ReactMarkdown
+      remarkPlugins={[remarkGfm, remarkBreaks, remarkMath]}
+      rehypePlugins={[rehypeKatex]}
+      components={{ a: MarkdownLink }}
+    >
       {text}
     </ReactMarkdown>
   );
@@ -119,6 +150,7 @@ export function MessageBubble({ message, onRetry }: MessageBubbleProps) {
     return (
       <div className="msg student">
         <div className="bubble">{renderStudentText(message.text)}</div>
+        <MessageUtil side="user" text={message.text} timestamp={message.timestamp} />
       </div>
     );
   }
@@ -142,6 +174,10 @@ export function MessageBubble({ message, onRetry }: MessageBubbleProps) {
           />
         )}
       </div>
+      {/* Shown once there's any real text, interrupted or not — the
+          only case with nothing to copy yet is the still-musing empty
+          placeholder, which isMusing being true already implies. */}
+      {message.text !== '' && <MessageUtil side="ai" text={message.text} timestamp={message.timestamp} />}
     </div>
   );
 }

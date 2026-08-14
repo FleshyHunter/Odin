@@ -244,7 +244,9 @@ pub async fn upload(
     // usable immediately) — a write-through failure only means this
     // upload's durability rests on Redis alone for now.
     if staged_upload.upload_role == "material_upload" {
-        if let Err(err) = write_through::write_through_material_upload(&state, user_id, &staged_upload).await {
+        // None: no journey context exists in memoryless mode to tag as
+        // this upload's origin.
+        if let Err(err) = write_through::write_through_material_upload(&state, user_id, &staged_upload, None).await {
             tracing::error!(?err, thread_id = %thread.thread_id, "failed to write material_upload through to Postgres");
         }
     }
@@ -329,7 +331,10 @@ async fn upload_to_journey(
     if staged_upload.upload_role == "prompt_upload" {
         write_through::write_through_prompt_upload(&state, user_id, journey_id, subject_id, &staged_upload).await?;
     } else {
-        write_through::write_through_material_upload(&state, user_id, &staged_upload).await?;
+        // Some(journey_id): tags this upload's origin so
+        // journeys::turn::fetch_journey_upload_context finds it for
+        // THIS journey — its global visibility is unaffected either way.
+        write_through::write_through_material_upload(&state, user_id, &staged_upload, Some(journey_id)).await?;
     }
 
     Ok(Json(UploadResponse {

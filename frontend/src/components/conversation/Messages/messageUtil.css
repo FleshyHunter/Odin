@@ -1,0 +1,44 @@
+.msg-util {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 0.15s ease;
+}
+
+/* Revealed by hovering (or keyboard-focusing into) the WHOLE message
+   container above it — .msg itself, see messageBubble.css — not just
+   the util row directly, since it's invisible/unreachable until then. */
+.msg:hover .msg-util,
+.msg:focus-within .msg-util {
+  opacity: 1;
+  pointer-events: auto;
+}
+
+/* Same two children (copy, timestamp) in the same DOM order for both
+   sides — row-reverse is what actually puts copy on the outside for
+   the user side, matching MessageUtil's own doc comment. */
+.msg-util-ai { flex-direction: row; justify-content: flex-start; }
+.msg-util-user { flex-direction: row-reverse; justify-content: flex-end; }
+
+.msg-util-btn {
+  display: inline-flex; align-items: center; justify-content: center;
+  width: 22px; height: 22px; padding: 0;
+  background: none; border: none; border-radius: var(--radius-sm);
+  color: var(--text-secondary); cursor: pointer;
+  transition: color 0.12s ease, background 0.12s ease;
+}
+/* --text (near-white, #EDEEF0) rather than a literal #FFF — matches
+   the app's own "as white as we go" token, used everywhere else text
+   ever reaches full brightness, instead of introducing a one-off pure
+   white that'd read slightly harsher against this dark theme. */
+.msg-util-btn:hover { color: var(--text); background: var(--surface); }
+
+.msg-util-timestamp {
+  font-size: 0.74rem;
+  color: var(--text-secondary);
+  cursor: default;
+  transition: color 0.12s ease;
+}
+.msg-util-timestamp:hover { color: var(--text); }

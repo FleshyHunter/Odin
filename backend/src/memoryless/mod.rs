@@ -7,9 +7,6 @@
 
 pub mod errors;
 mod handlers;
-// deferred.md #19: wired into turn.rs's staged-upload retrieval —
-// no longer unwired/dead code.
-mod similarity;
 // pub: uploads:: (Block 12) shares StagedThread/StagedUpload and
 // load_owned/save with memoryless::handlers — a staged upload lives
 // inside the SAME Redis-staged thread blob, not a separate store.

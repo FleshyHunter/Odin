@@ -69,8 +69,6 @@ pub struct AppState {
     // generate_exercise_template()'s race-prevention lock TTL — see
     // exercises/service.rs.
     pub template_gen_lock_ttl_seconds: u64,
-    // deferred.md #19: shared threshold with ai_service's RETRIEVAL_MIN_SCORE.
-    pub retrieval_min_score: f32,
     // Redis Phase 1 (deferred.md #9-11) — see config.rs's own comments.
     pub login_rate_limit: (u32, u64),
     pub otp_resend_rate_limit: (u32, u64),
@@ -84,6 +82,11 @@ pub struct AppState {
     pub journey_start_rate_limit: (u32, u64),
     pub journey_message_rate_limit: (u32, u64),
     pub memoryless_message_rate_limit: (u32, u64),
+    // PRD.md Mastery System — see config.rs's own comment.
+    pub mastery_alpha: f32,
+    pub mastery_beta: f32,
+    pub mastery_completion_threshold: f32,
+    pub advanced_streak_required: i32,
 }
 
 impl AppState {
@@ -113,7 +116,6 @@ impl AppState {
             memoryless_staged_upload_max_mb: config.memoryless_staged_upload_max_mb,
             memoryless_staged_upload_max_chunks: config.memoryless_staged_upload_max_chunks,
             template_gen_lock_ttl_seconds: config.template_gen_lock_ttl_seconds,
-            retrieval_min_score: config.retrieval_min_score,
             login_rate_limit: config.login_rate_limit,
             otp_resend_rate_limit: config.otp_resend_rate_limit,
             signup_rate_limit: config.signup_rate_limit,
@@ -123,6 +125,10 @@ impl AppState {
             journey_start_rate_limit: config.journey_start_rate_limit,
             journey_message_rate_limit: config.journey_message_rate_limit,
             memoryless_message_rate_limit: config.memoryless_message_rate_limit,
+            mastery_alpha: config.mastery_alpha,
+            mastery_beta: config.mastery_beta,
+            mastery_completion_threshold: config.mastery_completion_threshold,
+            advanced_streak_required: config.advanced_streak_required,
         }
     }
 

@@ -148,6 +148,12 @@ export function useMemorylessChat(
     isSendingRef.current = true;
 
     setComposerNotice(null);
+    // Found live: attachments never cleared on send, only the textarea
+    // did — a sent message's attachment card sat in the composer
+    // indefinitely. Cleared here, same optimistic timing as the
+    // textarea's own immediate clear (Composer.tsx's handleSend).
+    setAttachments([]);
+    setPendingFiles([]);
     const studentMessage: ChatMessage = {
       id: `local-${Date.now()}`,
       role: 'student',

@@ -951,6 +951,63 @@ pub async fn generate_exercise_template(
     Ok(body.templates)
 }
 
+#[derive(Serialize)]
+struct InstantiateExerciseRequest {
+    exercise_type: String,
+    template_body: Json,
+    template_params: Option<Json>,
+    correct_answer: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct InstantiatedExercise {
+    pub rendered_question: String,
+    pub instantiated_params: Json,
+    pub expected_answer: Option<String>,
+    pub rendered_choices: Option<Vec<String>>,
+}
+
+/// Calls FastAPI's POST /instantiate_exercise — draws real random
+/// values and fills a canonical exercise's templates with them,
+/// producing an actual servable question (not a validation dry run).
+/// Deliberately NOT part of the acquisition/Dify family — this is pure
+/// deterministic computation (no LLM, no Dify), so it's a plain,
+/// unmocked HTTP call even when AI_CLIENT_MOCK_DIFY is set.
+pub async fn instantiate_exercise(
+    client: &reqwest::Client,
+    ai_service_url: &str,
+    exercise_type: String,
+    template_body: Json,
+    template_params: Option<Json>,
+    correct_answer: Option<String>,
+) -> Result<InstantiatedExercise, AiClientError> {
+    let url = format!("{ai_service_url}/instantiate_exercise");
+
+    let response = client
+        .post(&url)
+        .json(&InstantiateExerciseRequest {
+            exercise_type,
+            template_body,
+            template_params,
+            correct_answer,
+        })
+        .send()
+        .await
+        .map_err(|_| AiClientError::ServiceUnavailable)?;
+
+    if !response.status().is_success() {
+        return Err(AiClientError::UnexpectedResponse(format!(
+            "status {}",
+            response.status()
+        )));
+    }
+
+    response
+        .json()
+        .await
+        .map_err(|err| AiClientError::UnexpectedResponse(err.to_string()))
+}
+
 #[derive(Debug, Deserialize, Clone)]
 pub struct IngestChunk {
     pub text: String,
@@ -1039,6 +1096,7 @@ pub async fn ingest(
 struct QueryKnowledgeGlobalRequest {
     embedding: Vec<f32>,
     subject_id: Option<Uuid>,
+    journey_id: Option<Uuid>,
     top_k: usize,
 }
 
@@ -1063,23 +1121,30 @@ struct QueryKnowledgeGlobalResponse {
 /// filtered similarity search against the permanent, shared
 /// `knowledge_global` ChromaDB collection. `embedding` is a precomputed
 /// query vector (callers already have one from their own `/embed` call,
-/// or need one anyway) — this never re-embeds. `subject_id` is the only
-/// filter exposed here: None searches the whole collection (memoryless
-/// mode, no subject context — ARCHITECTURE.md's "cross-subject tangent
-/// retrieval"); Some(_) scopes to one subject (journey mode). Results
-/// already below `RETRIEVAL_MIN_SCORE` are dropped server-side.
+/// or need one anyway) — this never re-embeds. `subject_id`: None
+/// searches the whole collection (memoryless mode, no subject context —
+/// ARCHITECTURE.md's "cross-subject tangent retrieval"); Some(_) scopes
+/// to one subject (journey mode). `journey_id` (deferred.md #18's own
+/// privacy gap, fixed 2026-08-12): journey mode's real, ownership-
+/// verified journey — server-side, this makes `prompt_upload` results
+/// scoped to THIS journey only, never another journey's private
+/// uploads on the same subject; `None` for memoryless mode (no journey
+/// concept). Results already below `RETRIEVAL_MIN_SCORE` are dropped
+/// server-side, and the returned order is `final_rank_score` (deferred.md
+/// #64), not raw similarity.
 pub async fn query_knowledge_global(
     client: &reqwest::Client,
     ai_service_url: &str,
     embedding: Vec<f32>,
     subject_id: Option<Uuid>,
+    journey_id: Option<Uuid>,
     top_k: usize,
 ) -> Result<Vec<RetrievedChunk>, AiClientError> {
     let url = format!("{ai_service_url}/knowledge/query");
 
     let response = client
         .post(&url)
-        .json(&QueryKnowledgeGlobalRequest { embedding, subject_id, top_k })
+        .json(&QueryKnowledgeGlobalRequest { embedding, subject_id, journey_id, top_k })
         .send()
         .await
         .map_err(|_| AiClientError::ServiceUnavailable)?;

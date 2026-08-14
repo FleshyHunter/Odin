@@ -75,12 +75,6 @@ pub struct Config {
     // value PRD.md already locks (120s), now a real env var instead of
     // a compiled-in Rust constant.
     pub template_gen_lock_ttl_seconds: u64,
-    // deferred.md #19: shared with ai_service's own RETRIEVAL_MIN_SCORE
-    // (knowledge/service.py) — same locked concept, same threshold, per
-    // PRD.md's "results from both are merged and ranked together"
-    // (ChromaDB + this session's own staged-upload chunks). Genuinely
-    // cross-language, not a duplicate invention.
-    pub retrieval_min_score: f32,
     // Redis Phase 1 (deferred.md #9-11, PRD.md NC7's locked values) —
     // (max_count, window_seconds) pairs, parsed from the locked "N:Xm"/
     // "N:Xh" env shape.
@@ -106,6 +100,18 @@ pub struct Config {
     // until finalized" shape as memoryless staging, but its own env var
     // since these are unrelated flows with no reason to share a value.
     pub onboarding_diagnostic_ttl_minutes: i64,
+    // PRD.md, Mastery System [LOCKED] — "new_mastery = MASTERY_ALPHA *
+    // old_mastery + MASTERY_BETA * latest_score". Listed in
+    // ARCHITECTURE.md's Environment Variables list but never actually
+    // read anywhere until the exercise-submission loop existed to need
+    // them — same "documented but genuinely unimplemented" gap #75/2b
+    // found for is_on_topic's own embedding fallback.
+    pub mastery_alpha: f32,
+    pub mastery_beta: f32,
+    // PRD.md, Concept Completion Rule — "mastery_bank.mastery_score >=
+    // 0.75 AND journey_concepts.advanced_correct_streak >= 3".
+    pub mastery_completion_threshold: f32,
+    pub advanced_streak_required: i32,
 }
 
 impl Config {
@@ -198,11 +204,6 @@ impl Config {
             .ok()
             .and_then(|v| v.parse().ok())
             .unwrap_or(120);
-        let retrieval_min_score = env::var("RETRIEVAL_MIN_SCORE")
-            .ok()
-            .and_then(|v| v.parse().ok())
-            .unwrap_or(0.60);
-
         // Defaults match PRD.md NC7's locked values exactly, so an
         // unset/fresh environment still gets real brute-force
         // protection rather than silently having none.
@@ -242,6 +243,19 @@ impl Config {
             .ok()
             .map(|v| parse_rate_limit(&v))
             .unwrap_or((30, 60));
+        // Defaults match PRD.md's own locked "Default: 0.7 * old + 0.3 *
+        // latest" exactly, so an unset environment still gets the real
+        // locked formula, not an arbitrary placeholder.
+        let mastery_alpha = env::var("MASTERY_ALPHA").ok().and_then(|v| v.parse().ok()).unwrap_or(0.7);
+        let mastery_beta = env::var("MASTERY_BETA").ok().and_then(|v| v.parse().ok()).unwrap_or(0.3);
+        let mastery_completion_threshold = env::var("MASTERY_COMPLETION_THRESHOLD")
+            .ok()
+            .and_then(|v| v.parse().ok())
+            .unwrap_or(0.75);
+        let advanced_streak_required = env::var("ADVANCED_STREAK_REQUIRED")
+            .ok()
+            .and_then(|v| v.parse().ok())
+            .unwrap_or(3);
 
         Self {
             database_url,
@@ -264,7 +278,6 @@ impl Config {
             memoryless_staged_upload_max_mb,
             memoryless_staged_upload_max_chunks,
             template_gen_lock_ttl_seconds,
-            retrieval_min_score,
             login_rate_limit,
             otp_resend_rate_limit,
             signup_rate_limit,
@@ -274,6 +287,10 @@ impl Config {
             journey_start_rate_limit,
             journey_message_rate_limit,
             memoryless_message_rate_limit,
+            mastery_alpha,
+            mastery_beta,
+            mastery_completion_threshold,
+            advanced_streak_required,
         }
     }
 }

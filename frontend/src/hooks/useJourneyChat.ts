@@ -105,6 +105,10 @@ export function useJourneyChat(journeyId: string | null) {
       isSendingRef.current = true;
 
       setComposerNotice(null);
+      // Same fix as useMemorylessChat.ts's own send() — attachments
+      // never cleared on send, only the textarea did.
+      setAttachments([]);
+      setPendingFiles([]);
       const studentMessage: ChatMessage = {
         id: `local-${Date.now()}`,
         role: 'student',

@@ -27,8 +27,15 @@ const RETRIEVAL_TOP_K: usize = 5;
 /// and resolves any matches' actual text from Postgres. `subject_id`
 /// scopes the search (journey mode); `None` searches unscoped
 /// (memoryless mode — ARCHITECTURE.md's "cross-subject tangent
-/// retrieval"). Returns `Ok(None)` for "nothing relevant found," same
-/// shape as `memoryless::turn::retrieve_staged_context`.
+/// retrieval"). `journey_id` (deferred.md #18's own privacy gap, fixed
+/// 2026-08-12): journey mode's real, ownership-verified journey — keeps
+/// `prompt_upload` results scoped to THIS journey, never another
+/// journey's private uploads on the same subject (including a DIFFERENT
+/// journey belonging to the SAME user — RLS alone doesn't catch that
+/// case, since both would resolve as "this user's own journey"; this is
+/// the actual scoping layer for it). `None` for memoryless mode. Returns
+/// `Ok(None)` for "nothing relevant found," same shape as
+/// `memoryless::turn::all_staged_context`.
 ///
 /// Two different failure granularities, both fail-open but handled at
 /// the right level: an ai_service/embedding failure is the CALLER's to
@@ -42,12 +49,14 @@ pub(crate) async fn query_global_context(
     user_id: Uuid,
     query_embedding: &[f32],
     subject_id: Option<Uuid>,
+    journey_id: Option<Uuid>,
 ) -> Result<Option<String>, AiClientError> {
     let matches = ai_client::query_knowledge_global(
         &state.http_client,
         &state.ai_service_url,
         query_embedding.to_vec(),
         subject_id,
+        journey_id,
         RETRIEVAL_TOP_K,
     )
     .await?;
