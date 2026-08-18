@@ -39,4 +39,14 @@ pub fn router() -> Router<AppState> {
             "/journeys/{journey_id}/messages",
             post(handlers::send_journey_message).get(handlers::get_journey_messages),
         )
+        // deferred.md — the exercise loop: serve a fresh instantiated
+        // question, then grade a submitted answer against it.
+        .route(
+            "/journeys/{journey_id}/concepts/{concept_id}/exercise",
+            post(handlers::serve_exercise),
+        )
+        .route(
+            "/journeys/{journey_id}/exercises/{attempt_id}/submit",
+            post(handlers::submit_exercise_answer),
+        )
 }

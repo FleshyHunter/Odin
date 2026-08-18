@@ -170,6 +170,28 @@ pub(crate) async fn fetch_one_canonical(
     Ok(row.map(ExerciseTemplateRow::into_template))
 }
 
+/// deferred.md — the real exercise-serving loop needs exercise_id
+/// itself (quiz_attempts.exercise_id references it) — fetch_one_
+/// canonical above deliberately doesn't carry it (ExerciseTemplate has
+/// no such field, and every existing caller only ever needed the
+/// template's content). A tiny companion query rather than changing
+/// fetch_one_canonical's own return shape and risking its existing
+/// callers (journeys::service's diagnostic-reuse path).
+pub(crate) async fn fetch_one_canonical_id(
+    pool: &PgPool,
+    concept_id: Uuid,
+    difficulty: &str,
+) -> Result<Option<Uuid>, ExerciseError> {
+    let row: Option<(Uuid,)> = sqlx::query_as(
+        "SELECT exercise_id FROM exercises WHERE concept_id = $1 AND difficulty = $2 AND is_canonical = TRUE",
+    )
+    .bind(concept_id)
+    .bind(difficulty)
+    .fetch_optional(pool)
+    .await?;
+    Ok(row.map(|(id,)| id))
+}
+
 #[derive(sqlx::FromRow)]
 struct ExerciseTemplateRow {
     exercise_type: String,

@@ -228,10 +228,17 @@ async fn load_recent_history(
 // module boundary" reasoning as memoryless/turn.rs's own query_
 // knowledge_context. Fails open on any embedding-service error — a
 // retrieval ENHANCEMENT, not core functionality.
+//
+// journey_id (deferred.md #18's own privacy gap, fixed 2026-08-12):
+// passed through so ai_service can keep prompt_upload results scoped
+// to THIS journey — this function's own caller already has it via
+// verify_journey_and_subject, a real ownership-verified value, not
+// trusted from anywhere else.
 async fn query_knowledge_context(
     state: &AppState,
     user_id: Uuid,
     subject_id: Uuid,
+    journey_id: Uuid,
     query: &str,
 ) -> Result<Option<String>, AiClientError> {
     let query_embedding = ai_client::embed(&state.http_client, &state.ai_service_url, vec![query.to_string()])
@@ -240,7 +247,41 @@ async fn query_knowledge_context(
         .next()
         .ok_or_else(|| AiClientError::UnexpectedResponse("embed() returned no vectors for the query".to_string()))?;
 
-    knowledge::query_global_context(state, user_id, &query_embedding, Some(subject_id)).await
+    knowledge::query_global_context(state, user_id, &query_embedding, Some(subject_id), Some(journey_id)).await
+}
+
+// Found live (2026-08-12), same root cause as memoryless mode's own
+// all_staged_context fix: journey-mode had no mechanism at all reading
+// a journey's own uploaded content back into generation — #37 built the
+// WRITE side (Postgres + ChromaDB, "commit immediately") but nothing
+// ever read it back. Deliberately a direct Postgres query, not a
+// ChromaDB search — always-include, no ranking, no threshold, mirroring
+// memoryless's own unconditional inclusion. Picks up BOTH upload roles,
+// via TWO different columns (migration 0006, per discussion with V3):
+// `prompt_upload` already has `journey_id` set as its real privacy
+// scope; `material_upload` carries `origin_journey_id`, a separate
+// purely-informational tag, since `journey_id` itself is CHECK-
+// constrained to NULL for that role and overloading it would make one
+// column mean two different things depending on upload_role.
+async fn fetch_journey_upload_context(
+    pool: &PgPool,
+    user_id: Uuid,
+    journey_id: Uuid,
+) -> Result<Option<String>, JourneyError> {
+    let mut tx = begin_rls_transaction(pool, user_id).await?;
+    let rows: Vec<(String,)> = sqlx::query_as(
+        "SELECT c.text FROM chunks c JOIN sources s ON s.source_id = c.source_id \
+         WHERE s.journey_id = $1 OR s.origin_journey_id = $1",
+    )
+    .bind(journey_id)
+    .fetch_all(&mut *tx)
+    .await?;
+    tx.commit().await?;
+
+    if rows.is_empty() {
+        return Ok(None);
+    }
+    Ok(Some(rows.into_iter().map(|(text,)| text).collect::<Vec<_>>().join("\n\n")))
 }
 
 async fn stream_to_completion(
@@ -567,6 +608,466 @@ async fn fold_gap_into_journey(
     Ok(folded.title)
 }
 
+/// deferred.md #2d — clears study_threads.pending_branch_topic once a
+/// branch offer is resolved (confirmed or declined), so a later,
+/// unrelated message never gets misread as answering a stale offer.
+async fn clear_pending_branch_topic(pool: &PgPool, user_id: Uuid, thread_id: Uuid) -> Result<(), JourneyError> {
+    let mut tx = begin_rls_transaction(pool, user_id).await?;
+    sqlx::query("UPDATE study_threads SET pending_branch_topic = NULL WHERE thread_id = $1")
+        .bind(thread_id)
+        .execute(&mut *tx)
+        .await?;
+    tx.commit().await?;
+    Ok(())
+}
+
+/// deferred.md #2d — records the offer the SAME turn a branch_gap fires,
+/// so the student's NEXT message can be read as answering it.
+async fn set_pending_branch_topic(pool: &PgPool, user_id: Uuid, thread_id: Uuid, topic: &str) -> Result<(), JourneyError> {
+    let mut tx = begin_rls_transaction(pool, user_id).await?;
+    sqlx::query("UPDATE study_threads SET pending_branch_topic = $2 WHERE thread_id = $1")
+        .bind(thread_id)
+        .bind(topic)
+        .execute(&mut *tx)
+        .await?;
+    tx.commit().await?;
+    Ok(())
+}
+
+/// deferred.md #2d — a deliberately loose, rules-based yes/no read on
+/// the branch-offer confirmation turn, not a full intent classifier —
+/// same "cheap rules first" philosophy as ai_service's own
+/// classify_intent, just narrower (one binary decision, no qwen
+/// fallback). Errs toward requiring a recognizable affirmative: an
+/// unmatched reply is treated as declined and just falls through to a
+/// normal turn — never silently creates a journey on an ambiguous
+/// read. Known, accepted false-positive: a reply that STARTS with an
+/// affirmative word but is actually declining ("yeah, no thanks") would
+/// misread as confirmed — acceptable for a low-stakes, easily-undone
+/// action (the created journey is deletable like any other track), not
+/// worth a real classifier call for.
+fn is_branch_confirmed(text: &str) -> bool {
+    const AFFIRMATIVE: &[&str] = &[
+        "yes", "yeah", "yep", "yup", "sure", "ok", "okay", "alright", "please", "go for it", "do it",
+        "sounds good", "lets do it", "let's do it", "start it", "i guess", "go ahead", "please do",
+    ];
+    let normalized: String = text
+        .trim()
+        .to_lowercase()
+        .chars()
+        .filter(|c| c.is_alphanumeric() || c.is_whitespace() || *c == '\'')
+        .collect();
+    AFFIRMATIVE
+        .iter()
+        .any(|phrase| normalized == *phrase || normalized.starts_with(&format!("{phrase} ")))
+}
+
+/// deferred.md #2d — the confirmation-only turn once a branch has just
+/// been created: a short, tutor-voiced acknowledgment. Deliberately
+/// skips the normal analyze_input/retrieval pipeline entirely — there's
+/// no student academic question here to clean or retrieve context for,
+/// this message was purely a yes/no answer to an offer. Reuses
+/// persist_turn (not a new persistence path) — the confirmation is
+/// still a normal message/audit_logs pair on THIS journey's thread; the
+/// newly created journey gets its own thread lazily via its own
+/// /start call, same as any other journey.
+async fn respond_to_confirmed_branch(
+    state: &AppState,
+    user_id: Uuid,
+    journey_id: Uuid,
+    thread_id: Uuid,
+    topic: &str,
+    raw_input: String,
+    think: bool,
+) -> Result<mpsc::Receiver<TurnEvent>, JourneyError> {
+    let prompt = format!(
+        "(You just started a new, separate learning track for the student on \"{topic}\" — briefly \
+         confirm this in one or two warm sentences, and let them know they can switch to it from the \
+         sidebar whenever they're ready. Do not start teaching the new topic here — that happens in \
+         the new track.)"
+    );
+
+    let history = load_recent_history(&state.pool, user_id, thread_id).await?;
+    let chunks = ai_client::generate_stream(
+        &state.streaming_http_client,
+        &state.ai_service_url,
+        prompt,
+        think,
+        history,
+    )
+    .await?;
+
+    let (tx, rx) = mpsc::channel::<TurnEvent>(16);
+    let state = state.clone();
+
+    tokio::spawn(async move {
+        let (accumulated, cutoff_reason) = stream_to_completion(chunks, &tx).await;
+        let now = Utc::now();
+
+        if let Err(err) = persist_turn(
+            &state.pool,
+            user_id,
+            thread_id,
+            now,
+            &raw_input,
+            &raw_input, // cleaned_query: no NLP cleaning needed for a yes/no answer
+            &[],
+            "branch_confirmed",
+            &accumulated,
+            cutoff_reason.as_deref(),
+        )
+        .await
+        {
+            tracing::error!(?err, %journey_id, %thread_id, "failed to persist branch-confirmation turn");
+        }
+    });
+
+    Ok(rx)
+}
+
+// ============================================================
+// Exercise loop: serve -> submit -> grade -> mastery/streak/advancement.
+// The piece PRD.md's own Flow 2 spec always described ("offer exercise
+// -> grade -> completion check -> advance") but that never had a real
+// caller until now — exercise TEMPLATES have generated since Block 12,
+// and grading has been real and deterministic since Block 9, but
+// nothing ever served an instantiated question, accepted a submission,
+// or wrote mastery_bank/advanced journey_concepts. This is that.
+// ============================================================
+
+pub struct ServedExercise {
+    pub attempt_id: Uuid,
+    pub exercise_type: String,
+    pub difficulty: String,
+    pub rendered_question: String,
+    pub rendered_choices: Option<Vec<String>>,
+}
+
+/// POST /journeys/{journey_id}/concepts/{concept_id}/exercise — serves a
+/// FRESH instantiated question, whether the caller is the live teaching
+/// loop offering one or a student self-directing via the Map (deferred.md
+/// #2c/#2d's own "Now becomes the single surface either way" framing
+/// applies here too — this doesn't care which). Persists a quiz_attempts
+/// row immediately with student_answer still NULL — that's what makes
+/// the attempt real/auditable the instant it's served, not just on
+/// submission, and what submit_exercise_answer below finds and fills in.
+pub async fn serve_exercise(
+    state: &AppState,
+    user_id: Uuid,
+    journey_id: Uuid,
+    concept_id: Uuid,
+    difficulty: String,
+) -> Result<ServedExercise, JourneyError> {
+    let thread_id = find_thread(&state.pool, user_id, journey_id)
+        .await?
+        .ok_or_else(|| JourneyError::Validation("this journey's teaching thread hasn't started yet".to_string()))?;
+
+    let template = exercises::service::fetch_one_canonical(&state.pool, concept_id, &difficulty)
+        .await?
+        .ok_or_else(|| {
+            JourneyError::Validation(format!(
+                "no canonical exercise exists yet for this concept at difficulty {difficulty}"
+            ))
+        })?;
+    let exercise_id = exercises::service::fetch_one_canonical_id(&state.pool, concept_id, &difficulty)
+        .await?
+        .ok_or(JourneyError::Internal)?;
+
+    let instantiated = ai_client::instantiate_exercise(
+        &state.http_client,
+        &state.ai_service_url,
+        template.exercise_type.clone(),
+        template.template_body.clone(),
+        template.template_params.clone(),
+        template.correct_answer.clone(),
+    )
+    .await?;
+
+    let mut tx = begin_rls_transaction(&state.pool, user_id).await?;
+    let attempt_id: Uuid = sqlx::query_scalar(
+        "INSERT INTO quiz_attempts \
+         (user_id, exercise_id, thread_id, journey_id, rendered_question, instantiated_params, \
+          expected_answer, difficulty_attempted, timestamp) \
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9) RETURNING attempt_id",
+    )
+    .bind(user_id)
+    .bind(exercise_id)
+    .bind(thread_id)
+    .bind(journey_id)
+    .bind(&instantiated.rendered_question)
+    .bind(&instantiated.instantiated_params)
+    .bind(&instantiated.expected_answer)
+    .bind(&difficulty)
+    .bind(Utc::now())
+    .fetch_one(&mut *tx)
+    .await?;
+    tx.commit().await?;
+
+    Ok(ServedExercise {
+        attempt_id,
+        exercise_type: template.exercise_type,
+        difficulty,
+        rendered_question: instantiated.rendered_question,
+        rendered_choices: instantiated.rendered_choices,
+    })
+}
+
+#[derive(sqlx::FromRow)]
+struct PendingAttempt {
+    thread_id: Uuid,
+    rendered_question: String,
+    expected_answer: Option<String>,
+    difficulty_attempted: Option<String>,
+    exercise_type: Option<String>,
+    concept_id: Option<Uuid>,
+    tolerance: Option<f32>,
+    grader_config: Option<serde_json::Value>,
+}
+
+/// POST /journeys/{journey_id}/exercises/{attempt_id}/submit — grades
+/// the answer (Rule 2: always deterministic, ai_client::grade(), never
+/// an LLM judgment call), then applies PRD.md's locked Wrong Answer
+/// Handling rules and streams the tutor's reaction.
+///
+/// SCOPE CUT, stated plainly rather than silently: this pass implements
+/// the streak/mastery/completion/advancement mechanics that follow
+/// directly from a single submission. It does NOT implement
+/// foundation_gap flagging on a skipped basic-wrong, or KIV flagging on
+/// an advanced-wrong "move on" — both are explicitly conditional on a
+/// SEPARATE decision ("if skipped" / "if move on") no frontend
+/// affordance exists yet to make. Wrong answers still correctly reset
+/// the streak and correctly block completion either way; only those two
+/// specific branch-on-a-second-decision flags are deferred.
+#[allow(clippy::too_many_arguments)]
+pub async fn submit_exercise_answer(
+    state: &AppState,
+    user_id: Uuid,
+    journey_id: Uuid,
+    attempt_id: Uuid,
+    student_answer: String,
+    think: bool,
+) -> Result<mpsc::Receiver<TurnEvent>, JourneyError> {
+    let mut tx = begin_rls_transaction(&state.pool, user_id).await?;
+    let pending: Option<PendingAttempt> = sqlx::query_as(
+        "SELECT qa.thread_id, qa.rendered_question, qa.expected_answer, qa.difficulty_attempted, \
+                e.exercise_type, e.concept_id, e.tolerance, e.grader_config \
+         FROM quiz_attempts qa \
+         JOIN exercises e ON e.exercise_id = qa.exercise_id \
+         WHERE qa.attempt_id = $1 AND qa.student_answer IS NULL",
+    )
+    .bind(attempt_id)
+    .fetch_optional(&mut *tx)
+    .await?;
+    tx.commit().await?;
+    let pending = pending
+        .ok_or_else(|| JourneyError::Validation("exercise attempt not found or already answered".to_string()))?;
+
+    let exercise_type = pending.exercise_type.clone().ok_or(JourneyError::Internal)?;
+    let concept_id = pending.concept_id.ok_or(JourneyError::Internal)?;
+
+    let grade_result = ai_client::grade(
+        &state.http_client,
+        &state.ai_service_url,
+        exercise_type.clone(),
+        student_answer.clone(),
+        pending.expected_answer.clone(),
+        pending.tolerance,
+        pending.grader_config.clone(),
+    )
+    .await?;
+
+    let mut tx = begin_rls_transaction(&state.pool, user_id).await?;
+
+    sqlx::query(
+        "UPDATE quiz_attempts SET student_answer = $2, is_correct = $3, score = $4, \
+         grader_used = $5, feedback = $6 WHERE attempt_id = $1",
+    )
+    .bind(attempt_id)
+    .bind(&student_answer)
+    .bind(grade_result.is_correct)
+    .bind(grade_result.score)
+    .bind(&exercise_type)
+    .bind(grade_result.feedback.as_deref())
+    .execute(&mut *tx)
+    .await?;
+
+    let (current_streak,): (i32,) =
+        sqlx::query_as("SELECT advanced_correct_streak FROM journey_concepts WHERE journey_id = $1 AND concept_id = $2")
+            .bind(journey_id)
+            .bind(concept_id)
+            .fetch_one(&mut *tx)
+            .await?;
+
+    let difficulty = pending.difficulty_attempted.as_deref().unwrap_or("");
+    // PRD.md, Wrong Answer Handling [LOCKED]: any wrong answer (any
+    // difficulty) resets the streak; only an ADVANCED correct answer
+    // increments it; basic/intermediate correct leave it unchanged
+    // (never explicitly mentioned in the locked rules, so not touched).
+    let new_streak = if !grade_result.is_correct {
+        0
+    } else if difficulty == "advanced" {
+        current_streak + 1
+    } else {
+        current_streak
+    };
+
+    // PRD.md, Mastery Score Formula [LOCKED]: new = alpha*old + beta*latest,
+    // capped [0,1]. old defaults to 0.0 (no row yet = never assessed).
+    let old_mastery: Option<f32> =
+        sqlx::query_scalar("SELECT mastery_score FROM mastery_bank WHERE user_id = $1 AND concept_id = $2")
+            .bind(user_id)
+            .bind(concept_id)
+            .fetch_optional(&mut *tx)
+            .await?;
+    let new_mastery =
+        (state.mastery_alpha * old_mastery.unwrap_or(0.0) + state.mastery_beta * grade_result.score).clamp(0.0, 1.0);
+
+    // PRD.md, Concept Completion Rule [LOCKED]: mastery_score >= 0.75 AND
+    // advanced_correct_streak >= 3. is_complete never auto-reverts
+    // (locked) — OR'd against whatever it already was, never unset.
+    let now_complete = new_mastery >= state.mastery_completion_threshold && new_streak >= state.advanced_streak_required;
+
+    sqlx::query(
+        "INSERT INTO mastery_bank (user_id, concept_id, mastery_score, is_complete, total_attempts, last_assessed_at) \
+         VALUES ($1, $2, $3, $4, 1, $5) \
+         ON CONFLICT (user_id, concept_id) DO UPDATE SET \
+           mastery_score = $3, is_complete = mastery_bank.is_complete OR $4, \
+           total_attempts = mastery_bank.total_attempts + 1, last_assessed_at = $5",
+    )
+    .bind(user_id)
+    .bind(concept_id)
+    .bind(new_mastery)
+    .bind(now_complete)
+    .bind(Utc::now())
+    .execute(&mut *tx)
+    .await?;
+
+    if now_complete {
+        sqlx::query(
+            "UPDATE journey_concepts SET advanced_correct_streak = $3, attempt_count = attempt_count + 1, \
+             last_attempt_at = $4, status = 'complete' WHERE journey_id = $1 AND concept_id = $2",
+        )
+        .bind(journey_id)
+        .bind(concept_id)
+        .bind(new_streak)
+        .bind(Utc::now())
+        .execute(&mut *tx)
+        .await?;
+
+        // Advancement: any concept whose ENTIRE prerequisite set is now
+        // 'complete' unlocks. Scoped to direct dependents of the concept
+        // that just completed (not a full graph re-scan) — a concept
+        // that was already unlockable before this attempt was already
+        // unlocked by whichever earlier completion made it so.
+        let dependents: Vec<(Uuid,)> = sqlx::query_as(
+            "SELECT concept_id FROM journey_prerequisites WHERE journey_id = $1 AND prereq_concept_id = $2",
+        )
+        .bind(journey_id)
+        .bind(concept_id)
+        .fetch_all(&mut *tx)
+        .await?;
+
+        for (dependent_id,) in dependents {
+            let (total, satisfied): (i64, i64) = sqlx::query_as(
+                "SELECT COUNT(*), COUNT(*) FILTER (WHERE jc.status = 'complete') \
+                 FROM journey_prerequisites jp \
+                 JOIN journey_concepts jc ON jc.journey_id = jp.journey_id AND jc.concept_id = jp.prereq_concept_id \
+                 WHERE jp.journey_id = $1 AND jp.concept_id = $2",
+            )
+            .bind(journey_id)
+            .bind(dependent_id)
+            .fetch_one(&mut *tx)
+            .await?;
+
+            if total > 0 && total == satisfied {
+                sqlx::query(
+                    "UPDATE journey_concepts SET status = 'available' \
+                     WHERE journey_id = $1 AND concept_id = $2 AND status = 'locked'",
+                )
+                .bind(journey_id)
+                .bind(dependent_id)
+                .execute(&mut *tx)
+                .await?;
+            }
+        }
+    } else {
+        sqlx::query(
+            "UPDATE journey_concepts SET advanced_correct_streak = $3, attempt_count = attempt_count + 1, \
+             last_attempt_at = $4 WHERE journey_id = $1 AND concept_id = $2",
+        )
+        .bind(journey_id)
+        .bind(concept_id)
+        .bind(new_streak)
+        .bind(Utc::now())
+        .execute(&mut *tx)
+        .await?;
+    }
+
+    tx.commit().await?;
+
+    // Tutor's reaction — same "system prompt + history only, no
+    // retrieval" shape as respond_to_confirmed_branch above: there's no
+    // open academic question here to retrieve context for, just an
+    // answer to react to. Grading is already final and deterministic by
+    // this point (Rule 2) — this prompt only ever asks qwen to EXPLAIN/
+    // ENCOURAGE, never to judge correctness itself.
+    let thread_id = pending.thread_id;
+    let outcome_word = if grade_result.is_correct { "correct" } else { "incorrect" };
+    let feedback_clause = grade_result
+        .feedback
+        .as_deref()
+        .map(|f| format!(" Grader feedback: {f}."))
+        .unwrap_or_default();
+    let reaction_hint = if grade_result.is_correct {
+        "briefly affirm and encourage them onward"
+    } else {
+        "explain what likely went wrong and encourage another attempt"
+    };
+    let prompt = format!(
+        "(The student just answered an exercise.\nQuestion: \"{}\"\nTheir answer: \"{student_answer}\"\n\
+         Result: {outcome_word}.{feedback_clause}\nReact to this in your reply — {reaction_hint}. \
+         Do not repeat the question verbatim.)",
+        pending.rendered_question,
+    );
+
+    let history = load_recent_history(&state.pool, user_id, thread_id).await?;
+    let chunks = ai_client::generate_stream(
+        &state.streaming_http_client,
+        &state.ai_service_url,
+        prompt,
+        think,
+        history,
+    )
+    .await?;
+
+    let (tx, rx) = mpsc::channel::<TurnEvent>(16);
+    let state = state.clone();
+
+    tokio::spawn(async move {
+        let (accumulated, cutoff_reason) = stream_to_completion(chunks, &tx).await;
+        let now = Utc::now();
+
+        if let Err(err) = persist_turn(
+            &state.pool,
+            user_id,
+            thread_id,
+            now,
+            &student_answer,
+            &student_answer,
+            &[],
+            "exercise_answer",
+            &accumulated,
+            cutoff_reason.as_deref(),
+        )
+        .await
+        {
+            tracing::error!(?err, %journey_id, %thread_id, %attempt_id, "failed to persist exercise-answer turn");
+        }
+    });
+
+    Ok(rx)
+}
+
 /// POST /journeys/{journey_id}/messages — every turn after the opening.
 pub async fn send_journey_message(
     state: &AppState,
@@ -580,12 +1081,41 @@ pub async fn send_journey_message(
         .ok_or_else(|| JourneyError::Validation("this journey's teaching thread hasn't started yet".to_string()))?;
 
     let mut tx = begin_rls_transaction(&state.pool, user_id).await?;
-    let current_concept_id: Uuid =
-        sqlx::query_scalar("SELECT current_concept_id FROM study_threads WHERE thread_id = $1")
-            .bind(thread_id)
-            .fetch_one(&mut *tx)
-            .await?;
+    let (current_concept_id, pending_branch_topic): (Uuid, Option<String>) = sqlx::query_as(
+        "SELECT current_concept_id, pending_branch_topic FROM study_threads WHERE thread_id = $1",
+    )
+    .bind(thread_id)
+    .fetch_one(&mut *tx)
+    .await?;
     tx.commit().await?;
+
+    // deferred.md #2d — the confirm-first branch offer: if last turn
+    // asked "want a separate track for this?", THIS turn answers it
+    // instead of being a normal message. Declined/ambiguous/failed
+    // creation all fall through to normal turn processing below,
+    // deliberately silent (no "ok, never mind" framing) — a scope cut,
+    // see #2d's own deferred.md entry.
+    if let Some(topic) = pending_branch_topic {
+        clear_pending_branch_topic(&state.pool, user_id, thread_id).await?;
+        if is_branch_confirmed(&raw_input) {
+            match super::service::start(state, user_id, topic.clone(), None, None, None).await {
+                Ok(super::service::StartOutcome::JourneyCreated { .. }) => {
+                    return respond_to_confirmed_branch(state, user_id, journey_id, thread_id, &topic, raw_input, think)
+                        .await;
+                }
+                Ok(super::service::StartOutcome::Diagnostic { .. }) => {
+                    // Unreachable in practice: level/goal are both None
+                    // above, and start()'s own skip logic (level.is_none()
+                    // || goal.is_none()) always takes the skip branch when
+                    // that's true — defensive only.
+                    tracing::error!(%journey_id, %thread_id, "deferred.md #2d: start() unexpectedly returned Diagnostic for a skip-path call");
+                }
+                Err(err) => {
+                    tracing::warn!(?err, %journey_id, %thread_id, "deferred.md #2d: failed to create branched journey, continuing as a normal turn");
+                }
+            }
+        }
+    }
 
     let subject_id = verify_journey_and_subject(&state.pool, user_id, journey_id).await?;
     let (subject_title, dag_version): (String, i32) =
@@ -617,14 +1147,15 @@ pub async fn send_journey_message(
     )
     .await?;
 
-    // deferred.md #2b/#2c — off_topic/branch_gap: observability only for
-    // now (2d's trigger-UX question is still open, see its own entry —
-    // creating a whole new journey unprompted has a much bigger blast
-    // radius than folding one concept in). fold_gap: wired live below —
-    // small, contained (this journey only, per #2c's own decided
-    // dag_version scoping), matches #2e's own "case (b)-fold probably
-    // wants SOME acknowledgment" framing.
-    let mut fold_acknowledgment: Option<String> = None;
+    // deferred.md #2b/#2c/#2d — off_topic: no special handling (stays
+    // plain TANGENT, same as before this whole classifier existed).
+    // fold_gap: wired live — small, contained (this journey only, per
+    // #2c's own decided dag_version scoping), matches #2e's "case
+    // (b)-fold probably wants SOME acknowledgment" framing. branch_gap:
+    // confirm-first (per the user's own explicit direction, 2026-08-11)
+    // — records the offer, asks THIS turn, acts on the answer next turn
+    // (see the pending_branch_topic block above).
+    let mut extra_instruction: Option<String> = None;
     if let Some(gap) = &analysis.gap_classification {
         tracing::info!(%journey_id, %thread_id, gap_classification = %gap, "deferred.md #2b gap signal");
         if gap == "fold_gap" {
@@ -642,42 +1173,75 @@ pub async fn send_journey_message(
             )
             .await
             {
-                Ok(title) => fold_acknowledgment = Some(title),
+                Ok(title) => {
+                    extra_instruction = Some(format!(
+                        "(You just added a related concept, \"{title}\", to the student's learning path — \
+                         briefly acknowledge this in your reply.)"
+                    ));
+                }
                 Err(err) => {
                     tracing::warn!(?err, %journey_id, %thread_id, "deferred.md #2c: fold_gap failed, continuing without it");
+                }
+            }
+        } else if gap == "branch_gap" {
+            match set_pending_branch_topic(&state.pool, user_id, thread_id, &analysis.cleaned_query).await {
+                Ok(()) => {
+                    extra_instruction = Some(
+                        "(What the student just raised seems like a substantial, separate topic from the \
+                         current path — after addressing their message normally, ask if they'd like you to \
+                         start a separate track for it. Don't start teaching that new topic here yet.)"
+                            .to_string(),
+                    );
+                }
+                Err(err) => {
+                    tracing::warn!(?err, %journey_id, %thread_id, "deferred.md #2d: failed to record branch offer, continuing without it");
                 }
             }
         }
     }
 
+    // deferred.md — this journey's own uploaded content, always
+    // included. See fetch_journey_upload_context's own doc comment.
+    let journey_upload_context = match fetch_journey_upload_context(&state.pool, user_id, journey_id).await {
+        Ok(context) => context,
+        Err(err) => {
+            tracing::warn!(?err, %journey_id, %thread_id, "failed to fetch this journey's own uploaded content, continuing without it");
+            None
+        }
+    };
+
     // deferred.md #18: subject-scoped retrieval against the permanent
     // knowledge base — see query_knowledge_context's own doc comment.
     // Fails open exactly like memoryless/turn.rs's own equivalent call.
-    let global_context = match query_knowledge_context(state, user_id, subject_id, &analysis.cleaned_query).await {
+    let global_context = match query_knowledge_context(state, user_id, subject_id, journey_id, &analysis.cleaned_query).await {
         Ok(context) => context,
         Err(err) => {
             tracing::warn!(?err, %journey_id, %thread_id, "knowledge-base retrieval failed, continuing without it");
             None
         }
     };
-    let prompt = match (&global_context, &fold_acknowledgment) {
-        (Some(context), Some(title)) => format!(
+
+    // Three optional pieces now, not two — a Vec avoids an 8-way match.
+    let mut context_blocks: Vec<String> = Vec::new();
+    if let Some(context) = &journey_upload_context {
+        context_blocks.push(format!(
+            "The student uploaded this document to this conversation. Treat it as reference material \
+             for what they're asking about:\n{context}"
+        ));
+    }
+    if let Some(context) = &global_context {
+        context_blocks.push(format!(
             "Here is material from the knowledge base that may be relevant — use it if it helps, \
-             but you don't have to:\n{context}\n\n(You just added a related concept, \"{title}\", to the \
-             student's learning path — briefly acknowledge this in your reply.)\n\nStudent's question: {}",
-            analysis.cleaned_query
-        ),
-        (Some(context), None) => format!(
-            "Here is material from the knowledge base that may be relevant — use it if it helps, \
-             but you don't have to:\n{context}\n\nStudent's question: {}",
-            analysis.cleaned_query
-        ),
-        (None, Some(title)) => format!(
-            "(You just added a related concept, \"{title}\", to the student's learning path — briefly \
-             acknowledge this in your reply.)\n\nStudent's question: {}",
-            analysis.cleaned_query
-        ),
-        (None, None) => analysis.cleaned_query.clone(),
+             but you don't have to:\n{context}"
+        ));
+    }
+    if let Some(instruction) = &extra_instruction {
+        context_blocks.push(instruction.clone());
+    }
+    let prompt = if context_blocks.is_empty() {
+        analysis.cleaned_query.clone()
+    } else {
+        format!("{}\n\nStudent's question: {}", context_blocks.join("\n\n"), analysis.cleaned_query)
     };
 
     let history = load_recent_history(&state.pool, user_id, thread_id).await?;

@@ -230,6 +230,86 @@ pub async fn send_journey_message(
     Ok(Sse::new(sse_stream).keep_alive(KeepAlive::default()))
 }
 
+#[derive(Deserialize)]
+pub struct ServeExerciseRequest {
+    difficulty: String,
+}
+
+#[derive(Serialize)]
+pub struct ServedExerciseInfo {
+    attempt_id: Uuid,
+    exercise_type: String,
+    difficulty: String,
+    rendered_question: String,
+    rendered_choices: Option<Vec<String>>,
+}
+
+/// POST /journeys/{journey_id}/concepts/{concept_id}/exercise — serve a
+/// fresh instantiated question. No dedicated rate limit (unlike message-
+/// sending/journey-start): this doesn't call Dify, only the cheap,
+/// deterministic instantiate_exercise() — real abuse-guarding can follow
+/// once there's an actual signal it's needed, matching this codebase's
+/// own "measure before generalizing" posture (deferred.md #5) rather
+/// than a guess.
+pub async fn serve_exercise(
+    AuthUser(user_id): AuthUser,
+    State(state): State<AppState>,
+    Path((journey_id, concept_id)): Path<(Uuid, Uuid)>,
+    Json(req): Json<ServeExerciseRequest>,
+) -> Result<Json<ServedExerciseInfo>, JourneyError> {
+    let served = turn::serve_exercise(&state, user_id, journey_id, concept_id, req.difficulty).await?;
+    Ok(Json(ServedExerciseInfo {
+        attempt_id: served.attempt_id,
+        exercise_type: served.exercise_type,
+        difficulty: served.difficulty,
+        rendered_question: served.rendered_question,
+        rendered_choices: served.rendered_choices,
+    }))
+}
+
+#[derive(Deserialize)]
+pub struct SubmitExerciseAnswerRequest {
+    answer: String,
+    #[serde(default)]
+    think: Option<bool>,
+}
+
+/// POST /journeys/{journey_id}/exercises/{attempt_id}/submit — grades
+/// the answer and streams the tutor's reaction, same SSE shape as
+/// send_journey_message. Rate-limited the same way: this triggers a
+/// real generate_stream() call against Ollama, same class of action
+/// journey_message_rate_limit already exists to bound (deferred.md #78).
+pub async fn submit_exercise_answer(
+    AuthUser(user_id): AuthUser,
+    State(state): State<AppState>,
+    Path((journey_id, attempt_id)): Path<(Uuid, Uuid)>,
+    Json(req): Json<SubmitExerciseAnswerRequest>,
+) -> Result<Sse<impl Stream<Item = Result<Event, Infallible>>>, JourneyError> {
+    if req.answer.trim().is_empty() {
+        return Err(JourneyError::Validation("answer must not be empty".to_string()));
+    }
+
+    let mut conn = state.get_redis_connection().await?;
+    let (max, window) = state.journey_message_rate_limit;
+    if !rate_limit::check_and_increment(&mut conn, &rate_limit::journey_message_key(user_id), max, window).await? {
+        return Err(JourneyError::RateLimited);
+    }
+
+    let think = req.think.unwrap_or(true);
+    let mut rx = turn::submit_exercise_answer(&state, user_id, journey_id, attempt_id, req.answer, think).await?;
+
+    let sse_stream = async_stream::stream! {
+        while let Some(event) = rx.recv().await {
+            match event {
+                turn::TurnEvent::Delta(text) => yield Ok(Event::default().event("delta").data(text)),
+                turn::TurnEvent::Error(reason) => yield Ok(Event::default().event("error").data(reason)),
+            }
+        }
+        yield Ok(Event::default().event("done").data("ok"));
+    };
+    Ok(Sse::new(sse_stream).keep_alive(KeepAlive::default()))
+}
+
 #[derive(Serialize)]
 pub struct JourneyMessageInfo {
     role: String,
