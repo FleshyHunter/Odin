@@ -157,18 +157,17 @@ export interface PendingFile {
 
 export type Difficulty = 'basic' | 'intermediate' | 'advanced';
 
-export interface MatrixValue {
-  rows: number;
-  cols: number;
-  values: Array<string | number>;
-}
-
 export interface Exercise {
   id: string;
   conceptTitle: string;
   difficulty: Difficulty;
+  // Short display name ("Matrix Transpose"), distinct from `prompt` (the
+  // actual question text) — no real backend field for this yet (exercises
+  // only has template_body/question_template), so it's mocked here for
+  // now; persisting it for real is separate, later backend work (likely
+  // Dify-generated alongside the template).
+  title: string;
   prompt: string;
-  matrix?: MatrixValue;
   answerPlaceholder?: string;
 }
 
@@ -180,4 +179,21 @@ export interface MasteryStatus {
 export interface SubmitAnswerResult {
   isCorrect: boolean;
   masteryScore: number;
+  // Mocked ahead of the real backend contract — mirrors quiz_attempts'
+  // real expected_answer/feedback columns (SCHEMA.md), not invented from
+  // nothing. Powers ExerciseCard's Answer toggle.
+  expectedAnswer?: string;
+  feedback?: string;
+}
+
+// One past attempt at a concept's exercise — mirrors quiz_attempts'
+// real shape (rendered_question, is_correct, difficulty_attempted,
+// timestamp), scoped down to what the history list actually displays.
+export interface Attempt {
+  id: string;
+  title: string;
+  question: string;
+  isCorrect: boolean;
+  date: string;
+  difficulty: Difficulty;
 }

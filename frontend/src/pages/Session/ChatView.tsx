@@ -10,7 +10,7 @@ import { useTrackMessages } from '../../hooks/useTracks';
 import { useJourneyChat } from '../../hooks/useJourneyChat';
 import { useActivePanel, ACTIVE_PANEL_MIN_WIDTH } from '../../hooks/useActivePanel';
 import * as exercisesApi from '../../api/exercises';
-import type { Exercise, MasteryStatus } from '../../types';
+import type { Difficulty, Exercise, MasteryStatus } from '../../types';
 import type { SessionOutletContext } from './SessionLayout';
 
 // The /chat route's content — rendered inside SessionLayout's <Outlet />.
@@ -95,9 +95,20 @@ export function ChatView() {
   }, [activeTrackId]);
 
   const handleSubmitAnswer = async (answer: string) => {
-    if (!exercise) return;
+    if (!exercise) return undefined;
     const result = await exercisesApi.submitAnswer(exercise.id, answer);
     setMastery((prev) => (prev ? { ...prev, masteryScore: result.masteryScore } : prev));
+    return result;
+  };
+
+  // deferred.md — Map's node-detail tiers hand off here: Map stays
+  // purely for browsing, the moment a tier is picked Now becomes the
+  // single surface actually serving the exercise (ActivePanel switches
+  // its own tab). Same exercise state either way, whether it came from
+  // a live tutor offer or from here.
+  const handleStartAttempt = async (nodeId: string, difficulty: Difficulty) => {
+    const result = await exercisesApi.startAttempt(nodeId, difficulty);
+    setExercise(result);
   };
 
   const handleDeleteTrack = () => {
@@ -267,7 +278,13 @@ export function ChatView() {
         aria-hidden={!isPanelOpen}
       >
         <div ref={resizeHandleRef} className="active-panel-resize-handle" onMouseDown={handleResizeStart} />
-        <ActivePanel exercise={exercise} mastery={mastery} onSubmitAnswer={handleSubmitAnswer} width={panelWidth} />
+        <ActivePanel
+          exercise={exercise}
+          mastery={mastery}
+          onSubmitAnswer={handleSubmitAnswer}
+          onStartAttempt={handleStartAttempt}
+          width={panelWidth}
+        />
       </div>
     </>
   );

@@ -65,8 +65,11 @@
   --node-dim: #3A4048;   /* unlit/unreached state — constellation nodes,
                              dim UI elements before activation */
 
-  /* ---- Semantic (anticipated, not yet consumed by any component) ---- */
-  --success: #6FA98A;    /* reserved: correct-answer feedback state */
+  /* ---- Semantic ---- */
+  --success: #6FA98A;    /* correct-answer feedback state — now consumed by
+                             AttemptHistoryRow/ExerciseCard's answer reveal */
+  --success-dim: #1F3129;  /* muted background behind green text/icons —
+                               same relationship --error-dim has to --error */
   --error: #E08585;      /* already used inline for destructive actions
                              (TrackMenu delete) — promoted to a token here
                              so it's not hand-typed hex in component CSS */

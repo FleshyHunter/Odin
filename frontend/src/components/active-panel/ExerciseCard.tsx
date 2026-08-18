@@ -1,12 +1,11 @@
 import { useEffect, useState } from 'react';
-import type { Exercise } from '../../types';
+import type { Exercise, SubmitAnswerResult } from '../../types';
 import { Button } from '../ui/Button/Button';
-import { MatrixRenderer } from './MatrixRenderer';
 import * as contentFlagsApi from '../../api/contentFlags';
 
 interface ExerciseCardProps {
   exercise: Exercise;
-  onSubmit?: (answer: string) => void;
+  onSubmit?: (answer: string) => Promise<SubmitAnswerResult | undefined>;
 }
 
 function capitalize(word: string): string {
@@ -24,19 +23,31 @@ export function ExerciseCard({ exercise, onSubmit }: ExerciseCardProps) {
   const [answer, setAnswer] = useState('');
   const [isFlagging, setIsFlagging] = useState(false);
   const [flagState, setFlagState] = useState<'idle' | 'flagged' | 'error'>('idle');
+  const [view, setView] = useState<'question' | 'answer'>('question');
+  const [result, setResult] = useState<SubmitAnswerResult | null>(null);
+  const [isSubmitting, setIsSubmitting] = useState(false);
 
   // ExerciseCard isn't remounted between exercises (ActivePanel renders
-  // it without a key), so this local flag state has to reset itself
-  // whenever the exercise it's describing actually changes — otherwise
-  // a "Flagged" confirmation from a previous exercise would bleed into
-  // the next one.
+  // it without a key), so local state has to reset itself whenever the
+  // exercise it's describing actually changes — otherwise a "Flagged"
+  // confirmation, or a PREVIOUS exercise's answer reveal, would bleed
+  // into the next one.
   useEffect(() => {
     setFlagState('idle');
+    setView('question');
+    setResult(null);
+    setAnswer('');
   }, [exercise.id]);
 
-  const handleSubmit = () => {
-    if (!answer.trim()) return;
-    onSubmit?.(answer.trim());
+  const handleSubmit = async () => {
+    if (!answer.trim() || isSubmitting) return;
+    setIsSubmitting(true);
+    try {
+      const outcome = await onSubmit?.(answer.trim());
+      if (outcome) setResult(outcome);
+    } finally {
+      setIsSubmitting(false);
+    }
   };
 
   // deferred.md #49/Rule 32 — the one, manual "flag as wrong" correction
@@ -77,18 +88,49 @@ export function ExerciseCard({ exercise, onSubmit }: ExerciseCardProps) {
           </button>
         )}
       </div>
-      <p className="exercise-q">{exercise.prompt}</p>
+      <div className="qa-toggle">
+        <button
+          type="button"
+          className={view === 'question' ? 'qa-btn qa-active' : 'qa-btn'}
+          onClick={() => setView('question')}
+        >
+          Question
+        </button>
+        <button
+          type="button"
+          className={view === 'answer' ? 'qa-btn qa-active' : 'qa-btn'}
+          onClick={() => result && setView('answer')}
+          disabled={!result}
+          aria-label={result ? 'View answer' : 'Answer locked until you submit'}
+        >
+          Answer
+        </button>
+      </div>
 
-      {exercise.matrix && <MatrixRenderer matrix={exercise.matrix} />}
+      {view === 'question' ? (
+        <>
+          <p className="exercise-q">{exercise.prompt}</p>
 
-      <input
-        className="answer-field"
-        type="text"
-        placeholder={exercise.answerPlaceholder ?? ''}
-        value={answer}
-        onChange={(event) => setAnswer(event.target.value)}
-      />
-      <Button onClick={handleSubmit}>Submit</Button>
+          <input
+            className="answer-field"
+            type="text"
+            placeholder={exercise.answerPlaceholder ?? ''}
+            value={answer}
+            onChange={(event) => setAnswer(event.target.value)}
+          />
+          <Button onClick={handleSubmit} disabled={isSubmitting}>
+            {isSubmitting ? 'Checking…' : 'Submit'}
+          </Button>
+        </>
+      ) : (
+        result && (
+          <div className={result.isCorrect ? 'answer-reveal' : 'answer-reveal incorrect'}>
+            <div className="answer-reveal-label">{result.isCorrect ? 'Correct' : 'Not quite'}</div>
+            {result.expectedAnswer && <div>{result.expectedAnswer}</div>}
+            {result.feedback && <div>{result.feedback}</div>}
+          </div>
+        )
+      )}
     </div>
   );
 }

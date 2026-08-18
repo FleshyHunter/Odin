@@ -8,6 +8,7 @@ import { layoutRoadmap } from './layout';
 
 interface RoadmapCanvasProps {
   items: RoadmapItem[];
+  onNodeClick?: (id: string, title: string) => void;
 }
 
 const RING_GAP = 6;
@@ -34,7 +35,7 @@ function expandItems(items: RoadmapItem[], expandedGroupIds: Set<string>): Roadm
   });
 }
 
-export function RoadmapCanvas({ items }: RoadmapCanvasProps) {
+export function RoadmapCanvas({ items, onNodeClick }: RoadmapCanvasProps) {
   const [expandedGroupIds, setExpandedGroupIds] = useState<Set<string>>(new Set());
 
   const toggleGroup = (id: string) => {
@@ -78,7 +79,15 @@ export function RoadmapCanvas({ items }: RoadmapCanvasProps) {
         return (
           <g key={item.id}>
             {item.status === 'current' && <PulseRing x={x} y={y} radius={outerR + RING_GAP} />}
-            <TargetNode x={x} y={y} title={item.title} subtitle={item.subtitle} status={item.status} isJunction={item.isJunction} />
+            <TargetNode
+              x={x}
+              y={y}
+              title={item.title}
+              subtitle={item.subtitle}
+              status={item.status}
+              isJunction={item.isJunction}
+              onClick={onNodeClick ? () => onNodeClick(item.id, item.title) : undefined}
+            />
           </g>
         );
       })}

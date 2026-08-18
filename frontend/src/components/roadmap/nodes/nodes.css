@@ -34,6 +34,14 @@
   fill: var(--glow);
 }
 
+.roadmap-target-node.clickable {
+  cursor: pointer;
+}
+.roadmap-target-node.clickable:focus-visible {
+  outline: 2px solid var(--focus);
+  outline-offset: 2px;
+}
+
 .roadmap-collapsed-node {
   cursor: pointer;
 }

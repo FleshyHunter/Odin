@@ -6,12 +6,13 @@ import type { RoadmapData } from './types';
 
 interface RoadmapProps {
   data?: RoadmapData;
+  onNodeClick?: (id: string, title: string) => void;
 }
 
 // Public entry point for the Map tab. No trackId/data wiring yet —
 // that's separate follow-up work — so this renders standalone sample
 // data by default until a real fetch is threaded in from ChatView.
-export function Roadmap({ data = sampleRoadmap }: RoadmapProps) {
+export function Roadmap({ data = sampleRoadmap, onNodeClick }: RoadmapProps) {
   return (
     <div className="roadmap">
       <div className="roadmap-header">
@@ -22,7 +23,7 @@ export function Roadmap({ data = sampleRoadmap }: RoadmapProps) {
       </div>
 
       <div className="roadmap-canvas-wrap">
-        <RoadmapCanvas items={data.items} />
+        <RoadmapCanvas items={data.items} onNodeClick={onNodeClick} />
       </div>
 
       <Legend />
