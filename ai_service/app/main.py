@@ -6,6 +6,7 @@ from app.acquisition.router import router as acquisition_router
 from app.analyze_input.router import router as analyze_input_router
 from app.embedding.router import router as embedding_router
 from app.embedding.service import get_model
+from app.exercises.router import router as exercises_router
 from app.generation.router import router as generation_router
 from app.grading.router import router as grading_router
 from app.ingestion.router import router as ingestion_router
@@ -32,6 +33,7 @@ app.include_router(grading_router)
 app.include_router(acquisition_router)
 app.include_router(ingestion_router)
 app.include_router(knowledge_router)
+app.include_router(exercises_router)
 
 
 @app.get("/health")
