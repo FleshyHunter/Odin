@@ -8,18 +8,33 @@ from app.generation.service import generate_text, generate_text_stream
 
 router = APIRouter()
 
-# English Only (PRD.md, RULES.md — locked requirement; deferred.md #14,
-# previously unenforced after langdetect was tried and removed for
-# misreading short strings). Folded into these two endpoints specifically
-# — NOT into generate_text()/generate_text_stream() themselves — so
-# intent/classifier.py's own direct qwen-fallback call (which bypasses
-# this router entirely) is unaffected; only real chat-turn responses are
-# gated. The model's own language understanding replaces the old
-# statistical detector: no separate library, no extra model call (this
-# is the SAME generation call that was always going to run), and no
-# streaming impact (the model decides while writing, not after the fact
-# — see the "which system prompt" discussion this was built from).
-_ENGLISH_ONLY_SYSTEM_PROMPT = (
+# The tutor's real system prompt — persona, precision, and math-format
+# instructions, plus English-only enforcement (PRD.md, RULES.md — locked
+# requirement; deferred.md #14, previously unenforced after langdetect
+# was tried and removed for misreading short strings). Folded into these
+# two endpoints specifically — NOT into generate_text()/generate_text_
+# stream() themselves — so intent/classifier.py's own direct qwen-
+# fallback call (which bypasses this router entirely) is unaffected;
+# only real chat-turn responses are gated/framed. Before this, the ONLY
+# system prompt ever sent anywhere in this app was the English-only
+# clause alone — no persona, no precision instruction, no format
+# guidance at all. Found live: a cold, context-free "generate a matrix,
+# do RREF, find eigenvalues" test misread RREF as "reference" and
+# eigenvalues as "even values" — not a model-capability ceiling so much
+# as zero framing to work with. The LaTeX instruction pairs with the
+# frontend's new KaTeX rendering (MessageBubble.tsx) — qwen already
+# reaches for LaTeX notation unprompted, this just confirms the format
+# and gives it a stated convention (inline vs. block) rather than
+# leaving it to guess.
+_SYSTEM_PROMPT = (
+    "You are a patient, encouraging tutor. Explain the reasoning, not just the "
+    "answer — help the student actually understand, not just get through the "
+    "material.\n\n"
+    "Be precise with technical terminology. If an abbreviation or term is "
+    "genuinely ambiguous, ask what the student means rather than guessing — "
+    "never silently reinterpret it into something else.\n\n"
+    "Use LaTeX for math notation: $...$ inline, $$...$$ for block equations, "
+    "matrices, and expressions.\n\n"
     "If the student's message is not written in English, do not answer "
     "their question — respond only with: \"I can only help in English "
     "right now — please rephrase your question in English.\" Otherwise, "
@@ -52,7 +67,7 @@ class GenerateResponse(BaseModel):
 @router.post("/generate", response_model=GenerateResponse)
 def generate(request: GenerateRequest) -> GenerateResponse:
     return GenerateResponse(
-        response=generate_text(request.prompt, request.think, system=_ENGLISH_ONLY_SYSTEM_PROMPT)
+        response=generate_text(request.prompt, request.think, system=_SYSTEM_PROMPT)
     )
 
 
@@ -71,7 +86,7 @@ def _stream_lines(prompt: str, think: bool, history: list[HistoryMessage]):
     history_dicts = [{"role": message.role, "content": message.content} for message in history]
     try:
         for delta in generate_text_stream(
-            prompt, think, system=_ENGLISH_ONLY_SYSTEM_PROMPT, history=history_dicts
+            prompt, think, system=_SYSTEM_PROMPT, history=history_dicts
         ):
             yield json.dumps({"delta": delta}) + "\n"
     except Exception as exc:  # noqa: BLE001 - deliberately broad: whatever
