@@ -53,6 +53,27 @@
   box-shadow: 0 0 0 3px rgba(232, 183, 106, 0.12);
 }
 
+/* Browser autofill (email/password have autoComplete set, so Chrome/
+   Safari/Edge WILL offer to autofill them) paints its own white/pale
+   background via a UA style that plain `background` can't touch — the
+   inset box-shadow is the only thing that overrides it. transition:
+   background-color delays Chrome's own fade-back-to-white on interaction. */
+.signin-pane-content .field input:-webkit-autofill,
+.signin-pane-content .field input:-webkit-autofill:hover,
+.signin-pane-content .field input:-webkit-autofill:active {
+  -webkit-text-fill-color: var(--text);
+  -webkit-box-shadow: 0 0 0 1000px var(--surface) inset;
+  caret-color: var(--text);
+  transition: background-color 9999s ease-in-out 0s;
+}
+
+.signin-pane-content .field input:-webkit-autofill:focus-visible {
+  -webkit-text-fill-color: var(--text);
+  -webkit-box-shadow: 0 0 0 1000px var(--surface-raised) inset, 0 0 0 3px rgba(232, 183, 106, 0.12);
+  border-color: var(--glow);
+  caret-color: var(--text);
+}
+
 .signin-pane-content .row-between {
   display: flex;
   justify-content: flex-end;
