@@ -74,6 +74,32 @@ class ExerciseTemplate(BaseModel):
     tolerance: float | None = None
 
 
+class GapClassificationResult(BaseModel):
+    """classify_gap()'s output (deferred.md #2b Stage 2) — three-way
+    (off_topic / fold_gap / branch_gap, see classify_gap()'s own
+    docstring for why it grew from the original 2-way split), only ever
+    decided for Stage 1's ambiguous middle band (knowledge/service.py's
+    classify_topic_gap) — the on_topic_elsewhere case never reaches this
+    far, resolved entirely by Stage 1."""
+
+    classification: str  # "off_topic" | "fold_gap" | "branch_gap"
+    reasoning: str | None = None
+
+
+class FoldedConcept(BaseModel):
+    """fold_concept_into_dag()'s output (deferred.md #2c) — ONE new
+    concept to extend a journey's existing DAG with, not a whole
+    re-emitted DAG (unlike adjust_dag()/generate_dag()) — the existing
+    concepts and their relationships are untouched, only this one new
+    node + its prerequisite edges get added."""
+
+    title: str
+    description: str
+    difficulty_level: int
+    learning_objective: str | None = None
+    prerequisites: list[str] = []  # titles of EXISTING concepts in this subject's DAG
+
+
 class DAGResult(BaseModel):
     """generate_dag()'s output. diagnostic_primary/diagnostic_backup
     are populated ONLY when intake_context was provided (Onboarding

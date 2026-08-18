@@ -21,6 +21,12 @@ class AnalyzeInputRequest(BaseModel):
     # memoryless mode, same as current_concept_id always was.
     subject_id: str | None = None
     dag_version: int | None = None
+    # deferred.md #2b — display names for Stage 2's classify_gap()
+    # prompt if it fires. Independent of subject_id/dag_version above:
+    # both None is the common case (memoryless mode, or a mid-journey
+    # turn that never reaches the ambiguous band).
+    subject_title: str | None = None
+    current_concept_title: str | None = None
 
 
 class AnalyzeInputResponse(BaseModel):
@@ -31,15 +37,23 @@ class AnalyzeInputResponse(BaseModel):
     is_on_topic: bool
     matched_concepts: list[str]
     detected_intent: str
+    # deferred.md #2b — "on_topic_elsewhere" | "off_topic" | "ambiguous"
+    # | "dag_gap" | None. None unless is_on_topic is False AND
+    # current_concept_id was present (mid-journey); "ambiguous" means
+    # Stage 2 either wasn't reachable (no titles supplied) or failed —
+    # not yet consumed by anything (2c/2d), additive only for now.
+    gap_classification: str | None = None
 
 
 @router.post("/analyze_input", response_model=AnalyzeInputResponse)
-def analyze_input_endpoint(request: AnalyzeInputRequest) -> AnalyzeInputResponse:
-    result = analyze_input(
+async def analyze_input_endpoint(request: AnalyzeInputRequest) -> AnalyzeInputResponse:
+    result = await analyze_input(
         request.text,
         request.known_terms,
         request.current_concept_id,
         request.subject_id,
         request.dag_version,
+        request.subject_title,
+        request.current_concept_title,
     )
     return AnalyzeInputResponse(**result)

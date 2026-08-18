@@ -12,6 +12,8 @@ from app.acquisition.models import (
     ConceptNode,
     DAGResult,
     ExerciseTemplate,
+    FoldedConcept,
+    GapClassificationResult,
     IntakeContext,
     Resource,
 )
@@ -21,6 +23,7 @@ logger = logging.getLogger(__name__)
 DIFY_ACQUIRE_API_KEY_ENV = "DIFY_ACQUIRE_API_KEY"
 DIFY_DAG_API_KEY_ENV = "DIFY_DAG_API_KEY"
 DIFY_EXERCISE_TEMPLATE_API_KEY_ENV = "DIFY_EXERCISE_TEMPLATE_API_KEY"
+DIFY_CLASSIFY_GAP_API_KEY_ENV = "DIFY_CLASSIFY_GAP_API_KEY"
 
 MAX_VALIDATION_RETRIES = 1
 SANITY_INSTANTIATION_COUNT = 5
@@ -407,7 +410,7 @@ def _validate_schema(template: dict) -> None:
         raise TemplateValidationError("template_body must be an object with at least question_template")
 
 
-def _instantiate_params(template_params: dict) -> dict:
+def instantiate_params(template_params: dict) -> dict:
     """Draws ONE random value per parameter from its {min, max} range.
 
     Placeholder/range syntax ({name} in templates, {"min": x, "max": y}
@@ -417,6 +420,12 @@ def _instantiate_params(template_params: dict) -> dict:
     to randomize from". Flagged explicitly in the build report, not
     silently invented; the Dify prompt (setup instructions) must target
     this exact syntax for validation to actually work.
+
+    Not private (no leading underscore) — reused by app/exercises/
+    service.py's instantiate_exercise() for real serve-time
+    instantiation, the same draw-random-values step this function
+    already did for pre-generation sanity-checking. One implementation,
+    two callers, not duplicated logic.
     """
     values = {}
     for name, spec in (template_params or {}).items():
@@ -467,7 +476,7 @@ def _sanity_check_instantiation(template: dict) -> None:
     template_params = template.get("template_params") or {}
 
     for _ in range(SANITY_INSTANTIATION_COUNT):
-        values = _instantiate_params(template_params)
+        values = instantiate_params(template_params)
         try:
             question_template.format(**values)
         except (KeyError, ValueError) as e:
@@ -596,3 +605,152 @@ async def generate_exercise_template(
         MAX_VALIDATION_RETRIES + 1,
     )
     return []
+
+
+# Same prompt-in-code pattern as acquire()/generate_dag() — see
+# _ACQUIRE_PROMPT's comment for why. Own dedicated Dify app/key
+# (DIFY_CLASSIFY_GAP_API_KEY_ENV) rather than reusing DIFY_DAG_API_KEY —
+# unlike adjust_dag() (a genuine variant PROMPT against the same
+# generic-passthrough DAG app), this is a structurally different task
+# (a short classification, not DAG authoring), so it stays independently
+# swappable (ARCHITECTURE.md: model/provider choice "swappable
+# independently"), matching acquire() having its own key rather than
+# sharing generate_dag()'s.
+_CLASSIFY_GAP_PROMPT = """A student is partway through a learning path on: {subject_title}
+
+The concepts currently in this learning path are:
+{concept_titles}
+
+The student is currently on: {current_concept_title}
+
+The student just said something that doesn't clearly match any concept in this path (word-match and embedding similarity both came back inconclusive):
+"{reply_text}"
+
+Decide whether this is:
+- "off_topic": genuinely unrelated to {subject_title} — a real tangent, not something this learning path should ever cover.
+- "fold_gap": on-topic, and small/local enough to add as ONE new concept to this SAME learning path (e.g. a natural extension of "{current_concept_title}" or a nearby detail this path doesn't happen to cover yet).
+- "branch_gap": on-topic-adjacent, but really a substantial topic of its own — broad enough that it deserves its own separate learning path, not just one more concept bolted onto this one.
+
+Respond with ONLY a valid JSON object, no other text, no markdown fences:
+{{
+  "classification": "off_topic" or "fold_gap" or "branch_gap",
+  "reasoning": "one sentence explaining the call"
+}}"""
+
+
+async def classify_gap(
+    subject_title: str,
+    concept_titles: list[str],
+    current_concept_title: str,
+    reply_text: str,
+) -> GapClassificationResult:
+    """deferred.md #2b Stage 2 — decides the ambiguous middle band Stage 1
+    (knowledge/service.py's classify_topic_gap) can't resolve on cheap
+    vector math alone. THREE-WAY (2026-08-11, once 2c/2d existed to
+    consume the distinction — see deferred.md #2c/#2d's own entries):
+    the ORIGINAL locked ask was just off_topic vs "dag_gap," but that
+    collapsed two genuinely different downstream actions (#2c's small
+    fold-in vs #2d's whole-new-journey branch) into one label neither
+    consumer could act on differently. Same LLM call, same context,
+    just a finer-grained output — not a second call. Matches the "needs
+    real reasoning" pattern every other AcquisitionProvider method
+    already follows (deferred.md #2's own framing).
+
+    No retry-on-validation-failure loop like generate_dag()/
+    generate_exercise_template(): unlike those, a malformed response
+    here has a safe, cheap fallback already sitting one level up —
+    the caller (analyze_input/service.py) already has today's TANGENT
+    behavior to fall back to, so a parse failure just means "couldn't
+    get a confident answer" rather than "nothing left to teach from."
+    Raises DifyError/pydantic ValidationError/json.JSONDecodeError
+    straight up to the caller, which is expected to catch and default
+    (a failed classification costs nothing behaviorally beyond staying
+    TANGENT for this one turn).
+
+    Dify workflow contract assumed (UNVERIFIED, same caveat as every
+    other Dify call here — no real Dify app exists yet as of this
+    build): ONE input variable "prompt", ONE output variable "result" —
+    a JSON object with "classification" and "reasoning".
+    """
+    prompt = _CLASSIFY_GAP_PROMPT.format(
+        subject_title=subject_title,
+        concept_titles="\n".join(f"- {title}" for title in concept_titles),
+        current_concept_title=current_concept_title,
+        reply_text=reply_text,
+    )
+    outputs = await call_dify_workflow(DIFY_CLASSIFY_GAP_API_KEY_ENV, {"prompt": prompt})
+    result = parse_json_output(outputs.get("result", "{}"))
+    return GapClassificationResult(**result)
+
+
+# Same prompt-in-code pattern as acquire()/generate_dag() — see
+# _ACQUIRE_PROMPT's comment for why. Reuses DIFY_DAG_API_KEY_ENV, not a
+# new key — same reasoning as adjust_dag() reusing it over getting its
+# own (see adjust_dag()'s own comment): this IS a DAG-authoring task
+# (one new concept + prerequisite edges), same shape of work as
+# generate_dag()/adjust_dag(), just against the same generic-passthrough
+# app. Unlike classify_gap() (a genuinely different task — short
+# classification, not authoring — hence its own dedicated key), this
+# belongs with the DAG family.
+_FOLD_CONCEPT_TASK_TEMPLATE = """A student is partway through a learning path on: {subject_title}
+
+The concepts currently in this learning path are:
+{concept_titles}
+
+The student is currently on: {current_concept_title}
+
+The student just asked something that's a genuine, on-topic gap in this specific learning path — not covered by any existing concept, but small/local enough to fold in as ONE new concept rather than a whole new topic:
+"{reply_text}"
+
+Design ONE new concept to add to this learning path that covers what the student asked about. It should connect naturally to the existing concepts — most likely (but not necessarily only) building on "{current_concept_title}".
+
+For the new concept, provide: title, description, difficulty_level (integer 1-5), learning_objective, and prerequisites (a list of concept titles from the EXISTING learning path above that this new concept depends on — titles must match one of the existing concepts exactly, do not invent new prerequisite titles)."""
+
+_FOLD_CONCEPT_OUTPUT_FORMAT = """
+Respond with ONLY a single valid JSON object, no other text, no markdown fences:
+{
+  "title": "...",
+  "description": "...",
+  "difficulty_level": 1-5,
+  "learning_objective": "...",
+  "prerequisites": ["existing concept title", ...]
+}"""
+
+
+async def fold_concept_into_dag(
+    subject_title: str,
+    concept_titles: list[str],
+    current_concept_title: str,
+    reply_text: str,
+) -> FoldedConcept:
+    """deferred.md #2c — designs the ONE new concept to fold into a
+    journey's existing DAG for classify_gap()'s "fold_gap" case. Only
+    ever called for that one classification — "branch_gap" is #2d's
+    job (reuses journeys::service::start()'s existing skip-diagnostic
+    path in Rust instead, a structurally different flow: a whole new
+    subject/journey, not one node added to this one).
+
+    No retry-on-validation-failure loop, same reasoning as classify_gap():
+    a malformed response here has a safe fallback one level up — the
+    caller just skips the fold for this turn (same as classify_gap()
+    itself failing would), not "nothing left to teach from." Rust is
+    responsible for resolving `prerequisites` titles back to concept_ids
+    (same title-based convention as ConceptNode.prerequisites) and
+    defensively skipping any that don't match an existing concept in
+    this subject — mirrors journeys::service::persist_new_subject's own
+    "dangling prerequisite reference survived validation, skipping"
+    fallback, not a new pattern.
+
+    Dify workflow contract: identical shape to generate_dag()'s — ONE
+    input variable "prompt", ONE output variable "result" (a single
+    JSON object, this time just one concept, not a "concepts" array).
+    """
+    prompt = _FOLD_CONCEPT_TASK_TEMPLATE.format(
+        subject_title=subject_title,
+        concept_titles="\n".join(f"- {title}" for title in concept_titles),
+        current_concept_title=current_concept_title,
+        reply_text=reply_text,
+    ) + _FOLD_CONCEPT_OUTPUT_FORMAT
+    outputs = await call_dify_workflow(DIFY_DAG_API_KEY_ENV, {"prompt": prompt})
+    result = parse_json_output(outputs.get("result", "{}"))
+    return FoldedConcept(**result)

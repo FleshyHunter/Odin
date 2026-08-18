@@ -2,11 +2,22 @@ from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
 
 from app.acquisition.dify_client import DifyError, DifyNotConfigured
-from app.acquisition.models import Chunk, ConceptMeta, DAGResult, ExerciseTemplate, IntakeContext, Resource
+from app.acquisition.models import (
+    Chunk,
+    ConceptMeta,
+    DAGResult,
+    ExerciseTemplate,
+    FoldedConcept,
+    GapClassificationResult,
+    IntakeContext,
+    Resource,
+)
 from app.acquisition.service import (
     TemplateValidationError,
     acquire,
     adjust_dag,
+    classify_gap,
+    fold_concept_into_dag,
     generate_dag,
     generate_exercise_template,
 )
@@ -42,6 +53,20 @@ class GenerateExerciseTemplateRequest(BaseModel):
 
 class GenerateExerciseTemplateResponse(BaseModel):
     templates: list[ExerciseTemplate]
+
+
+class ClassifyGapRequest(BaseModel):
+    subject_title: str
+    concept_titles: list[str]
+    current_concept_title: str
+    reply_text: str
+
+
+class FoldConceptRequest(BaseModel):
+    subject_title: str
+    concept_titles: list[str]
+    current_concept_title: str
+    reply_text: str
 
 
 def _dify_error_to_http(e: Exception) -> HTTPException:
@@ -97,3 +122,30 @@ async def generate_exercise_template_endpoint(
     except DifyError as e:
         raise _dify_error_to_http(e) from e
     return GenerateExerciseTemplateResponse(templates=templates)
+
+
+@router.post("/classify_gap", response_model=GapClassificationResult)
+async def classify_gap_endpoint(request: ClassifyGapRequest) -> GapClassificationResult:
+    # deferred.md #2b Stage 2 — exposed as its own endpoint for
+    # consistency with every other AcquisitionProvider method (and
+    # independent testability/callers), even though analyze_input's own
+    # use is an in-process function call, not HTTP (both live in this
+    # same FastAPI app).
+    try:
+        return await classify_gap(
+            request.subject_title, request.concept_titles, request.current_concept_title, request.reply_text
+        )
+    except DifyError as e:
+        raise _dify_error_to_http(e) from e
+
+
+@router.post("/fold_concept", response_model=FoldedConcept)
+async def fold_concept_endpoint(request: FoldConceptRequest) -> FoldedConcept:
+    # deferred.md #2c — same "own endpoint for consistency + independent
+    # testability" reasoning as /classify_gap above.
+    try:
+        return await fold_concept_into_dag(
+            request.subject_title, request.concept_titles, request.current_concept_title, request.reply_text
+        )
+    except DifyError as e:
+        raise _dify_error_to_http(e) from e
