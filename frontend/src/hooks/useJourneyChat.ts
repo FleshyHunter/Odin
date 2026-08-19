@@ -42,6 +42,9 @@ export function useJourneyChat(journeyId: string | null) {
         journeyId,
         {
           onThreadId: (id) => {
+            // Abandoned call from a journey we've since switched away
+            // from — see the switch effect's own comment below.
+            if (abortRef.current !== controller) return;
             threadIdRef.current = id;
           },
           onDelta: (delta) => {
@@ -52,18 +55,39 @@ export function useJourneyChat(journeyId: string | null) {
             if (!receivedDelta) {
               setMessages((prev) => prev.filter((m) => m.id !== tutorMessageId));
             }
-            setComposerNotice({ tone: 'error', message, actionLabel: 'Retry', onAction: beginOpening });
+            if (abortRef.current === controller) {
+              setComposerNotice({ tone: 'error', message, actionLabel: 'Retry', onAction: beginOpening });
+            }
           },
         },
         controller.signal,
       )
       .finally(() => {
-        setIsSending(false);
-        abortRef.current = null;
+        // Only reset shared state if we still own it — a genuine switch
+        // (see the effect below) already replaced abortRef.current with
+        // a fresh value for whatever journey is now current.
+        if (abortRef.current === controller) {
+          setIsSending(false);
+          abortRef.current = null;
+        }
       });
   }, [journeyId]);
 
   useEffect(() => {
+    // A genuine switch (including switching to null) always starts this
+    // hook fresh for whatever journey is now current, even if the OLD
+    // journey's send()/beginOpening() is still running in the
+    // background — left alone deliberately, not aborted, so it finishes
+    // and persists normally. This just detaches this hook's own
+    // bookkeeping from it, so that old call's eventual finally/callbacks
+    // no-op via the abortRef-identity check they each carry, instead of
+    // stomping this fresh state once that old request eventually
+    // settles. beginOpening() below (on the "no thread yet" branch)
+    // creates its own fresh controller synchronously after this, so
+    // there's no window for interference.
+    setIsSending(false);
+    isSendingRef.current = false;
+    abortRef.current = null;
     if (!journeyId) {
       setMessages([]);
       setIsHydrating(false);
@@ -142,7 +166,11 @@ export function useJourneyChat(journeyId: string | null) {
               if (!receivedDelta) {
                 setMessages((prev) => prev.filter((m) => m.id !== tutorMessageId));
               }
-              setComposerNotice({ tone: 'error', message, actionLabel: 'Retry', onAction: () => send(text) });
+              // Abandoned call from a journey we've since switched away
+              // from — same guard as beginOpening's own callbacks.
+              if (abortRef.current === controller) {
+                setComposerNotice({ tone: 'error', message, actionLabel: 'Retry', onAction: () => send(text) });
+              }
             },
           },
           controller.signal,
@@ -159,17 +187,23 @@ export function useJourneyChat(journeyId: string | null) {
           );
         } else if (!receivedDelta) {
           setMessages((prev) => prev.filter((m) => m.id !== tutorMessageId));
-          setComposerNotice({
-            tone: 'error',
-            message: 'The tutor could not generate a response. Try again.',
-            actionLabel: 'Retry',
-            onAction: () => send(text),
-          });
+          if (abortRef.current === controller) {
+            setComposerNotice({
+              tone: 'error',
+              message: 'The tutor could not generate a response. Try again.',
+              actionLabel: 'Retry',
+              onAction: () => send(text),
+            });
+          }
         }
       } finally {
-        isSendingRef.current = false;
-        setIsSending(false);
-        abortRef.current = null;
+        // Only reset shared state if we still own it — see the switch
+        // effect's own comment.
+        if (abortRef.current === controller) {
+          isSendingRef.current = false;
+          setIsSending(false);
+          abortRef.current = null;
+        }
       }
     },
     [journeyId],

@@ -1,4 +1,5 @@
-use std::sync::Arc;
+use std::collections::HashMap;
+use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use redis::aio::MultiplexedConnection;
@@ -7,6 +8,7 @@ use sqlx::PgPool;
 use crate::auth::email::EmailSender;
 use crate::auth::errors::AuthError;
 use crate::config::Config;
+use crate::voice::session::VoiceSessionRegistry;
 
 // Shared across every route now that auth needs Postgres + Redis + JWT
 // signing + an email sender, not just the bare pool Block 1/2 needed.
@@ -87,6 +89,12 @@ pub struct AppState {
     pub mastery_beta: f32,
     pub mastery_completion_threshold: f32,
     pub advanced_streak_required: i32,
+    // deferred.md #80 follow-up — chunked voice-streaming transcription.
+    // In-memory only, no persistence needed: session_id -> channel
+    // handle for delivering partial-transcript results, torn down the
+    // instant its SSE stream ends (see voice::handlers::stream_start's
+    // own Drop guard). No constructor argument — always starts empty.
+    pub voice_sessions: VoiceSessionRegistry,
 }
 
 impl AppState {
@@ -129,6 +137,7 @@ impl AppState {
             mastery_beta: config.mastery_beta,
             mastery_completion_threshold: config.mastery_completion_threshold,
             advanced_streak_required: config.advanced_streak_required,
+            voice_sessions: Arc::new(Mutex::new(HashMap::new())),
         }
     }
 

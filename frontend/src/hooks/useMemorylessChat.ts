@@ -86,6 +86,17 @@ export function useMemorylessChat(
     // branch above), not duplicated across each branch below.
     setAttachments([]);
     setPendingFiles([]);
+    // A genuine switch always starts this hook fresh for the newly-
+    // viewed thread, even if the OLD thread's send() is still running
+    // in the background — left alone deliberately, not aborted, so it
+    // finishes and persists normally (only cancel() aborts). This just
+    // detaches this hook's own bookkeeping from it, so that old call's
+    // eventual finally/callbacks no-op via the abortRef-identity check
+    // they each carry, instead of stomping this fresh state once that
+    // old request eventually settles.
+    setIsSending(false);
+    isSendingRef.current = false;
+    abortRef.current = null;
     if (initialThreadId === null) {
       setMessages([]);
       setIsHydrating(false);
@@ -178,6 +189,12 @@ export function useMemorylessChat(
         { threadId: threadIdRef.current, message: text },
         {
           onThreadId: (id) => {
+            // Abandoned call from a thread we've since switched away
+            // from — without this, a late-arriving thread_id from a
+            // still-finishing background request could yank the URL
+            // back to it and corrupt threadIdRef for whatever the
+            // now-current thread's own send() needs next.
+            if (abortRef.current !== controller) return;
             const isNewThread = threadIdRef.current !== id;
             threadIdRef.current = id;
             if (isNewThread) {
@@ -207,7 +224,13 @@ export function useMemorylessChat(
             if (!receivedDelta) {
               setMessages((prev) => prev.filter((m) => m.id !== tutorMessageId));
             }
-            setComposerNotice({ tone: 'error', message, actionLabel: 'Retry', onAction: () => send(text) });
+            // Same abandoned-call guard as onThreadId above — an error
+            // from a background-finishing request on a thread we've
+            // switched away from shouldn't pop a notice over whatever
+            // thread is now actually on screen.
+            if (abortRef.current === controller) {
+              setComposerNotice({ tone: 'error', message, actionLabel: 'Retry', onAction: () => send(text) });
+            }
           },
         },
         controller.signal,
@@ -232,17 +255,25 @@ export function useMemorylessChat(
         // originally built to catch). Kept in case some future failure
         // mode still ends the stream silently without an explicit error.
         setMessages((prev) => prev.filter((m) => m.id !== tutorMessageId));
-        setComposerNotice({
-          tone: 'error',
-          message: 'The tutor could not generate a response. Try again.',
-          actionLabel: 'Retry',
-          onAction: () => send(text),
-        });
+        if (abortRef.current === controller) {
+          setComposerNotice({
+            tone: 'error',
+            message: 'The tutor could not generate a response. Try again.',
+            actionLabel: 'Retry',
+            onAction: () => send(text),
+          });
+        }
       }
     } finally {
-      isSendingRef.current = false;
-      setIsSending(false);
-      abortRef.current = null;
+      // Only reset shared state if we still own it — a genuine thread
+      // switch (see the effect above) already replaced abortRef.current
+      // with a fresh value for whatever thread is now current; this
+      // call's own completion should no-op in that case, not stomp it.
+      if (abortRef.current === controller) {
+        isSendingRef.current = false;
+        setIsSending(false);
+        abortRef.current = null;
+      }
     }
   }, [onThreadId]);
 

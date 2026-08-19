@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { Outlet, useLocation, useNavigate } from 'react-router-dom';
 import { Sidebar, type SidebarSection } from '../../components/sidebar/Sidebar/Sidebar';
 import { useTracks } from '../../hooks/useTracks';
@@ -91,6 +91,34 @@ export function SessionLayout({ profileName, email, onSignOut }: SessionLayoutPr
     }
   };
 
+  // Sign-out is a leave-the-app action same as any guarded navigate() —
+  // App.tsx's handleSignOut previously bypassed this guard entirely
+  // (its own separate useNavigate() instance has no access to
+  // currentMemorylessThreadId/pendingLeave, both local to this
+  // component), so signing out while on a live memoryless thread never
+  // warned. Wrapping locally here, rather than lifting this guard's
+  // state up into App.tsx, keeps the fix to one call site — App.tsx's
+  // onSignOut stays exactly "do the real sign-out," this component
+  // stays the one place that decides whether to warn first.
+  const guardedSignOut = () => guardedNavigate(onSignOut);
+
+  // Browser-level leave (hard refresh, tab close, closing the window) —
+  // deferred.md #73 flagged this as consciously scoped out, not built.
+  // The browser only ever shows its own generic "leave site?" copy
+  // (no custom text is possible for beforeunload, by design across
+  // every browser), so this just needs to arm/disarm the prompt based
+  // on the same "is there a live memoryless thread" check guardedNavigate
+  // already uses — no separate state to track.
+  useEffect(() => {
+    if (!currentMemorylessThreadId) return;
+    const handleBeforeUnload = (event: BeforeUnloadEvent) => {
+      event.preventDefault();
+      event.returnValue = '';
+    };
+    window.addEventListener('beforeunload', handleBeforeUnload);
+    return () => window.removeEventListener('beforeunload', handleBeforeUnload);
+  }, [currentMemorylessThreadId]);
+
   const handleSectionChange = (section: SidebarSection) => {
     // Doesn't navigate at all (RecentsList's own filter, same route) —
     // nothing to guard.
@@ -150,7 +178,7 @@ export function SessionLayout({ profileName, email, onSignOut }: SessionLayoutPr
           onNewTrack={() => openCreateTrackModal()}
           profileName={profileName}
           email={email}
-          onSignOut={onSignOut}
+          onSignOut={guardedSignOut}
           activeSection={activeSection}
           onSectionChange={handleSectionChange}
           onHome={handleHome}

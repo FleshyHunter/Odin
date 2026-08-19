@@ -46,7 +46,7 @@ export function Composer({
   onRetryAttachment,
 }: ComposerProps) {
   const [value, setValue] = useState('');
-  const { status, error: voiceError, startRecording, stopRecording } = useVoiceInput();
+  const { status, error: voiceError, partialTranscript, startRecording, stopRecording } = useVoiceInput();
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const attachEnabled = onAttachFiles !== undefined;
@@ -156,11 +156,13 @@ export function Composer({
               value={value}
               onChange={(event) => setValue(event.target.value)}
               onKeyDown={handleKeyDown}
-              // isSending locks input (not just the send button, which
-              // stays clickable below so it can still act as Stop) — a
-              // turn is strictly one-at-a-time, never overlapping,
-              // matching handleSend's own isSending branch above.
-              disabled={disabled || isSending}
+              // Stays editable while isSending — a turn is still
+              // strictly one-at-a-time server-side (handleSend's own
+              // isSending branch routes Enter/click to onStop, not a
+              // second send), but the student can keep drafting their
+              // next message while a reply streams in, same as
+              // ChatGPT/Claude's own composer behavior.
+              disabled={disabled}
             />
 
             <div className="composer-toolbar">
@@ -193,7 +195,12 @@ export function Composer({
                   aria-label={status === 'recording' ? 'Stop recording' : 'Voice input'}
                   aria-pressed={status === 'recording'}
                   onClick={handleMicClick}
-                  disabled={status === 'transcribing' || disabled || isSending}
+                  // Blocks STARTING a new recording while a turn is
+                  // sending (voice shares the same GPU as generation),
+                  // but never strands an already-active recording with
+                  // no way to stop it just because a separate text send
+                  // started/finished mid-recording.
+                  disabled={status === 'transcribing' || disabled || (isSending && status !== 'recording')}
                 >
                   <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.7}>
                     <path d="M12 1a3 3 0 0 0-3 3v8a3 3 0 0 0 6 0V4a3 3 0 0 0-3-3z" />
@@ -221,6 +228,16 @@ export function Composer({
                 </button>
               </div>
             </div>
+            {/* Best-effort live caption while recording — chunked
+                re-transcription (see useVoiceInput.ts), never written
+                into the real composer value. Replaces on every tick
+                rather than appending: each result is the full
+                transcript-so-far, not an increment, and earlier words
+                can visibly revise as more context arrives — expected,
+                not a bug. */}
+            {status === 'recording' && partialTranscript && (
+              <p className="composer-voice-caption">{partialTranscript}</p>
+            )}
             {/* deferred.md #80 — scoped down deliberately: no retry
                 affordance, no dedicated error component, just a small
                 inline message near the mic button that caused it. */}

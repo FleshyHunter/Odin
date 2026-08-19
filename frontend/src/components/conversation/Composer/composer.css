@@ -93,6 +93,13 @@
   margin: 0 0.55rem 0.5rem; font-size: 0.78rem; color: var(--error);
 }
 
+/* Best-effort live caption while recording — deliberately muted/quiet,
+   not styled like real composer content, since it can revise itself
+   every few seconds as more audio is re-transcribed. */
+.composer .composer-voice-caption {
+  margin: 0 0.55rem 0.5rem; font-size: 0.78rem; color: var(--text-secondary); font-style: italic;
+}
+
 .composer .icon-btn {
   background: none; border: none; color: var(--text);
   display: flex; align-items: center; justify-content: center;
