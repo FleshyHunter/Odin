@@ -24,14 +24,10 @@ export interface Track {
   pinned: boolean;
   projectId: string | null;
   lastActiveAt: string;
-  // The real backend journey this (still otherwise fully mocked) Track
-  // carries, from POST /journeys/start (deferred.md #4/#40) — null only
-  // for the pre-existing seed/demo track, which predates real wiring.
-  // Nothing else in the app reads this yet (journey listing/detail and
-  // real track-mode teaching are still out of #4's scope), but it's
-  // real, not a placeholder — carried through so it's there once
-  // something does need it.
-  journeyId: string | null;
+  // Every real Track is created together with its journey, atomically
+  // (api/tracks.ts's createTrackFromJourney, backend's
+  // create_journey_thread_sync) — always a real, non-null id.
+  journeyId: string;
 }
 
 export type TrackLevel = 'Beginner' | 'Intermediate' | 'Advanced';

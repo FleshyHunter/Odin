@@ -1,7 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import * as tracksApi from '../api/tracks';
-import { ApiError } from '../api/client';
-import type { ChatMessage, ComposerNoticeData, Track } from '../types';
+import type { Track } from '../types';
 
 export function useTracks() {
   const [tracks, setTracks] = useState<Track[]>([]);
@@ -63,88 +62,4 @@ export function useTracks() {
   }, []);
 
   return { tracks, isLoading, removeTrack, createTrackFromJourney, togglePin, renameTrack, setTrackProject };
-}
-
-export function useTrackMessages(trackId: string) {
-  const [messages, setMessages] = useState<ChatMessage[]>([]);
-  const [isLoading, setIsLoading] = useState(true);
-  const [isSending, setIsSending] = useState(false);
-  // Surfaced via Composer's ComposerNotice banner rather than swallowed —
-  // previously this catch didn't exist at all (a rejected sendMessage()
-  // just vanished into an unhandled promise rejection).
-  const [composerNotice, setComposerNotice] = useState<ComposerNoticeData | null>(null);
-
-  useEffect(() => {
-    let cancelled = false;
-    setIsLoading(true);
-    tracksApi.getMessages(trackId).then((result) => {
-      if (cancelled) return;
-      setMessages(result);
-      setIsLoading(false);
-    });
-    return () => {
-      cancelled = true;
-    };
-  }, [trackId]);
-
-  const send = useCallback(
-    async (text: string) => {
-      setComposerNotice(null);
-      const studentMessage: ChatMessage = {
-        id: `local-${Date.now()}`,
-        role: 'student',
-        text,
-        timestamp: new Date().toISOString(),
-      };
-      setMessages((prev) => [...prev, studentMessage]);
-      setIsSending(true);
-      try {
-        const tutorReply = await tracksApi.sendMessage(trackId, text);
-        setMessages((prev) => [...prev, tutorReply]);
-      } catch (err) {
-        setComposerNotice({
-          tone: err instanceof ApiError ? err.tone : 'error',
-          message: err instanceof ApiError ? err.message : 'Something went wrong. Try again.',
-          actionLabel: 'Retry',
-          onAction: () => send(text),
-        });
-      } finally {
-        setIsSending(false);
-      }
-    },
-    [trackId],
-  );
-
-  const dismissComposerNotice = useCallback(() => setComposerNotice(null), []);
-
-  // deferred.md #79: a harmless no-op, not a real cancel — this hook has
-  // no real network call to abort (`tracksApi.sendMessage` is a
-  // `simulateDelay` stub, same as the rest of this still-mocked Track
-  // system). Exists purely so `ChatView.tsx` can destructure `cancel`
-  // identically from whichever chat hook is active (this one, or the
-  // real `useJourneyChat`) without a conditional per call site.
-  const cancel = useCallback(() => {}, []);
-
-  // deferred.md #37: same no-op-for-parity reasoning as `cancel` above —
-  // this mocked track has no real upload endpoint to call, but
-  // ChatView.tsx destructures these identically from whichever hook is
-  // active, so the shape has to match `useJourneyChat`'s real ones.
-  const noop = useCallback(() => {}, []);
-
-  return {
-    messages,
-    isLoading,
-    isSending,
-    send,
-    cancel,
-    composerNotice,
-    dismissComposerNotice,
-    pendingFiles: [],
-    attachments: [],
-    requestAttach: noop,
-    confirmAttachRole: noop,
-    cancelPendingFile: noop,
-    retryAttachment: noop,
-    removeAttachment: noop,
-  };
 }

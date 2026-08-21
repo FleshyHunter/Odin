@@ -8,6 +8,11 @@ interface TrackMenuProps {
   onChangeProject?: () => void;
   onRemoveFromProject?: () => void;
   onDelete?: () => void;
+  // Separate from onDelete above — deletes the underlying journey, not
+  // this track/conversation. Independent operations, no cascade either
+  // direction (see api/journeys.ts's deleteJourney comment); only
+  // offered when this track actually carries a journeyId.
+  onDeleteJourney?: () => void;
   // Memoryless mode's one real action (deferred.md #74) — mutually
   // exclusive with the five above in practice (a real track has no use
   // for this, a memoryless thread has no track yet to Pin/Rename/etc.),
@@ -48,6 +53,13 @@ const DELETE_ICON = (
     <path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2" />
   </svg>
 );
+const DELETE_JOURNEY_ICON = (
+  <svg {...iconProps}>
+    <path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20" />
+    <path d="M6.5 2H20v20H6.5A2.5 2.5 0 0 1 4 19.5v-15A2.5 2.5 0 0 1 6.5 2z" />
+    <line x1="10" y1="9" x2="15" y2="9" />
+  </svg>
+);
 const ADD_TRACK_ICON = (
   <svg {...iconProps}>
     <circle cx="12" cy="12" r="9" />
@@ -63,6 +75,12 @@ const DELETE_CONFIRM_MESSAGE =
   'Delete this track? Your conversation history for it will be removed. ' +
   'Mastery already earned in it stays recorded.';
 
+// Independent of the track above — deleting the journey never removes
+// this track/conversation, and vice versa (no cascade either direction).
+const DELETE_JOURNEY_CONFIRM_MESSAGE =
+  "Delete this journey? This track's conversation stays exactly as it is — " +
+  'only the journey itself (its DAG progress) is removed. Mastery already earned stays recorded.';
+
 export function TrackMenu({
   title,
   isPinned,
@@ -71,6 +89,7 @@ export function TrackMenu({
   onChangeProject,
   onRemoveFromProject,
   onDelete,
+  onDeleteJourney,
   onAddToTrack,
 }: TrackMenuProps) {
   const [isOpen, setIsOpen] = useState(false);
@@ -98,6 +117,13 @@ export function TrackMenu({
     // JS behavior rather than reinterpreting it as a styled modal.
     if (window.confirm(DELETE_CONFIRM_MESSAGE)) {
       onDelete?.();
+    }
+    setIsOpen(false);
+  };
+
+  const handleDeleteJourneyClick = () => {
+    if (window.confirm(DELETE_JOURNEY_CONFIRM_MESSAGE)) {
+      onDeleteJourney?.();
     }
     setIsOpen(false);
   };
@@ -155,14 +181,18 @@ export function TrackMenu({
             <span>Remove from project</span>
           </button>
         )}
+        {(onDelete || onDeleteJourney) && <div className="menu-divider" />}
         {onDelete && (
-          <>
-            <div className="menu-divider" />
-            <button className="menu-item destructive" onClick={handleDeleteClick}>
-              {DELETE_ICON}
-              <span>Delete track</span>
-            </button>
-          </>
+          <button className="menu-item destructive" onClick={handleDeleteClick}>
+            {DELETE_ICON}
+            <span>Delete track</span>
+          </button>
+        )}
+        {onDeleteJourney && (
+          <button className="menu-item destructive" onClick={handleDeleteJourneyClick}>
+            {DELETE_JOURNEY_ICON}
+            <span>Delete journey</span>
+          </button>
         )}
       </div>
     </div>

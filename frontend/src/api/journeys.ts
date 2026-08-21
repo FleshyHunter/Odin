@@ -85,3 +85,11 @@ export async function confirmDowngrade(diagnosticId: string): Promise<Diagnostic
   });
   return toOutcome(body);
 }
+
+// DELETE /journeys/{journey_id} (backend/src/journeys/handlers.rs) —
+// soft delete, independent of the journey's own Track: deleting one
+// never removes the other (no cascade either direction). The Track
+// stays visible/functional in the sidebar exactly as before.
+export async function deleteJourney(journeyId: string): Promise<void> {
+  await apiFetch<void>(`/journeys/${journeyId}`, { method: 'DELETE' });
+}

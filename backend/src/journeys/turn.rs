@@ -417,6 +417,112 @@ pub async fn start_journey_thread(
     Ok((thread_id, concept_title, rx))
 }
 
+/// Reused by tracks::handlers::create_track — a new Track needs a real,
+/// stable id (the thread_id) the moment it's created, not later when
+/// chat first opens, so this is the same generation start_journey_thread
+/// does, just awaited to full completion here instead of streamed back
+/// to a live SSE client, and inserted atomically WITH its opening
+/// message in one go — a thread created this way never exists with zero
+/// messages, so useJourneyChat's existing hydration path (thread found →
+/// hydrate) needs no changes at all; its lazy "no thread yet" branch
+/// simply never fires for Tracks created this way. Also sets `title`,
+/// which start_journey_thread's own persist_opening_turn never has a
+/// reason to (that path's thread always falls back to the journey's
+/// subject title, per SCHEMA.md's own comment on study_threads.title).
+pub(crate) async fn create_journey_thread_sync(
+    state: &AppState,
+    user_id: Uuid,
+    journey_id: Uuid,
+    title: &str,
+) -> Result<(Uuid, String), JourneyError> {
+    let subject_id = verify_journey_and_subject(&state.pool, user_id, journey_id).await?;
+    let dag_version: i32 = sqlx::query_scalar("SELECT dag_version FROM subjects WHERE subject_id = $1")
+        .bind(subject_id)
+        .fetch_one(&state.pool)
+        .await?;
+    let entry = fetch_entry_concept(&state.pool, user_id, journey_id, subject_id, dag_version).await?;
+
+    // deferred.md #26: same "fire concurrently with the opening turn's
+    // own generation" placement as start_journey_thread's own call.
+    spawn_exercise_prefetch(state.clone(), user_id, journey_id, &entry);
+
+    let prompt = format!(
+        "You are a tutor starting a brand-new session with a student. Introduce and begin teaching \
+         the concept \"{}\".{}{} Write a warm, engaging opening that introduces the concept and starts \
+         teaching it — the student hasn't said anything yet, so don't wait for a response or ask what \
+         they want to learn; just begin.",
+        entry.title,
+        entry.description.as_ref().map(|d| format!(" Description: {d}.")).unwrap_or_default(),
+        entry.learning_objective.as_ref().map(|o| format!(" Learning objective: {o}.")).unwrap_or_default(),
+    );
+
+    let chunks = ai_client::generate_stream(
+        &state.streaming_http_client,
+        &state.ai_service_url,
+        prompt,
+        true, // same default as start_journey_thread's HTTP handler (body.think.unwrap_or(true))
+        Vec::new(),
+    )
+    .await?;
+    tokio::pin!(chunks);
+
+    let mut accumulated = String::new();
+    while let Some(chunk) = chunks.next().await {
+        accumulated.push_str(&chunk?);
+    }
+
+    let thread_id = Uuid::new_v4();
+    let now = Utc::now();
+    let concept_id = entry.concept_id;
+    let concept_title = entry.title;
+
+    let mut tx = begin_rls_transaction(&state.pool, user_id).await?;
+
+    sqlx::query(
+        "INSERT INTO study_threads \
+         (thread_id, user_id, journey_id, title, mode, current_concept_id, created_at, last_active_at) \
+         VALUES ($1, $2, $3, $4, 'journey', $5, $6, $6)",
+    )
+    .bind(thread_id)
+    .bind(user_id)
+    .bind(journey_id)
+    .bind(title)
+    .bind(concept_id)
+    .bind(now)
+    .execute(&mut *tx)
+    .await?;
+
+    // "Teach from first concept" (Flow 4) — same as persist_opening_turn.
+    sqlx::query("UPDATE journey_concepts SET status = 'in_progress' WHERE journey_id = $1 AND concept_id = $2")
+        .bind(journey_id)
+        .bind(concept_id)
+        .execute(&mut *tx)
+        .await?;
+
+    sqlx::query("INSERT INTO messages (thread_id, role, content, mode, timestamp) VALUES ($1, 'tutor', $2, 'journey', $3)")
+        .bind(thread_id)
+        .bind(&accumulated)
+        .bind(now)
+        .execute(&mut *tx)
+        .await?;
+
+    // Rule 4: mandatory every turn, all modes.
+    sqlx::query(
+        "INSERT INTO audit_logs (thread_id, mode, response_text, model_used, error, timestamp) \
+         VALUES ($1, 'journey', $2, $3, NULL, $4)",
+    )
+    .bind(thread_id)
+    .bind(&accumulated)
+    .bind(MODEL_USED)
+    .bind(now)
+    .execute(&mut *tx)
+    .await?;
+
+    tx.commit().await?;
+
+    Ok((thread_id, concept_title))
+}
+
 #[allow(clippy::too_many_arguments)]
 async fn persist_opening_turn(
     pool: &PgPool,
@@ -1221,27 +1327,47 @@ pub async fn send_journey_message(
         }
     };
 
-    // Three optional pieces now, not two — a Vec avoids an 8-way match.
-    let mut context_blocks: Vec<String> = Vec::new();
+    // deferred.md #91: journey_upload_context/global_context are real
+    // reference material (student-uploaded or KB-retrieved — could be
+    // any language, symbols, code) and go inside <reference_material>
+    // tags so the model has an unambiguous target for _SYSTEM_PROMPT's
+    // English-only check (see memoryless/turn.rs's identical fix for
+    // the full story). extra_instruction is NOT reference material —
+    // it's server-authored instruction text (V3's #2d branch-gap
+    // acknowledgment), never user-provided content, so it's kept
+    // outside both tag pairs, same as it already behaved.
+    let mut reference_blocks: Vec<String> = Vec::new();
     if let Some(context) = &journey_upload_context {
-        context_blocks.push(format!(
+        reference_blocks.push(format!(
             "The student uploaded this document to this conversation. Treat it as reference material \
              for what they're asking about:\n{context}"
         ));
     }
     if let Some(context) = &global_context {
-        context_blocks.push(format!(
+        reference_blocks.push(format!(
             "Here is material from the knowledge base that may be relevant — use it if it helps, \
              but you don't have to:\n{context}"
         ));
     }
-    if let Some(instruction) = &extra_instruction {
-        context_blocks.push(instruction.clone());
+
+    let mut prompt_parts: Vec<String> = Vec::new();
+    if !reference_blocks.is_empty() {
+        prompt_parts.push(format!("<reference_material>\n{}\n</reference_material>", reference_blocks.join("\n\n")));
     }
-    let prompt = if context_blocks.is_empty() {
+    if let Some(instruction) = &extra_instruction {
+        prompt_parts.push(instruction.clone());
+    }
+
+    let prompt = if prompt_parts.is_empty() {
         analysis.cleaned_query.clone()
+    } else if reference_blocks.is_empty() {
+        // extra_instruction only, no reference material — nothing for
+        // the model to conflate the query with, so the old plain label
+        // is enough (tags are reserved for the actual failure mode).
+        format!("{}\n\nStudent's question: {}", prompt_parts.join("\n\n"), analysis.cleaned_query)
     } else {
-        format!("{}\n\nStudent's question: {}", context_blocks.join("\n\n"), analysis.cleaned_query)
+        prompt_parts.push(format!("<student_message>\n{}\n</student_message>", analysis.cleaned_query));
+        prompt_parts.join("\n\n")
     };
 
     let history = load_recent_history(&state.pool, user_id, thread_id).await?;

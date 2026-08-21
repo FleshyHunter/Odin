@@ -24,6 +24,9 @@ use crate::state::AppState;
 pub fn router() -> Router<AppState> {
     Router::new()
         .route("/journeys/start", post(handlers::start))
+        // Soft delete, independent of study_threads/Track deletion —
+        // no cascade either direction, explicit requirement.
+        .route("/journeys/{journey_id}", axum::routing::delete(handlers::delete_journey))
         .route("/journeys/diagnostic/{diagnostic_id}/respond", post(handlers::respond))
         .route(
             "/journeys/diagnostic/{diagnostic_id}/confirm-downgrade",

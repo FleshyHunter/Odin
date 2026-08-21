@@ -9,6 +9,7 @@ interface TrackHeaderProps {
   onChangeProject?: () => void;
   onRemoveFromProject?: () => void;
   onDelete?: () => void;
+  onDeleteJourney?: () => void;
   // Memoryless mode's placeholder header (deferred.md #74) has no
   // ActivePanel content (no exercises/mastery for a chat with no
   // journey yet) — so unlike a real track, there's nothing for this

@@ -1,127 +1,85 @@
-import type { ChatMessage, Track } from '../types';
-import { ApiError, simulateDelay } from './client';
+import type { Track, TrackStatus } from '../types';
+import { apiFetch } from './client';
 
-// In-memory only — stands in for a real backend/DB row set. Normally
-// starts empty (true empty state — no tracks until the user creates one);
-// one demo entry is seeded below at the user's explicit request, to have
-// something on screen while designing/reviewing the Tracks list page.
-// Remove this entry to go back to a true empty start. Lost on page
-// refresh either way; that's expected for a stub, not a bug.
-const tracks: Track[] = [
-  {
-    id: 'track-seed-1',
-    title: 'Linear Algebra',
-    subjectTitle: 'Linear Algebra',
-    currentConceptTitle: 'Eigenvalues & Eigenvectors',
-    status: 'active',
-    pinned: false,
-    projectId: null,
-    lastActiveAt: new Date().toISOString(),
-    journeyId: null, // predates real journey wiring (deferred.md #4/#40) — a demo seed row, not a real journey.
-  },
-];
-
-// Real contract: GET /tracks -> Track[]
-export async function listTracks(): Promise<Track[]> {
-  return simulateDelay([...tracks]);
+// Real backend, backend/src/tracks/ — replaces the old fully-mocked
+// version (in-memory array, lost on refresh). getMessages/sendMessage
+// are gone: real chat for a Track always goes through useJourneyChat
+// (api/journeyChat.ts) once its journeyId is set, never through here —
+// they were dead weight even in the mock (ChatView.tsx only ever fell
+// back to them for the pre-real-journey seed track, which no longer
+// exists now that Tracks are real).
+interface TrackBody {
+  thread_id: string;
+  title: string;
+  subject_title: string;
+  current_concept_title: string | null;
+  status: string;
+  is_pinned: boolean;
+  project_id: string | null;
+  last_active_at: string;
+  journey_id: string;
 }
 
-// Called once TrackModal's wizard (deferred.md #40) has already driven
-// the real Onboarding Diagnostic through to a real journey_id
-// (POST /journeys/start + /respond/confirm-downgrade/retry-backup,
-// api/journeys.ts — deferred.md #4). This function itself is still a
-// local mock, same as every other track operation here — journey
-// LISTING/DETAIL and real track-mode teaching are still out of #4's own
-// scope — but it now carries a REAL journeyId through, rather than
-// discarding it. subjectTitle mirrors title for now, same reason as
-// before: no real subject/DAG detail is wired to the frontend to read
-// back yet.
-export async function createTrackFromJourney(title: string, journeyId: string): Promise<Track> {
-  const track: Track = {
-    id: `track-${Date.now()}`,
-    title,
-    subjectTitle: title,
-    currentConceptTitle: null,
-    status: 'active',
-    pinned: false,
-    projectId: null,
-    lastActiveAt: new Date().toISOString(),
-    journeyId,
+function toTrack(body: TrackBody): Track {
+  return {
+    id: body.thread_id,
+    title: body.title,
+    subjectTitle: body.subject_title,
+    currentConceptTitle: body.current_concept_title,
+    status: body.status as TrackStatus,
+    pinned: body.is_pinned,
+    projectId: body.project_id,
+    lastActiveAt: body.last_active_at,
+    journeyId: body.journey_id,
   };
-  tracks.push(track);
-  return simulateDelay(track, 300);
 }
 
-// Real contract: GET /tracks/:trackId/messages -> ChatMessage[]
-// No track starts with any conversation history — always empty until
-// real messages are sent.
-export async function getMessages(_trackId: string): Promise<ChatMessage[]> {
-  return simulateDelay([]);
+export async function listTracks(): Promise<Track[]> {
+  const body = await apiFetch<TrackBody[]>('/tracks');
+  return body.map(toTrack);
 }
 
-// Real contract: POST /tracks/:trackId/messages { text } -> ChatMessage (tutor reply)
-// study_threads are written to PostgreSQL only on first message (Rule 11) —
-// this stub doesn't model that distinction, it's a backend-side concern.
-//
-// The two branches below are dev-only triggers to preview ComposerNotice's
-// two tones without a real backend condition to fail against yet (frontend
-// is still fully mocked) — type "/error" or "/warning" as a message. Delete
-// both once real backend wiring replaces simulateDelay with an actual
-// fetch() that can fail for real (see ApiError's own doc comment).
-export async function sendMessage(_trackId: string, text: string): Promise<ChatMessage> {
-  const trimmed = text.trim().toLowerCase();
-  if (trimmed === '/error') {
-    await simulateDelay(null, 500);
-    throw new ApiError('error', "Couldn't reach Odin's tutoring engine. Check your connection and try again.");
-  }
-  if (trimmed === '/warning') {
-    await simulateDelay(null, 500);
-    throw new ApiError('warning', "You're sending messages quickly — slow down a little.");
-  }
-
-  return simulateDelay(
-    {
-      id: `tutor-${Date.now()}`,
-      role: 'tutor',
-      text: `(mock tutor reply to: "${text}")`,
-      timestamp: new Date().toISOString(),
-    },
-    600,
-  );
+// Creates the real study_threads row AND generates the tutor's opening
+// message in the same call (backend/src/journeys/turn.rs's
+// create_journey_thread_sync) — slower than a plain insert (a real
+// generation call), same tradeoff already accepted for the Onboarding
+// Diagnostic step earlier in the same wizard this is called from.
+export async function createTrackFromJourney(title: string, journeyId: string): Promise<Track> {
+  const body = await apiFetch<TrackBody>('/tracks', {
+    method: 'POST',
+    body: JSON.stringify({ title, journey_id: journeyId }),
+  });
+  return toTrack(body);
 }
 
-// Real contract: DELETE /tracks/:trackId
 // Deleting a track never affects mastery_bank — mastery is keyed on
 // canonical_concept_id, not journey_id (ARCHITECTURE_LOCK.md, Rule 14).
+// Soft delete backend-side (study_threads.deleted_at) — this call just
+// stops it showing up in listTracks() from here on.
 export async function deleteTrack(trackId: string): Promise<void> {
-  const index = tracks.findIndex((t) => t.id === trackId);
-  if (index !== -1) tracks.splice(index, 1);
-  return simulateDelay(undefined, 300);
+  await apiFetch<void>(`/tracks/${trackId}`, { method: 'DELETE' });
 }
 
-// Real contract: PATCH /tracks/:trackId { pinned } -> Track
 export async function togglePin(trackId: string): Promise<Track> {
-  const track = tracks.find((t) => t.id === trackId);
-  if (!track) throw new Error(`Track ${trackId} not found`);
-  track.pinned = !track.pinned;
-  return simulateDelay(track, 200);
+  const body = await apiFetch<TrackBody>(`/tracks/${trackId}/pin`, { method: 'POST' });
+  return toTrack(body);
 }
 
-// Real contract: PATCH /tracks/:trackId { title } -> Track
 export async function renameTrack(trackId: string, title: string): Promise<Track> {
-  const track = tracks.find((t) => t.id === trackId);
-  if (!track) throw new Error(`Track ${trackId} not found`);
-  track.title = title;
-  return simulateDelay(track, 200);
+  const body = await apiFetch<TrackBody>(`/tracks/${trackId}/rename`, {
+    method: 'POST',
+    body: JSON.stringify({ title }),
+  });
+  return toTrack(body);
 }
 
-// Real contract: PATCH /tracks/:trackId { projectId } -> Track
 // Same underlying operation for both TrackMenu's "Change project"
 // (projectId set to a real id) and "Remove from project" (projectId set
 // back to null) — deferred.md #41.
 export async function setTrackProject(trackId: string, projectId: string | null): Promise<Track> {
-  const track = tracks.find((t) => t.id === trackId);
-  if (!track) throw new Error(`Track ${trackId} not found`);
-  track.projectId = projectId;
-  return simulateDelay(track, 200);
+  const body = await apiFetch<TrackBody>(`/tracks/${trackId}/project`, {
+    method: 'POST',
+    body: JSON.stringify({ project_id: projectId }),
+  });
+  return toTrack(body);
 }

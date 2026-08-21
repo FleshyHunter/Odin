@@ -9,7 +9,7 @@ use futures_util::Stream;
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
-use crate::auth::middleware::AuthUser;
+use crate::auth::middleware::{begin_rls_transaction, AuthUser};
 use crate::auth::rate_limit;
 use crate::state::AppState;
 
@@ -322,6 +322,28 @@ pub struct JourneyThreadInfo {
     thread_id: Uuid,
     current_concept_title: String,
     messages: Vec<JourneyMessageInfo>,
+}
+
+/// DELETE /journeys/{journey_id} — soft delete only, mirroring
+/// study_threads.deleted_at's own "hides, never hard-deletes" contract.
+/// Deliberately does NOT touch study_threads/Track rows, subjects,
+/// canonical_concepts, or mastery_bank — journeys and Tracks are
+/// independent, deleting one must never cascade into the other.
+pub async fn delete_journey(
+    AuthUser(user_id): AuthUser,
+    State(state): State<AppState>,
+    Path(journey_id): Path<Uuid>,
+) -> Result<axum::http::StatusCode, JourneyError> {
+    let mut tx = begin_rls_transaction(&state.pool, user_id).await?;
+    let result = sqlx::query("UPDATE journeys SET deleted_at = NOW() WHERE journey_id = $1 AND deleted_at IS NULL")
+        .bind(journey_id)
+        .execute(&mut *tx)
+        .await?;
+    if result.rows_affected() == 0 {
+        return Err(JourneyError::NotFound);
+    }
+    tx.commit().await?;
+    Ok(axum::http::StatusCode::NO_CONTENT)
 }
 
 /// GET /journeys/{journey_id}/messages — hydration. `null` means no

@@ -22,6 +22,7 @@ mod memoryless;
 mod models;
 mod routes;
 mod state;
+mod tracks;
 mod uploads;
 mod voice;
 
@@ -130,6 +131,7 @@ async fn main() {
         .merge(exercises::router())
         .merge(content_flags::router())
         .merge(journeys::router())
+        .merge(tracks::router())
         .merge(voice::router())
         .layer(cors)
         .with_state(app_state);

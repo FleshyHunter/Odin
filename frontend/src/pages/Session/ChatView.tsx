@@ -6,8 +6,8 @@ import { Composer } from '../../components/conversation/Composer/Composer';
 import { DragOverlay } from '../../components/conversation/Composer/DragOverlay/DragOverlay';
 import { ActivePanel } from '../../components/active-panel/ActivePanel';
 import { MemorylessLanding } from './MemorylessLanding';
-import { useTrackMessages } from '../../hooks/useTracks';
 import { useJourneyChat } from '../../hooks/useJourneyChat';
+import { deleteJourney } from '../../api/journeys';
 import { useActivePanel, ACTIVE_PANEL_MIN_WIDTH } from '../../hooks/useActivePanel';
 import * as exercisesApi from '../../api/exercises';
 import type { Difficulty, Exercise, MasteryStatus } from '../../types';
@@ -29,21 +29,11 @@ export function ChatView() {
   } = useOutletContext<SessionOutletContext>();
   const { id: routeId } = useParams<{ id?: string }>();
   const navigate = useNavigate();
-  // deferred.md #2a: real journey-mode chat for a track that carries a
-  // real journeyId (#4/#40); the mocked hook stays as the fallback for
-  // the pre-existing seed track (journeyId: null), which has no real
-  // backend to call. Both hooks always run (React's rules of hooks don't
-  // allow conditionally calling one or the other) — only the unused
-  // one's result is discarded, same pattern already used elsewhere for
-  // an optional real-vs-mock split.
-  const mockChat = useTrackMessages(activeTrackId);
-  const journeyChat = useJourneyChat(activeTrack?.journeyId ?? null);
-  // deferred.md #79: `cancel` is now destructured and wired too — both
-  // hooks return one (a real AbortController.abort() for journeyChat,
-  // a harmless no-op for mockChat, see useTrackMessages's own comment).
-  // deferred.md #37: same treatment for the attach fields — journeyChat
-  // now has a real attachment state machine (mirrors
-  // useMemorylessChat.ts's own), mockChat has matching no-ops.
+  // deferred.md #2a: real journey-mode chat. Every real Track now always
+  // carries a real journeyId (Tracks are created eagerly with their
+  // journey together — see api/tracks.ts's createTrackFromJourney) — the
+  // old mock-chat fallback for a journeyId-less seed track is gone along
+  // with that seed track itself.
   const {
     messages,
     isSending,
@@ -58,7 +48,10 @@ export function ChatView() {
     cancelPendingFile,
     retryAttachment,
     removeAttachment,
-  } = activeTrack?.journeyId ? journeyChat : mockChat;
+  } = useJourneyChat(activeTrack?.journeyId ?? null);
+  // (useJourneyChat still takes journeyId: string | null since it also
+  // runs before activeTrack has hydrated, not because journeyId itself
+  // is ever null on a real Track.)
   const { width: panelWidth, setWidth: setPanelWidth, isOpen: isPanelOpen, toggle: togglePanel } = useActivePanel();
   const resizeHandleRef = useRef<HTMLDivElement>(null);
   const activePanelShellRef = useRef<HTMLDivElement>(null);
@@ -115,6 +108,19 @@ export function ChatView() {
     if (!activeTrackId) return;
     removeTrack(activeTrackId);
     setActiveTrackId('');
+  };
+
+  // Independent of handleDeleteTrack above — deletes only the journey
+  // (its DAG progress), never this track/conversation. No local state
+  // update needed: the track keeps showing exactly as before, since
+  // listTracks() never filters on the journey's own deleted_at.
+  const handleDeleteJourney = async () => {
+    if (!activeTrack) return;
+    try {
+      await deleteJourney(activeTrack.journeyId);
+    } catch (err) {
+      window.alert(err instanceof Error ? err.message : 'Failed to delete journey. Try again.');
+    }
   };
 
   const handlePin = () => {
@@ -257,6 +263,7 @@ export function ChatView() {
           onChangeProject={handleChangeProject}
           onRemoveFromProject={handleRemoveFromProject}
           onDelete={handleDeleteTrack}
+          onDeleteJourney={handleDeleteJourney}
           isPanelOpen={isPanelOpen}
           onTogglePanel={togglePanel}
         />
