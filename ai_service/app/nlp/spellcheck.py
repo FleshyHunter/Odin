@@ -40,6 +40,32 @@ def _is_numeric(token: Token) -> bool:
     return token.text.isdigit()
 
 
+def _is_acronym(token: Token) -> bool:
+    # Same failure mode as #52, different token shape: an unrecognized
+    # ALL-CAPS token (SSSP, DFS, CPU...) has no entry in symspellpy's
+    # lowercase-English-word dictionary either, so at MAX_EDIT_DISTANCE=2
+    # it gets silently "corrected" to the nearest real word instead of
+    # left alone — confirmed live: "SSSP" -> "shop". Genuine typos are
+    # essentially never all-caps, so this is a safe, narrow heuristic —
+    # not a replacement for Step 2's vocabulary-based protection
+    # (get_protected_spans), which only covers terms already in a
+    # specific subject's known_terms and does nothing in memoryless
+    # mode (empty vocabulary) or for domain acronyms no subject has
+    # ever declared. length >= 2 only — a lone capital letter ("I") is
+    # both common, correctly-spelled English on its own and genuinely
+    # ambiguous as "acronym vs. real word", so it stays correctable.
+    #
+    # Strips one trailing lowercase "s" before checking — plural
+    # acronyms ("APIs", "CPUs", "SSSPs") are common enough in casual
+    # phrasing that a strict all-caps check would otherwise miss them
+    # (isupper() is False the moment any cased character is lowercase).
+    # A genuine acronym never ends in a literal lowercase "s" on its
+    # own (that would make it lowercase, not all-caps), so this can't
+    # misfire on the acronym itself — only ever strips a real plural.
+    core = token.text[:-1] if token.text.endswith("s") else token.text
+    return len(core) >= 2 and core.isupper()
+
+
 def correct_spelling(text: str, protected_spans: list[tuple[int, int]]) -> str:
     """Step 3 — general English spelling correction, skipping any span
     Step 2 marked as protected domain vocabulary.
@@ -57,7 +83,7 @@ def correct_spelling(text: str, protected_spans: list[tuple[int, int]]) -> str:
     last_end = 0
     for token in tokens:
         pieces.append(text[last_end : token.start])
-        if _is_protected(token, protected_spans) or _is_numeric(token):
+        if _is_protected(token, protected_spans) or _is_numeric(token) or _is_acronym(token):
             pieces.append(token.text)
         else:
             suggestions = sym_spell.lookup(
