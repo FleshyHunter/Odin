@@ -202,10 +202,24 @@ pub async fn start_turn_stream(
              but you don't have to:\n{context}"
         ));
     }
+    // deferred.md #91: tags, not just a "Student's question:" prose
+    // label — found live that the model has no reliable way to tell
+    // injected reference material apart from the student's own message
+    // in one concatenated blob (a document's own content, e.g. an
+    // unusual test marker phrase, got misjudged as the STUDENT writing
+    // non-English, refusing a plainly-English question). _SYSTEM_PROMPT
+    // (ai_service/app/generation/router.py) now points its language
+    // check at these exact tag names — keep both in sync if either
+    // changes. No wrapping needed when there's no reference material at
+    // all — nothing for the model to conflate the query with.
     let prompt = if context_blocks.is_empty() {
         analysis.cleaned_query.clone()
     } else {
-        format!("{}\n\nStudent's question: {}", context_blocks.join("\n\n"), analysis.cleaned_query)
+        format!(
+            "<reference_material>\n{}\n</reference_material>\n\n<student_message>\n{}\n</student_message>",
+            context_blocks.join("\n\n"),
+            analysis.cleaned_query
+        )
     };
 
     let history = build_history(&thread.messages);

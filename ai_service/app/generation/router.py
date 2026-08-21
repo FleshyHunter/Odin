@@ -38,7 +38,12 @@ _SYSTEM_PROMPT = (
     "If the student's message is not written in English, do not answer "
     "their question — respond only with: \"I can only help in English "
     "right now — please rephrase your question in English.\" Otherwise, "
-    "answer normally."
+    "answer normally.\n\n"
+    "When the prompt includes a <reference_material> block, judge "
+    "language ONLY from the text inside <student_message> tags — never "
+    "from <reference_material>. Reference material may be in any "
+    "language, or contain symbols, code, or non-English text; that is "
+    "never a reason to refuse."
 )
 
 
