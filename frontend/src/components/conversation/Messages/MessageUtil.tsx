@@ -94,7 +94,9 @@ export function MessageUtil({ side, text, timestamp }: MessageUtilProps) {
         </button>
       </Tooltip>
       <Tooltip label={formatFullTimestamp(timestamp)}>
-        <span className="msg-util-timestamp">{formatShortTimestamp(timestamp)}</span>
+        <span className="msg-util-timestamp" tabIndex={0}>
+          {formatShortTimestamp(timestamp)}
+        </span>
       </Tooltip>
     </div>
   );

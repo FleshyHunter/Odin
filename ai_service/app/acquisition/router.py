@@ -1,5 +1,7 @@
+import json
+
 from fastapi import APIRouter, HTTPException
-from pydantic import BaseModel
+from pydantic import BaseModel, ValidationError
 
 from app.acquisition.dify_client import DifyError, DifyNotConfigured
 from app.acquisition.models import (
@@ -137,6 +139,12 @@ async def classify_gap_endpoint(request: ClassifyGapRequest) -> GapClassificatio
         )
     except DifyError as e:
         raise _dify_error_to_http(e) from e
+    except (ValidationError, json.JSONDecodeError) as e:
+        # classify_gap()'s own docstring: a malformed LLM response is
+        # expected to reach the caller as one of these — analyze_input's
+        # in-process caller already catches it, but this endpoint is also
+        # reachable over real HTTP, which had no mapping for it at all.
+        raise HTTPException(status_code=422, detail=str(e)) from e
 
 
 @router.post("/fold_concept", response_model=FoldedConcept)
@@ -149,3 +157,6 @@ async def fold_concept_endpoint(request: FoldConceptRequest) -> FoldedConcept:
         )
     except DifyError as e:
         raise _dify_error_to_http(e) from e
+    except (ValidationError, json.JSONDecodeError) as e:
+        # Same reasoning as classify_gap_endpoint above.
+        raise HTTPException(status_code=422, detail=str(e)) from e
