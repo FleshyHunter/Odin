@@ -1,0 +1,26 @@
+/* Moved out of pages/Session/Session.css (2026-08-22 split) —
+   TrackHeader.tsx's own bar (title row + concept pill + panel toggle).
+   Note: TrackHeader renders <TrackMenu> directly and also uses
+   .menu-trigger itself (its own panel-toggle button) — that class lives
+   in trackMenu.css instead, imported by TrackMenu.tsx; since TrackHeader
+   always imports the TrackMenu component, that stylesheet is already in
+   the bundle by the time this file's own .menu-trigger.panel-toggle
+   button renders. */
+
+.track-header {
+  display: flex; align-items: center; justify-content: space-between;
+  padding: 1rem 1.75rem; border-bottom: 1px solid var(--border);
+}
+
+.track-header h2 {
+  font-size: 1.1rem; font-weight: 500; margin: 0;
+}
+
+.track-meta {
+  display: flex; align-items: center; gap: 0.5rem;
+  font-size: 0.78rem; color: var(--text-muted);
+}
+.concept-pill {
+  background: var(--surface); border: 1px solid var(--border);
+  padding: 0.25rem 0.6rem; border-radius: 999px; color: var(--text-secondary);
+}

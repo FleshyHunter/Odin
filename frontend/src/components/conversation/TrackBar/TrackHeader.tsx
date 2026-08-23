@@ -1,4 +1,5 @@
 import { TrackMenu } from './TrackMenu';
+import './trackHeader.css';
 
 interface TrackHeaderProps {
   title: string;

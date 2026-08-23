@@ -1,0 +1,42 @@
+/* Moved out of pages/Session/Session.css (2026-08-22 split) —
+   TrackMenu.tsx's own trigger button + dropdown. .menu-trigger is used
+   both by this component's own trigger button and, via the
+   .panel-toggle modifier, by TrackHeader.tsx's separate panel-toggle
+   button (that component always renders <TrackMenu>, so this stylesheet
+   is already loaded by the time it needs the class). */
+
+.track-title-group { position: relative; display: flex; align-items: center; gap: 0.3rem; }
+
+.menu-trigger {
+  background: none; border: none; color: var(--text-muted);
+  display: flex; align-items: center; padding: 0.3rem;
+  border-radius: 6px; transition: color 0.15s ease, background 0.15s ease;
+}
+.menu-trigger:hover { color: var(--text-secondary); background: var(--surface); }
+.menu-trigger:focus-visible { outline: 2px solid var(--focus); outline-offset: 1px; }
+.menu-trigger.panel-toggle,
+.menu-trigger.panel-toggle:hover { color: var(--text); }
+
+.track-menu {
+  display: none; position: absolute; top: calc(100% + 6px); left: 0;
+  background: var(--surface-raised); border: 1px solid var(--border);
+  border-radius: 10px; padding: 0.4rem; min-width: 210px;
+  box-shadow: 0 8px 24px rgba(0,0,0,0.4); z-index: 20;
+}
+.track-menu.open { display: block; }
+
+.menu-item {
+  display: flex; align-items: center; gap: 0.6rem; width: 100%;
+  background: none; border: none; color: var(--text);
+  font-size: 0.85rem; padding: 0.5rem 0.6rem; border-radius: 7px;
+  text-align: left; transition: background 0.12s ease;
+}
+.menu-item svg { flex-shrink: 0; color: var(--text-muted); }
+.menu-item:hover { background: var(--surface); }
+.menu-item:focus-visible { outline: 2px solid var(--focus); outline-offset: -2px; }
+.menu-item span { flex: 1; }
+.menu-item.destructive { color: #E08585; }
+.menu-item.destructive svg { color: #E08585; }
+.menu-item.destructive:hover { background: rgba(224, 133, 133, 0.1); }
+
+.menu-divider { height: 1px; background: var(--border); margin: 0.35rem 0.2rem; }

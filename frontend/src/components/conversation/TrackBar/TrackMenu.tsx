@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
+import './trackMenu.css';
 
 interface TrackMenuProps {
   title: string;
