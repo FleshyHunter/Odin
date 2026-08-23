@@ -4,6 +4,7 @@ import { DragOverlay } from '../../components/conversation/Composer/DragOverlay/
 import { MessageList } from '../../components/conversation/Messages/MessageList';
 import { TrackHeader } from '../../components/conversation/TrackBar/TrackHeader';
 import { useMemorylessChat } from '../../hooks/useMemorylessChat';
+import './memorylessLanding.css';
 
 interface MemorylessLandingProps {
   // deferred.md #74: accepts an optional thread_id now — the "Start a

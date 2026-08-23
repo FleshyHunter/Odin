@@ -1,0 +1,58 @@
+/* Moved out of Session.css (2026-08-22 split) — MemorylessLanding.tsx's
+   own empty/no-active-track state. */
+
+.empty-main {
+  display: flex; flex-direction: column;
+  align-items: center; justify-content: center;
+  flex: 1;
+  min-width: 0;
+  padding: 2rem; text-align: center;
+  /* Anchors DragOverlay's position: absolute; inset: 0 — see MemorylessLanding.tsx. */
+  position: relative;
+}
+
+/* Same box formula as the composer below them (and .messages-inner in
+   the real chat view): width:100% up to a 780px cap, plus the same
+   1.125rem inset — so the heading/subtitle scale with the composer as
+   the viewport changes instead of the paragraph being locked to its own
+   unrelated fixed width (was 380px) while the composer scales
+   independently. .empty-main's own align-items:center still centers
+   each of these within that shared box. */
+.empty-main h1 {
+  width: 100%; max-width: 780px; padding-inline: 1.125rem;
+  font-size: 1.8rem; font-weight: 500; margin: 0 0 0.5rem;
+}
+.empty-main p {
+  width: 100%; max-width: 480px; padding-inline: 1.125rem;
+  font-size: 0.92rem; color: var(--text-secondary); margin: 0 0 2.25rem;
+}
+
+/* .ask-bar/.ask-send removed — empty-main now reuses the shared
+   Composer (components/conversation/Composer/composer.css) instead of
+   its own hand-rolled input. Composer's default border-top/padding are
+   meant for sitting below a message list, which doesn't exist here, so
+   they're overridden for this specific context. Width itself is
+   deliberately NOT overridden here anymore — the landing composer used
+   to cap out narrower (760px x 80% frame ~= 608px) than the in-chat one,
+   independently tuned against real screenshots; per explicit direction
+   this now shares composer.css's base 780px/1.125rem box instead, so
+   the landing and in-chat composers are always the same width. min-width
+   stays as the one still-relevant guard: .empty-main itself is
+   min-width:0 (can shrink to nothing alongside the sidebar), so without
+   this floor the composer could get too cramped on a narrow window. */
+.empty-main .composer {
+  border-top: none;
+  padding: 0;
+  min-width: 320px;
+}
+
+.start-track-pill {
+  margin-top: 1.4rem;
+  display: inline-flex; align-items: center; gap: 0.45rem;
+  background: none; border: 1px dashed var(--border-strong);
+  color: var(--text-secondary); border-radius: 999px;
+  padding: 0.5rem 1rem; font-size: 0.85rem;
+  transition: border-color 0.15s ease, color 0.15s ease;
+}
+.start-track-pill:hover { border-color: var(--glow); color: var(--text); }
+.start-track-pill:focus-visible { outline: 2px solid var(--focus); outline-offset: 2px; }

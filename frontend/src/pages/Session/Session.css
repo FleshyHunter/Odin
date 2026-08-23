@@ -1,7 +1,11 @@
 /* Ported from odin_session.html. :root tokens, base reset (*, html/body,
    .display, button/input font-family, scrollbar styling) now live
-   globally in global.css — only this page's own layout/component
-   rules remain here. */
+   globally in global.css — only this page's own layout rules remain
+   here. Everything else has migrated out to the component that actually
+   owns it (2026-08-22 split, see each block's own note below) — this
+   file used to hold six other components' styling despite none of them
+   importing it directly, which meant every one of them silently
+   depended on ChatView.tsx happening to load Session.css first. */
 
 /* Flexbox rather than grid: the sidebar's own width transitions (see
    sidebar.css's .sidebar-collapsed) to animate its collapse, and a flex
@@ -16,29 +20,15 @@
   height: 100vh;
 }
 
-/* ---------------- Sidebar ----------------
-   .sidebar / .sidebar-spacer / .sidebar-wordmark moved to
-   components/sidebar/Sidebar/sidebar.css; .nav-item / .recent-item moved
-   to components/sidebar/NavItem/navItem.css. "New track" is a NavItem
-   like any other nav row now (no separate bespoke button component). */
-
-.session-page .section-label {
-  font-size: 0.7rem; color: var(--text-muted);
-  text-transform: uppercase; letter-spacing: 0.04em;
-  margin: 1.1rem 0.6rem 0.35rem;
-}
-
-.session-page .empty-recents {
-  padding: 0.4rem 0.6rem;
-  font-size: 0.79rem; color: var(--text-muted);
-  line-height: 1.5;
-  margin: 0;
-}
-
-.session-page .sidebar-spacer { flex: 1; }
-
-/* .profile-switcher moved to components/sidebar/Profile/profile.css
-   .avatar moved to components/ui/Avatar/avatar.css */
+/* .section-label / .empty-recents moved to
+   components/sidebar/Sidebar/sidebar.css (2026-08-22 split, along with a
+   real fix — see that file's own comment on the collision this used to
+   have with NodeDetail's identically-named class). .sidebar-spacer was
+   already duplicated there (dead here); .sidebar / .sidebar-wordmark
+   already lived there too. .nav-item / .recent-item already lived in
+   components/sidebar/NavItem/navItem.css. .profile-switcher lives in
+   components/sidebar/Profile/profile.css, .avatar in
+   components/ui/Avatar/avatar.css. */
 
 /* ---------------- Conversation ---------------- */
 
@@ -98,117 +88,14 @@
   transition: none;
 }
 
-/* ---------------- Empty landing (no active track yet) ---------------- */
+/* .empty-main / .start-track-pill moved to
+   pages/Session/memorylessLanding.css, imported by MemorylessLanding.tsx
+   itself (2026-08-22 split). */
 
-.session-page .empty-main {
-  display: flex; flex-direction: column;
-  align-items: center; justify-content: center;
-  flex: 1;
-  min-width: 0;
-  padding: 2rem; text-align: center;
-  /* Anchors DragOverlay's position: absolute; inset: 0 — see MemorylessLanding.tsx. */
-  position: relative;
-}
-
-/* Same box formula as the composer below them (and .messages-inner in
-   the real chat view): width:100% up to a 780px cap, plus the same
-   1.125rem inset — so the heading/subtitle scale with the composer as
-   the viewport changes instead of the paragraph being locked to its own
-   unrelated fixed width (was 380px) while the composer scales
-   independently. .empty-main's own align-items:center still centers
-   each of these within that shared box. */
-.session-page .empty-main h1 {
-  width: 100%; max-width: 780px; padding-inline: 1.125rem;
-  font-size: 1.8rem; font-weight: 500; margin: 0 0 0.5rem;
-}
-.session-page .empty-main p {
-  width: 100%; max-width: 480px; padding-inline: 1.125rem;
-  font-size: 0.92rem; color: var(--text-secondary); margin: 0 0 2.25rem;
-}
-
-/* .ask-bar/.ask-send removed — empty-main now reuses the shared
-   Composer (components/conversation/Composer/composer.css) instead of
-   its own hand-rolled input. Composer's default border-top/padding are
-   meant for sitting below a message list, which doesn't exist here, so
-   they're overridden for this specific context. Width itself is
-   deliberately NOT overridden here anymore — the landing composer used
-   to cap out narrower (760px x 80% frame ~= 608px) than the in-chat one,
-   independently tuned against real screenshots; per explicit direction
-   this now shares composer.css's base 780px/1.125rem box instead, so
-   the landing and in-chat composers are always the same width. min-width
-   stays as the one still-relevant guard: .empty-main itself is
-   min-width:0 (can shrink to nothing alongside the sidebar), so without
-   this floor the composer could get too cramped on a narrow window. */
-.session-page .empty-main .composer {
-  border-top: none;
-  padding: 0;
-  min-width: 320px;
-}
-
-.session-page .start-track-pill {
-  margin-top: 1.4rem;
-  display: inline-flex; align-items: center; gap: 0.45rem;
-  background: none; border: 1px dashed var(--border-strong);
-  color: var(--text-secondary); border-radius: 999px;
-  padding: 0.5rem 1rem; font-size: 0.85rem;
-  transition: border-color 0.15s ease, color 0.15s ease;
-}
-.session-page .start-track-pill:hover { border-color: var(--glow); color: var(--text); }
-.session-page .start-track-pill:focus-visible { outline: 2px solid var(--focus); outline-offset: 2px; }
-
-.session-page .track-header {
-  display: flex; align-items: center; justify-content: space-between;
-  padding: 1rem 1.75rem; border-bottom: 1px solid var(--border);
-}
-
-.session-page .track-header h2 {
-  font-size: 1.1rem; font-weight: 500; margin: 0;
-}
-
-.session-page .track-title-group { position: relative; display: flex; align-items: center; gap: 0.3rem; }
-
-.session-page .menu-trigger {
-  background: none; border: none; color: var(--text-muted);
-  display: flex; align-items: center; padding: 0.3rem;
-  border-radius: 6px; transition: color 0.15s ease, background 0.15s ease;
-}
-.session-page .menu-trigger:hover { color: var(--text-secondary); background: var(--surface); }
-.session-page .menu-trigger:focus-visible { outline: 2px solid var(--focus); outline-offset: 1px; }
-.session-page .menu-trigger.panel-toggle,
-.session-page .menu-trigger.panel-toggle:hover { color: var(--text); }
-
-.session-page .track-menu {
-  display: none; position: absolute; top: calc(100% + 6px); left: 0;
-  background: var(--surface-raised); border: 1px solid var(--border);
-  border-radius: 10px; padding: 0.4rem; min-width: 210px;
-  box-shadow: 0 8px 24px rgba(0,0,0,0.4); z-index: 20;
-}
-.session-page .track-menu.open { display: block; }
-
-.session-page .menu-item {
-  display: flex; align-items: center; gap: 0.6rem; width: 100%;
-  background: none; border: none; color: var(--text);
-  font-size: 0.85rem; padding: 0.5rem 0.6rem; border-radius: 7px;
-  text-align: left; transition: background 0.12s ease;
-}
-.session-page .menu-item svg { flex-shrink: 0; color: var(--text-muted); }
-.session-page .menu-item:hover { background: var(--surface); }
-.session-page .menu-item:focus-visible { outline: 2px solid var(--focus); outline-offset: -2px; }
-.session-page .menu-item span { flex: 1; }
-.session-page .menu-item.destructive { color: #E08585; }
-.session-page .menu-item.destructive svg { color: #E08585; }
-.session-page .menu-item.destructive:hover { background: rgba(224, 133, 133, 0.1); }
-
-.session-page .menu-divider { height: 1px; background: var(--border); margin: 0.35rem 0.2rem; }
-
-.session-page .track-meta {
-  display: flex; align-items: center; gap: 0.5rem;
-  font-size: 0.78rem; color: var(--text-muted);
-}
-.session-page .concept-pill {
-  background: var(--surface); border: 1px solid var(--border);
-  padding: 0.25rem 0.6rem; border-radius: 999px; color: var(--text-secondary);
-}
+/* .track-header / .track-header h2 / .track-meta / .concept-pill moved
+   to components/conversation/TrackBar/trackHeader.css; .track-title-group
+   / .menu-trigger / .track-menu / .menu-item / .menu-divider moved to
+   components/conversation/TrackBar/trackMenu.css (2026-08-22 split). */
 
 /* .messages moved to components/conversation/Messages/messageList.css;
    .msg/.bubble/.term moved to
@@ -219,191 +106,34 @@
    components/conversation/Composer/composer.css, imported by the
    component itself. */
 
-/* ---------------- Active object panel ---------------- */
+/* .active-panel / .panel-tabs / .tab moved to
+   components/active-panel/activePanel.css. .exercise-card /
+   .difficulty-tag / .flag-button / .flag-status / .exercise-q /
+   .answer-field / .qa-toggle / .qa-btn / .answer-reveal moved to
+   components/active-panel/exerciseCard.css (.submit-btn had already
+   moved to components/ui/Button/button.css). .mastery-block /
+   .mastery-label / .mastery-bar / .mastery-fill moved to
+   components/active-panel/masteryBar.css. .back-link / .node-title /
+   .tier-row / .tier-btn moved to components/active-panel/nodeDetail.css
+   — along with the old .section-label, renamed .node-section-label there
+   to fix a real, silent collision with the sidebar's OWN .section-label
+   (see sidebar.css's own note on it). .attempt-list moved to
+   components/active-panel/attemptHistoryList.css; .attempt-row and
+   everything under it moved to
+   components/active-panel/attemptHistoryRow.css. (All 2026-08-22 split.) */
 
-.session-page .active-panel {
-  background: var(--bg-pane); border-left: 1px solid var(--border);
-  display: flex; flex-direction: column;
-  padding: 1rem 1.1rem;
-  /* Width itself comes from an inline style (ChatView.tsx, driven by
-     useActivePanel's persisted state) — flex-grow:0 so it never silently
-     grows to fill extra space on its own, flex-shrink:1 + min-width so it
-     CAN compress down to its floor if the stored width doesn't fit the
-     current viewport (e.g. resized wide on a bigger screen, then opened
-     on a narrower one). */
-  flex-grow: 0;
-  flex-shrink: 1;
-  min-width: 320px;
-  overflow: hidden;
-}
-
-.session-page .panel-tabs {
-  display: flex; gap: 0.3rem; margin-bottom: 1.1rem;
-  background: var(--surface); border-radius: 8px; padding: 3px;
-}
-.session-page .tab {
-  flex: 1; background: none; border: none; color: var(--text-muted);
-  font-size: 0.82rem; font-weight: 500; padding: 0.4rem 0;
-  border-radius: 6px; transition: background 0.15s ease, color 0.15s ease;
-}
-.session-page .tab.active { background: var(--surface-raised); color: var(--text); }
-.session-page .tab:focus-visible { outline: 2px solid var(--focus); outline-offset: 1px; }
-
-.session-page .exercise-card {
-  background: var(--surface); border: 1px solid var(--border);
-  border-radius: 12px; padding: 1.1rem;
-}
-
-.session-page .exercise-card-top {
-  display: flex; align-items: center; justify-content: space-between;
-  margin-bottom: 0.9rem;
-}
-
-.session-page .difficulty-tag {
-  display: inline-block; font-size: 0.7rem; font-weight: 600;
-  text-transform: uppercase; letter-spacing: 0.03em;
-  color: var(--glow); background: var(--glow-dim);
-  padding: 0.2rem 0.55rem; border-radius: 999px;
-}
-
-.session-page .flag-button {
-  display: flex; align-items: center; gap: 0.3rem;
-  color: var(--text-muted); background: transparent; border: 0;
-  font-size: 0.75rem; padding: 0.2rem 0.3rem; border-radius: 6px;
-  transition: color 0.15s ease, background 0.15s ease;
-}
-.session-page .flag-button:hover:not(:disabled) {
-  color: var(--text-secondary); background: var(--surface);
-}
-.session-page .flag-button:focus-visible {
-  outline: 2px solid var(--focus); outline-offset: 2px;
-}
-.session-page .flag-status {
-  font-size: 0.75rem; color: var(--text-muted);
-}
-.session-page .flag-status-error {
-  color: var(--error);
-}
-
-.session-page .exercise-q {
-  font-size: 0.92rem; line-height: 1.5; margin: 0 0 1rem; color: var(--text);
-}
-
-.session-page .answer-field {
-  width: 100%; background: var(--bg-pane); border: 1px solid var(--border);
-  border-radius: 8px; padding: 0.6rem 0.75rem; color: var(--text);
-  font-size: 0.9rem; margin-bottom: 0.85rem; transition: border-color 0.15s ease;
-}
-.session-page .answer-field::placeholder { color: var(--text-muted); }
-.session-page .answer-field:focus-visible { outline: none; border-color: var(--glow); }
-
-/* .submit-btn moved to components/ui/Button/button.css (.btn-primary) */
-
-.session-page .mastery-block { margin-top: 1.4rem; padding: 0 0.2rem; }
-.session-page .mastery-label {
-  display: flex; justify-content: space-between;
-  font-size: 0.78rem; color: var(--text-muted); margin-bottom: 0.4rem;
-}
-.session-page .mastery-bar {
-  height: 5px; background: var(--surface); border-radius: 999px; overflow: hidden;
-}
-.session-page .mastery-fill {
-  height: 100%; background: var(--glow); border-radius: 999px;
-  transition: width 0.2s ease;
-}
-
+/* .panel-footnote deliberately STAYS here, not moved — it's a genuinely
+   shared utility with no single owner: used directly by
+   MessageList.tsx's empty state, ActivePanel.tsx's own empty state, and
+   both MasteryBar.tsx and AttemptHistoryList.tsx's empty states. Moving
+   it into any one of those components' new CSS files would either
+   duplicate it or leave the others depending on an unrelated component's
+   stylesheet happening to load first — the exact bug class this whole
+   split exists to remove elsewhere. */
 .session-page .panel-footnote {
   margin-top: 1.1rem; font-size: 0.76rem; color: var(--text-muted);
   line-height: 1.5;
 }
-
-/* ---- Map: node detail (tiers + history) ---- */
-.session-page .back-link {
-  display: inline-flex; align-items: center; gap: 0.3rem; background: none; border: none;
-  color: var(--text-secondary); font-size: 0.78rem; cursor: pointer; padding: 0.2rem 0;
-  margin-bottom: 0.9rem; font-family: inherit;
-}
-.session-page .back-link:hover { color: var(--text); }
-.session-page .back-link:focus-visible { outline: 2px solid var(--focus); outline-offset: 2px; }
-
-.session-page .node-title { font-family: 'Fraunces', serif; font-size: 1.15rem; margin: 0 0 1.1rem; color: var(--text); }
-
-.session-page .section-label {
-  font-size: 0.7rem; letter-spacing: 0.05em; text-transform: uppercase; color: var(--text-muted);
-  font-weight: 600; margin: 0 0 0.6rem;
-}
-
-.session-page .tier-row { display: flex; gap: 0.5rem; margin-bottom: 1.6rem; }
-.session-page .tier-btn {
-  flex: 1; padding: 0.55rem 0.4rem; border-radius: 8px; border: 1px solid var(--border);
-  background: var(--surface); color: var(--text); font-size: 0.78rem; font-weight: 600;
-  cursor: pointer; text-align: center; transition: border-color 0.15s ease, background 0.15s ease;
-  font-family: inherit;
-}
-.session-page .tier-btn:hover { border-color: var(--glow); background: var(--surface-raised); }
-.session-page .tier-btn:focus-visible { outline: 2px solid var(--focus); outline-offset: 2px; }
-.session-page .tier-btn:disabled { opacity: 0.5; cursor: default; }
-
-/* Row skeleton mirrors kiv-row/.kiv-tag/.kiv-meta's visual pattern
-   (deliberately, not a shared class — Attempt and KivItem are different
-   data/components, see AttemptHistoryRow's own comment) — no mastery-bar
-   equivalent, a single attempt is correct/incorrect, not a continuous score. */
-.session-page .attempt-list { display: flex; flex-direction: column; border-top: 1px solid var(--border); }
-.session-page .attempt-row { padding: 0.85rem 0.1rem; border-bottom: 1px solid var(--border); }
-.session-page .attempt-row-main { min-width: 0; }
-.session-page .attempt-row-top {
-  display: flex; align-items: center; gap: 0.5rem; margin-bottom: 0.25rem; flex-wrap: wrap;
-}
-.session-page .attempt-title { font-size: 0.9rem; font-weight: 500; color: var(--text); }
-.session-page .attempt-tag {
-  font-size: 0.65rem; font-weight: 600; text-transform: uppercase; letter-spacing: 0.03em;
-  padding: 0.12rem 0.45rem; border-radius: 999px; flex-shrink: 0;
-}
-.session-page .attempt-tag-correct { color: var(--success); background: var(--success-dim); }
-.session-page .attempt-tag-incorrect { color: var(--error); background: var(--error-dim); }
-.session-page .attempt-meta { font-size: 0.76rem; color: var(--text-muted); }
-
-/* Fade + "show more": collapsed state clips to 2 lines with a gradient
-   fade into the row's own background (not a plain ellipsis — reads
-   softer against a serif question sentence than a hard cut-off "..."). */
-.session-page .attempt-desc {
-  position: relative; font-size: 0.82rem; line-height: 1.45; color: var(--text-secondary);
-  margin-top: 0.45rem; max-height: 2.6em; overflow: hidden;
-}
-.session-page .attempt-desc::after {
-  content: ''; position: absolute; left: 0; right: 0; bottom: 0; height: 1.3em;
-  background: linear-gradient(to bottom, transparent, var(--bg-pane));
-}
-.session-page .attempt-desc.expanded { max-height: none; }
-.session-page .attempt-desc.expanded::after { display: none; }
-.session-page .attempt-toggle {
-  background: none; border: none; color: var(--glow); font-size: 0.74rem; font-weight: 600;
-  cursor: pointer; padding: 0.35rem 0 0; font-family: inherit;
-}
-.session-page .attempt-toggle:hover { text-decoration: underline; }
-.session-page .attempt-toggle:focus-visible { outline: 2px solid var(--focus); outline-offset: 2px; }
-
-/* ---- Now: exercise Question/Answer toggle ---- */
-.session-page .qa-toggle { display: flex; gap: 0.4rem; margin-bottom: 0.85rem; }
-.session-page .qa-btn {
-  padding: 0.35rem 0.75rem; border-radius: 6px; border: 1px solid var(--border);
-  background: transparent; color: var(--text-secondary); font-size: 0.74rem; font-weight: 600;
-  cursor: pointer; font-family: inherit; transition: background 0.15s ease, color 0.15s ease;
-}
-.session-page .qa-btn.qa-active { background: var(--surface); color: var(--text); border-color: var(--border-strong); }
-.session-page .qa-btn:disabled { opacity: 0.4; cursor: not-allowed; }
-.session-page .qa-btn:focus-visible { outline: 2px solid var(--focus); outline-offset: 2px; }
-
-.session-page .answer-reveal {
-  background: var(--success-dim); border: 1px solid var(--success);
-  border-radius: 8px; padding: 0.75rem 0.85rem; font-size: 0.85rem; color: var(--text); line-height: 1.5;
-}
-.session-page .answer-reveal.incorrect { background: var(--error-dim); border-color: var(--error); }
-.session-page .answer-reveal .answer-reveal-label {
-  font-weight: 700; font-size: 0.7rem; text-transform: uppercase; letter-spacing: 0.04em;
-  margin-bottom: 0.3rem; color: var(--success);
-}
-.session-page .answer-reveal.incorrect .answer-reveal-label { color: var(--error); }
 
 @media (max-width: 1100px) {
   /* .active-panel isn't listed here anymore — its width comes from an
