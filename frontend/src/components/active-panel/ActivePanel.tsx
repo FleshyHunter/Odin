@@ -5,6 +5,7 @@ import { Roadmap } from '../roadmap/Roadmap';
 import { ExerciseCard } from './ExerciseCard';
 import { MasteryBar } from './MasteryBar';
 import { NodeDetail } from './NodeDetail';
+import './activePanel.css';
 
 type PanelTab = 'now' | 'map' | 'kiv';
 

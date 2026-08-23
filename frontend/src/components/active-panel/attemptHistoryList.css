@@ -1,0 +1,8 @@
+/* Moved out of pages/Session/Session.css (2026-08-22 split). Same
+   split shape as Messages/messageList.css + messageBubble.css: the list
+   wrapper here, each row's own styling in attemptHistoryRow.css. The
+   empty-state line ("No attempts yet on this concept") uses
+   .panel-footnote, which deliberately stays in Session.css as a shared
+   utility — see that file's own comment. */
+
+.attempt-list { display: flex; flex-direction: column; border-top: 1px solid var(--border); }

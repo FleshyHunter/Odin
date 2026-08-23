@@ -1,0 +1,40 @@
+/* Moved out of pages/Session/Session.css (2026-08-22 split). Row
+   skeleton mirrors kiv-row/.kiv-tag/.kiv-meta's visual pattern
+   (deliberately, not a shared class — Attempt and KivItem are different
+   data/components, see AttemptHistoryRow.tsx's own comment) — no
+   mastery-bar equivalent, a single attempt is correct/incorrect, not a
+   continuous score. */
+
+.attempt-row { padding: 0.85rem 0.1rem; border-bottom: 1px solid var(--border); }
+.attempt-row-main { min-width: 0; }
+.attempt-row-top {
+  display: flex; align-items: center; gap: 0.5rem; margin-bottom: 0.25rem; flex-wrap: wrap;
+}
+.attempt-title { font-size: 0.9rem; font-weight: 500; color: var(--text); }
+.attempt-tag {
+  font-size: 0.65rem; font-weight: 600; text-transform: uppercase; letter-spacing: 0.03em;
+  padding: 0.12rem 0.45rem; border-radius: 999px; flex-shrink: 0;
+}
+.attempt-tag-correct { color: var(--success); background: var(--success-dim); }
+.attempt-tag-incorrect { color: var(--error); background: var(--error-dim); }
+.attempt-meta { font-size: 0.76rem; color: var(--text-muted); }
+
+/* Fade + "show more": collapsed state clips to 2 lines with a gradient
+   fade into the row's own background (not a plain ellipsis — reads
+   softer against a serif question sentence than a hard cut-off "..."). */
+.attempt-desc {
+  position: relative; font-size: 0.82rem; line-height: 1.45; color: var(--text-secondary);
+  margin-top: 0.45rem; max-height: 2.6em; overflow: hidden;
+}
+.attempt-desc::after {
+  content: ''; position: absolute; left: 0; right: 0; bottom: 0; height: 1.3em;
+  background: linear-gradient(to bottom, transparent, var(--bg-pane));
+}
+.attempt-desc.expanded { max-height: none; }
+.attempt-desc.expanded::after { display: none; }
+.attempt-toggle {
+  background: none; border: none; color: var(--glow); font-size: 0.74rem; font-weight: 600;
+  cursor: pointer; padding: 0.35rem 0 0; font-family: inherit;
+}
+.attempt-toggle:hover { text-decoration: underline; }
+.attempt-toggle:focus-visible { outline: 2px solid var(--focus); outline-offset: 2px; }

@@ -1,3 +1,5 @@
+import './masteryBar.css';
+
 interface MasteryBarProps {
   conceptTitle: string;
   masteryScore: number; // 0-1, mastery_bank.mastery_score

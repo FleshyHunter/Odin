@@ -1,0 +1,34 @@
+/* Moved out of pages/Session/Session.css (2026-08-22 split) — the panel
+   shell + tab bar are ActivePanel.tsx's own concern. Note: .panel-footnote
+   deliberately stays in Session.css, not here — it's shared with
+   MessageList.tsx (a sibling of ActivePanel, not a descendant), so it
+   can't move into any one component's file without duplicating it or
+   breaking that other consumer. See Session.css's own comment. */
+
+.active-panel {
+  background: var(--bg-pane); border-left: 1px solid var(--border);
+  display: flex; flex-direction: column;
+  padding: 1rem 1.1rem;
+  /* Width itself comes from an inline style (ChatView.tsx, driven by
+     useActivePanel's persisted state) — flex-grow:0 so it never silently
+     grows to fill extra space on its own, flex-shrink:1 + min-width so it
+     CAN compress down to its floor if the stored width doesn't fit the
+     current viewport (e.g. resized wide on a bigger screen, then opened
+     on a narrower one). */
+  flex-grow: 0;
+  flex-shrink: 1;
+  min-width: 320px;
+  overflow: hidden;
+}
+
+.panel-tabs {
+  display: flex; gap: 0.3rem; margin-bottom: 1.1rem;
+  background: var(--surface); border-radius: 8px; padding: 3px;
+}
+.tab {
+  flex: 1; background: none; border: none; color: var(--text-muted);
+  font-size: 0.82rem; font-weight: 500; padding: 0.4rem 0;
+  border-radius: 6px; transition: background 0.15s ease, color 0.15s ease;
+}
+.tab.active { background: var(--surface-raised); color: var(--text); }
+.tab:focus-visible { outline: 2px solid var(--focus); outline-offset: 1px; }

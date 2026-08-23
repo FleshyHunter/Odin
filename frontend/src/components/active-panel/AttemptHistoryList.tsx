@@ -1,5 +1,6 @@
 import type { Attempt } from '../../types';
 import { AttemptHistoryRow } from './AttemptHistoryRow';
+import './attemptHistoryList.css';
 
 interface AttemptHistoryListProps {
   attempts: Attempt[];

@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react';
 import type { Exercise, SubmitAnswerResult } from '../../types';
 import { Button } from '../ui/Button/Button';
 import * as contentFlagsApi from '../../api/contentFlags';
+import './exerciseCard.css';
 
 interface ExerciseCardProps {
   exercise: Exercise;

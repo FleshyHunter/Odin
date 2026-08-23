@@ -1,0 +1,39 @@
+/* Moved out of pages/Session/Session.css (2026-08-22 split) —
+   NodeDetail.tsx's own back-link, title, section headers, and difficulty
+   tier row. .node-section-label was named .section-label until this
+   split: it was silently colliding with the sidebar's OWN .section-label
+   (RecentsList's "Recents"/"Pinned" header) — same selector, same
+   specificity (both were `.session-page .section-label`), so whichever
+   rule loaded last in Session.css won for both, meaning the sidebar
+   header was actually rendering with THIS rule's margin/letter-spacing/
+   font-weight instead of its own. Renamed here, not just relocated, so
+   the collision is actually fixed. See sidebar.css's own .section-label
+   for the other half of this. .attempt-list/.attempt-row (the "Past
+   attempts" list below this) live in attemptHistoryList.css/
+   attemptHistoryRow.css instead — separate components. */
+
+.back-link {
+  display: inline-flex; align-items: center; gap: 0.3rem; background: none; border: none;
+  color: var(--text-secondary); font-size: 0.78rem; cursor: pointer; padding: 0.2rem 0;
+  margin-bottom: 0.9rem; font-family: inherit;
+}
+.back-link:hover { color: var(--text); }
+.back-link:focus-visible { outline: 2px solid var(--focus); outline-offset: 2px; }
+
+.node-title { font-family: 'Fraunces', serif; font-size: 1.15rem; margin: 0 0 1.1rem; color: var(--text); }
+
+.node-section-label {
+  font-size: 0.7rem; letter-spacing: 0.05em; text-transform: uppercase; color: var(--text-muted);
+  font-weight: 600; margin: 0 0 0.6rem;
+}
+
+.tier-row { display: flex; gap: 0.5rem; margin-bottom: 1.6rem; }
+.tier-btn {
+  flex: 1; padding: 0.55rem 0.4rem; border-radius: 8px; border: 1px solid var(--border);
+  background: var(--surface); color: var(--text); font-size: 0.78rem; font-weight: 600;
+  cursor: pointer; text-align: center; transition: border-color 0.15s ease, background 0.15s ease;
+  font-family: inherit;
+}
+.tier-btn:hover { border-color: var(--glow); background: var(--surface-raised); }
+.tier-btn:focus-visible { outline: 2px solid var(--focus); outline-offset: 2px; }
+.tier-btn:disabled { opacity: 0.5; cursor: default; }

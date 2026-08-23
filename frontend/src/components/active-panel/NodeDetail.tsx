@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react';
 import type { Attempt, Difficulty } from '../../types';
 import * as exercisesApi from '../../api/exercises';
 import { AttemptHistoryList } from './AttemptHistoryList';
+import './nodeDetail.css';
 
 interface NodeDetailProps {
   nodeId: string;
@@ -44,7 +45,7 @@ export function NodeDetail({ nodeId, nodeTitle, onBack, onAttempt }: NodeDetailP
       </button>
       <h3 className="node-title">{nodeTitle}</h3>
 
-      <p className="section-label">Practice</p>
+      <p className="node-section-label">Practice</p>
       <div className="tier-row">
         {DIFFICULTIES.map((tier) => (
           <button key={tier.value} type="button" className="tier-btn" onClick={() => onAttempt(tier.value)}>
@@ -53,7 +54,7 @@ export function NodeDetail({ nodeId, nodeTitle, onBack, onAttempt }: NodeDetailP
         ))}
       </div>
 
-      <p className="section-label">Past attempts</p>
+      <p className="node-section-label">Past attempts</p>
       <AttemptHistoryList attempts={attempts} />
     </div>
   );

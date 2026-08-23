@@ -1,5 +1,6 @@
 import { useState } from 'react';
 import type { Attempt } from '../../types';
+import './attemptHistoryRow.css';
 
 interface AttemptHistoryRowProps {
   attempt: Attempt;
