@@ -58,3 +58,26 @@ aside.sidebar.sidebar-collapsed {
 .sidebar-toggle:focus-visible { outline: 2px solid var(--focus); outline-offset: 1px; }
 
 .sidebar-spacer { flex: 1; }
+
+/* Moved from pages/Session/Session.css (2026-08-22 split) — belongs to
+   RecentsList.tsx (renders both the sidebar's "Recents" and "Pinned"
+   sections). This is now the ONLY .section-label in the app — it used to
+   share that exact class name with the active-panel's NodeDetail.tsx
+   (both `.session-page .section-label`, identical specificity), so
+   whichever rule loaded last in Session.css silently won for both,
+   meaning THIS header could render with NodeDetail's margin/letter-
+   spacing/font-weight instead of its own. NodeDetail's copy is renamed
+   .node-section-label (components/active-panel/nodeDetail.css) to fix
+   the collision, not just relocate it. */
+.section-label {
+  font-size: 0.7rem; color: var(--text-muted);
+  text-transform: uppercase; letter-spacing: 0.04em;
+  margin: 1.1rem 0.6rem 0.35rem;
+}
+
+.empty-recents {
+  padding: 0.4rem 0.6rem;
+  font-size: 0.79rem; color: var(--text-muted);
+  line-height: 1.5;
+  margin: 0;
+}

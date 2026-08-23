@@ -1,5 +1,6 @@
 import type { Track } from '../../types';
 import { NavItem } from './NavItem/NavItem';
+import './Sidebar/sidebar.css';
 
 interface RecentsListProps {
   label: string;
