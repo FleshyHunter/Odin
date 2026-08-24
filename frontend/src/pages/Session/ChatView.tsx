@@ -37,7 +37,9 @@ export function ChatView() {
   const {
     messages,
     isSending,
+    currentConceptId,
     send,
+    submitExerciseAnswer,
     cancel,
     composerNotice,
     dismissComposerNotice,
@@ -73,34 +75,43 @@ export function ChatView() {
     navigate(`/chat/${threadId}`, { replace: true });
   };
 
+  // #1/#2: scoped to journeyId + the real currentConceptId now (never
+  // trackId — that was the mock's own contract, not what #81's real
+  // backend actually needs). Only fires once a journey exists AND its
+  // current concept is known — both are null until useJourneyChat's own
+  // hydration resolves.
+  const journeyId = activeTrack?.journeyId ?? null;
   useEffect(() => {
-    if (!activeTrackId) return;
+    if (!journeyId || !currentConceptId) return;
     let cancelled = false;
-    exercisesApi.getCurrentExercise(activeTrackId).then((result) => {
-      if (!cancelled) setExercise(result);
-    });
-    exercisesApi.getMasteryStatus(activeTrackId).then((result) => {
+    exercisesApi.getMasteryStatus(journeyId, currentConceptId, activeTrack?.currentConceptTitle ?? '').then((result) => {
       if (!cancelled) setMastery(result);
     });
+    setExercise(null);
     return () => {
       cancelled = true;
     };
-  }, [activeTrackId]);
+  }, [journeyId, currentConceptId, activeTrack?.currentConceptTitle]);
 
   const handleSubmitAnswer = async (answer: string) => {
     if (!exercise) return undefined;
-    const result = await exercisesApi.submitAnswer(exercise.id, answer);
-    setMastery((prev) => (prev ? { ...prev, masteryScore: result.masteryScore } : prev));
-    return result;
+    const result = await submitExerciseAnswer(exercise.id, answer);
+    if (result) {
+      setMastery((prev) => (prev ? { ...prev, masteryScore: result.newMastery } : prev));
+    }
+    return result ?? undefined;
   };
 
-  // deferred.md — Map's node-detail tiers hand off here: Map stays
-  // purely for browsing, the moment a tier is picked Now becomes the
-  // single surface actually serving the exercise (ActivePanel switches
-  // its own tab). Same exercise state either way, whether it came from
-  // a live tutor offer or from here.
+  // deferred.md #94: Map/Roadmap has no real backend wiring yet, so
+  // selectedNode.id (the only caller of onStartAttempt) is never a real
+  // concept_id — guarded here rather than silently sending a fake id to
+  // the real backend. Only actually starts an attempt in the one case
+  // that's real right now: the Map happening to be pointed at the SAME
+  // concept the tutor is already teaching. Revisit once #94's own real
+  // DAG-fetch wiring lands.
   const handleStartAttempt = async (nodeId: string, difficulty: Difficulty) => {
-    const result = await exercisesApi.startAttempt(nodeId, difficulty);
+    if (!journeyId || !currentConceptId || nodeId !== currentConceptId) return;
+    const result = await exercisesApi.startAttempt(journeyId, currentConceptId, difficulty, activeTrack?.currentConceptTitle ?? '');
     setExercise(result);
   };
 

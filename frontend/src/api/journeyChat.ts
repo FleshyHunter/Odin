@@ -133,12 +133,19 @@ interface JourneyMessageBody {
 }
 interface JourneyThreadBody {
   thread_id: string;
+  current_concept_id: string;
   current_concept_title: string;
   messages: JourneyMessageBody[];
 }
 
 export interface JourneyThreadState {
   threadId: string;
+  // #1/#2: real now (backend/src/journeys/turn.rs's ThreadHydration) —
+  // previously only the title was ever exposed here, so nothing in the
+  // frontend had a real concept id for the tutor-triggered exercise
+  // path (deferred.md #94's own finding covers the OTHER path, the
+  // Map, which still has none).
+  currentConceptId: string;
   currentConceptTitle: string;
   messages: ChatMessage[];
 }
@@ -151,6 +158,7 @@ export async function getJourneyThread(journeyId: string): Promise<JourneyThread
   if (!body) return null;
   return {
     threadId: body.thread_id,
+    currentConceptId: body.current_concept_id,
     currentConceptTitle: body.current_concept_title,
     messages: body.messages.map((message, index) => ({
       id: `journey-${body.thread_id}-${index}`,

@@ -17,7 +17,7 @@ pub mod staging;
 // entry-concept resolution #2a's own /start already needs.
 pub(crate) mod turn;
 
-use axum::{routing::post, Router};
+use axum::{routing::{get, post}, Router};
 
 use crate::state::AppState;
 
@@ -51,5 +51,14 @@ pub fn router() -> Router<AppState> {
         .route(
             "/journeys/{journey_id}/exercises/{attempt_id}/submit",
             post(handlers::submit_exercise_answer),
+        )
+        // #1/#2: mastery_bank/quiz_attempts had zero readers before this.
+        .route(
+            "/journeys/{journey_id}/concepts/{concept_id}/mastery",
+            get(handlers::get_mastery_status),
+        )
+        .route(
+            "/journeys/{journey_id}/concepts/{concept_id}/history",
+            get(handlers::get_node_history),
         )
 }

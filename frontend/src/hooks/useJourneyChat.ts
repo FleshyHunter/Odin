@@ -1,7 +1,8 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import * as journeyChatApi from '../api/journeyChat';
+import * as exercisesApi from '../api/exercises';
 import * as uploadsApi from '../api/uploads';
-import type { Attachment, ChatMessage, ComposerNoticeData, PendingFile, UploadRole } from '../types';
+import type { Attachment, ChatMessage, ComposerNoticeData, PendingFile, SubmitAnswerResult, UploadRole } from '../types';
 
 // Real journey-mode chat (deferred.md #2a) — mirrors useMemorylessChat.ts's
 // shape closely, with one real difference: the tutor speaks first. On
@@ -18,6 +19,11 @@ export function useJourneyChat(journeyId: string | null) {
   const [composerNotice, setComposerNotice] = useState<ComposerNoticeData | null>(null);
   const [pendingFiles, setPendingFiles] = useState<PendingFile[]>([]);
   const [attachments, setAttachments] = useState<Attachment[]>([]);
+  // #1/#2: the real concept id for the currently-taught concept — never
+  // exposed by this hook before (only threadId/messages were consumed
+  // from getJourneyThread's response), so nothing calling this hook has
+  // ever had a real concept id for the tutor-triggered exercise path.
+  const [currentConceptId, setCurrentConceptId] = useState<string | null>(null);
   const threadIdRef = useRef<string | null>(null);
   const abortRef = useRef<AbortController | null>(null);
   // deferred.md #79: mirrors useMemorylessChat.ts's own #76 fix — a
@@ -92,6 +98,7 @@ export function useJourneyChat(journeyId: string | null) {
       setMessages([]);
       setIsHydrating(false);
       threadIdRef.current = null;
+      setCurrentConceptId(null);
       return;
     }
     let cancelled = false;
@@ -103,6 +110,7 @@ export function useJourneyChat(journeyId: string | null) {
         if (state) {
           threadIdRef.current = state.threadId;
           setMessages(state.messages);
+          setCurrentConceptId(state.currentConceptId);
           setIsHydrating(false);
           return;
         }
@@ -209,6 +217,84 @@ export function useJourneyChat(journeyId: string | null) {
     [journeyId],
   );
 
+  // #1/#2: mirrors send() closely — an exercise submission is another
+  // real turn on the same thread (backend/src/journeys/turn.rs's own
+  // persist_turn inserts both a 'user' message for the raw answer text
+  // and a 'tutor' message for the prose reaction, exactly like a normal
+  // turn), so it needs the same isSendingRef/abortRef guards to avoid
+  // racing a normal send() on the same thread. Returns the structured
+  // grading result (or null if it never arrived) so the caller can
+  // update exercise/mastery UI state — the prose reaction itself is
+  // NOT returned, it streams into the message list like any other turn.
+  const submitExerciseAnswer = useCallback(
+    async (attemptId: string, answer: string): Promise<SubmitAnswerResult | null> => {
+      if (!journeyId) return null;
+      if (isSendingRef.current) return null;
+      isSendingRef.current = true;
+
+      setComposerNotice(null);
+      const studentMessage: ChatMessage = {
+        id: `local-${Date.now()}`,
+        role: 'student',
+        text: answer,
+        timestamp: new Date().toISOString(),
+      };
+      const tutorMessageId = `local-tutor-${Date.now()}`;
+      setMessages((prev) => [
+        ...prev,
+        studentMessage,
+        { id: tutorMessageId, role: 'tutor', text: '', timestamp: new Date().toISOString() },
+      ]);
+      setIsSending(true);
+
+      const controller = new AbortController();
+      abortRef.current = controller;
+      let receivedDelta = false;
+      let result: SubmitAnswerResult | null = null;
+
+      try {
+        await exercisesApi.submitAnswer(
+          journeyId,
+          attemptId,
+          answer,
+          {
+            onResult: (r) => {
+              result = r;
+            },
+            onDelta: (delta) => {
+              receivedDelta = true;
+              setMessages((prev) =>
+                prev.map((m) => (m.id === tutorMessageId ? { ...m, text: m.text + delta } : m)),
+              );
+            },
+            onError: (message) => {
+              if (!receivedDelta) {
+                setMessages((prev) => prev.filter((m) => m.id !== tutorMessageId));
+              }
+              if (abortRef.current === controller) {
+                setComposerNotice({ tone: 'error', message, actionLabel: 'Retry', onAction: () => {} });
+              }
+            },
+          },
+          controller.signal,
+        );
+
+        if (!controller.signal.aborted && !receivedDelta && !result) {
+          setMessages((prev) => prev.filter((m) => m.id !== tutorMessageId));
+        }
+      } finally {
+        if (abortRef.current === controller) {
+          isSendingRef.current = false;
+          setIsSending(false);
+          abortRef.current = null;
+        }
+      }
+
+      return result;
+    },
+    [journeyId],
+  );
+
   const cancel = useCallback(() => {
     abortRef.current?.abort();
   }, []);
@@ -282,7 +368,9 @@ export function useJourneyChat(journeyId: string | null) {
     messages,
     isSending,
     isHydrating,
+    currentConceptId,
     send,
+    submitExerciseAnswer,
     cancel,
     composerNotice,
     dismissComposerNotice,

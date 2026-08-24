@@ -1,6 +1,5 @@
-import { useEffect, useState } from 'react';
+import { useState } from 'react';
 import type { Attempt, Difficulty } from '../../types';
-import * as exercisesApi from '../../api/exercises';
 import { AttemptHistoryList } from './AttemptHistoryList';
 import './nodeDetail.css';
 
@@ -25,18 +24,12 @@ const DIFFICULTIES: { value: Difficulty; label: string }[] = [
 // templates, max 3 per concept — one per difficulty — each
 // re-instantiated fresh on request), so this is deliberately two small,
 // real lists: tiers to attempt, and past attempts to review.
-export function NodeDetail({ nodeId, nodeTitle, onBack, onAttempt }: NodeDetailProps) {
-  const [attempts, setAttempts] = useState<Attempt[]>([]);
-
-  useEffect(() => {
-    let cancelled = false;
-    exercisesApi.getNodeHistory(nodeId).then((result) => {
-      if (!cancelled) setAttempts(result);
-    });
-    return () => {
-      cancelled = true;
-    };
-  }, [nodeId]);
+// deferred.md #94: nodeId here is always a Map/Roadmap-derived id
+// (sampleData.ts, never real), and this component has no journeyId
+// prop to call the real history endpoint with even if it were —
+// attempts stays empty until #94's own real DAG-fetch wiring lands.
+export function NodeDetail({ nodeId: _nodeId, nodeTitle, onBack, onAttempt }: NodeDetailProps) {
+  const [attempts] = useState<Attempt[]>([]);
 
   return (
     <div className="node-detail">

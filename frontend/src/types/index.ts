@@ -168,17 +168,29 @@ export interface Exercise {
 }
 
 export interface MasteryStatus {
+  // Not part of the real GET /.../mastery response (mastery_bank has no
+  // title of its own) — the caller already knows this from its own
+  // surrounding context (the concept it's currently displaying) and
+  // fills it in, same reasoning as Exercise.title below.
   conceptTitle: string;
   masteryScore: number; // 0-1, mastery_bank.mastery_score
+  isComplete: boolean;
+  totalAttempts: number;
 }
 
 export interface SubmitAnswerResult {
   isCorrect: boolean;
-  masteryScore: number;
-  // Mocked ahead of the real backend contract — mirrors quiz_attempts'
-  // real expected_answer/feedback columns (SCHEMA.md), not invented from
-  // nothing. Powers ExerciseCard's Answer toggle.
-  expectedAnswer?: string;
+  // Distinct from isCorrect only for short_answer exercises (a real
+  // keyword-match fraction, thresholded into isCorrect) — the other 4
+  // exercise types always mirror isCorrect exactly (1/0). Not yet
+  // rendered anywhere; exposed since the backend already computes it.
+  gradeScore: number;
+  newMastery: number;
+  // Backend always sends this (computed regardless) — whether to
+  // surface it in the UI immediately, even on a first wrong attempt, is
+  // still an open product/pedagogy question (deferred.md, #1/#2's own
+  // discussion) — no UI currently reads this field.
+  expectedAnswer: string;
   feedback?: string;
 }
 

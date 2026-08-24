@@ -183,6 +183,13 @@ pub async fn start_journey_thread(
             match event {
                 turn::TurnEvent::Delta(text) => yield Ok(Event::default().event("delta").data(text)),
                 turn::TurnEvent::Error(reason) => yield Ok(Event::default().event("error").data(reason)),
+                // #1/#2: only submit_exercise_answer's own turn.rs
+                // function ever constructs a Result event — unreachable
+                // here, but TurnEvent is shared across all three SSE
+                // handlers in this file, so match must stay exhaustive.
+                turn::TurnEvent::ExerciseResult(_) => {
+                    tracing::warn!("unexpected TurnEvent::ExerciseResult from start_journey_thread's stream");
+                }
             }
         }
         yield Ok(Event::default().event("done").data("ok"));
@@ -223,6 +230,9 @@ pub async fn send_journey_message(
             match event {
                 turn::TurnEvent::Delta(text) => yield Ok(Event::default().event("delta").data(text)),
                 turn::TurnEvent::Error(reason) => yield Ok(Event::default().event("error").data(reason)),
+                turn::TurnEvent::ExerciseResult(_) => {
+                    tracing::warn!("unexpected TurnEvent::ExerciseResult from send_journey_message's stream");
+                }
             }
         }
         yield Ok(Event::default().event("done").data("ok"));
@@ -303,11 +313,110 @@ pub async fn submit_exercise_answer(
             match event {
                 turn::TurnEvent::Delta(text) => yield Ok(Event::default().event("delta").data(text)),
                 turn::TurnEvent::Error(reason) => yield Ok(Event::default().event("error").data(reason)),
+                // #1/#2: the one real emitter. Always sent first, before
+                // any Delta (turn::submit_exercise_answer constructs and
+                // sends this before spawning the prose-streaming task) —
+                // grading/mastery/streak/advancement are already fully
+                // computed and persisted by this point (Rule 2:
+                // deterministic, no LLM call in the grading path itself),
+                // so there's no latency cost to sending it up front.
+                turn::TurnEvent::ExerciseResult(result) => {
+                    let json = serde_json::to_string(&result).unwrap_or_else(|_| "{}".to_string());
+                    yield Ok(Event::default().event("result").data(json));
+                }
             }
         }
         yield Ok(Event::default().event("done").data("ok"));
     };
     Ok(Sse::new(sse_stream).keep_alive(KeepAlive::default()))
+}
+
+#[derive(Serialize)]
+pub struct MasteryStatusInfo {
+    mastery_score: f32,
+    is_complete: bool,
+    total_attempts: i32,
+}
+
+/// GET /journeys/{journey_id}/concepts/{concept_id}/mastery — #1/#2:
+/// mastery_bank had zero readers anywhere before this (only ever
+/// written by submit_exercise_answer). journey_id is unused inside the
+/// query itself — mastery is keyed on (user_id, concept_id) only, never
+/// journey_id (ARCHITECTURE_LOCK.md Rule 14, same fact already used
+/// throughout the Track-delete work) — kept in the URL purely for
+/// consistency with every other .../concepts/{concept_id}/... route
+/// here. concept_title deliberately isn't returned: every real caller
+/// already has it from its own surrounding context (the concept/node
+/// it's currently displaying), so no join against canonical_concepts
+/// is needed just to hand back a value the caller already has.
+pub async fn get_mastery_status(
+    AuthUser(user_id): AuthUser,
+    State(state): State<AppState>,
+    Path((_journey_id, concept_id)): Path<(Uuid, Uuid)>,
+) -> Result<Json<Option<MasteryStatusInfo>>, JourneyError> {
+    let mut tx = begin_rls_transaction(&state.pool, user_id).await?;
+    let row: Option<(f32, bool, i32)> = sqlx::query_as(
+        "SELECT mastery_score, is_complete, total_attempts FROM mastery_bank \
+         WHERE user_id = $1 AND concept_id = $2",
+    )
+    .bind(user_id)
+    .bind(concept_id)
+    .fetch_optional(&mut *tx)
+    .await?;
+    tx.commit().await?;
+    Ok(Json(row.map(|(mastery_score, is_complete, total_attempts)| MasteryStatusInfo {
+        mastery_score,
+        is_complete,
+        total_attempts,
+    })))
+}
+
+#[derive(Serialize)]
+pub struct AttemptInfo {
+    attempt_id: Uuid,
+    rendered_question: String,
+    is_correct: Option<bool>,
+    difficulty_attempted: Option<String>,
+    timestamp: chrono::DateTime<chrono::Utc>,
+}
+
+/// GET /journeys/{journey_id}/concepts/{concept_id}/history — #1/#2:
+/// quiz_attempts had zero readers anywhere before this either. Scoped
+/// to THIS journey (unlike mastery above) since attempt history is a
+/// real per-journey record, not a cross-journey aggregate.
+/// student_answer IS NOT NULL excludes the not-yet-answered row
+/// serve_exercise creates immediately on instantiation (same
+/// convention submit_exercise_answer's own WHERE clause already uses
+/// to find it) — an unanswered attempt isn't history yet.
+pub async fn get_node_history(
+    AuthUser(user_id): AuthUser,
+    State(state): State<AppState>,
+    Path((journey_id, concept_id)): Path<(Uuid, Uuid)>,
+) -> Result<Json<Vec<AttemptInfo>>, JourneyError> {
+    let mut tx = begin_rls_transaction(&state.pool, user_id).await?;
+    let rows: Vec<(Uuid, String, Option<bool>, Option<String>, chrono::DateTime<chrono::Utc>)> = sqlx::query_as(
+        "SELECT qa.attempt_id, qa.rendered_question, qa.is_correct, qa.difficulty_attempted, qa.timestamp \
+         FROM quiz_attempts qa \
+         JOIN exercises e ON e.exercise_id = qa.exercise_id \
+         WHERE qa.journey_id = $1 AND e.concept_id = $2 AND qa.student_answer IS NOT NULL \
+         ORDER BY qa.timestamp DESC",
+    )
+    .bind(journey_id)
+    .bind(concept_id)
+    .fetch_all(&mut *tx)
+    .await?;
+    tx.commit().await?;
+    Ok(Json(
+        rows.into_iter()
+            .map(|(attempt_id, rendered_question, is_correct, difficulty_attempted, timestamp)| AttemptInfo {
+                attempt_id,
+                rendered_question,
+                is_correct,
+                difficulty_attempted,
+                timestamp,
+            })
+            .collect(),
+    ))
 }
 
 #[derive(Serialize)]
@@ -320,6 +429,7 @@ pub struct JourneyMessageInfo {
 #[derive(Serialize)]
 pub struct JourneyThreadInfo {
     thread_id: Uuid,
+    current_concept_id: Uuid,
     current_concept_title: String,
     messages: Vec<JourneyMessageInfo>,
 }
@@ -356,6 +466,7 @@ pub async fn get_journey_messages(
     let hydration = turn::get_journey_thread(&state, user_id, journey_id).await?;
     Ok(Json(hydration.map(|h| JourneyThreadInfo {
         thread_id: h.thread_id,
+        current_concept_id: h.current_concept_id,
         current_concept_title: h.current_concept_title,
         messages: h
             .messages

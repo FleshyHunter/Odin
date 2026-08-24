@@ -44,6 +44,32 @@ const HISTORY_WINDOW_MESSAGES: usize = 10;
 pub enum TurnEvent {
     Delta(String),
     Error(String),
+    // #1/#2 (exercises.ts wire-up): grading is fully computed and
+    // persisted BEFORE the tutor's prose reaction ever starts streaming
+    // (confirmed: every exercise type is deterministically graded per
+    // Rule 2 — no LLM call in the grading path, so this never adds real
+    // latency before the stream opens). Sent once, always first, before
+    // any Delta — the structured result the frontend actually needs
+    // ("was this correct," "what's the new mastery") never appears
+    // anywhere in the streamed prose itself.
+    ExerciseResult(ExerciseResult),
+}
+
+// grade_score, not score: this codebase already uses "score" and
+// "trust_score" to mean different things in a different module
+// (knowledge retrieval ranking) — kept explicit here so this payload
+// is never misread as that. Distinct from is_correct only for
+// short_answer (keyword/synonym threshold match, a real fraction);
+// the other 4 exercise types are strictly binary (1.0/0.0, mirrors
+// is_correct exactly) — confirmed directly against
+// ai_service/app/grading/service.py, not assumed.
+#[derive(serde::Serialize)]
+pub struct ExerciseResult {
+    pub is_correct: bool,
+    pub grade_score: f32,
+    pub new_mastery: f32,
+    pub expected_answer: String,
+    pub feedback: Option<String>,
 }
 
 pub(crate) struct EntryConceptInfo {
@@ -55,6 +81,7 @@ pub(crate) struct EntryConceptInfo {
 
 pub struct ThreadHydration {
     pub thread_id: Uuid,
+    pub current_concept_id: Uuid,
     pub current_concept_title: String,
     pub messages: Vec<(String, String, chrono::DateTime<Utc>)>, // (role, content, timestamp)
 }
@@ -1169,6 +1196,19 @@ pub async fn submit_exercise_answer(
     .await?;
 
     let (tx, rx) = mpsc::channel::<TurnEvent>(16);
+    // Sent before anything else on this channel — grading/mastery/streak/
+    // advancement are already fully computed and persisted above (Rule 2:
+    // deterministic, no LLM call in the grading path), so there's no
+    // ordering race and no latency cost to sending this first.
+    let _ = tx
+        .send(TurnEvent::ExerciseResult(ExerciseResult {
+            is_correct: grade_result.is_correct,
+            grade_score: grade_result.score,
+            new_mastery,
+            expected_answer: pending.expected_answer.clone().unwrap_or_default(),
+            feedback: grade_result.feedback.clone(),
+        }))
+        .await;
     let state = state.clone();
 
     tokio::spawn(async move {
@@ -1512,8 +1552,12 @@ pub async fn get_journey_thread(
     };
 
     let mut tx = begin_rls_transaction(&state.pool, user_id).await?;
-    let (current_concept_title,): (String,) = sqlx::query_as(
-        "SELECT cc.title FROM study_threads st \
+    // #1/#2: current_concept_id added alongside the title this session
+    // already fetched — the frontend has never had a real concept id
+    // for the tutor-triggered exercise path before this (deferred.md
+    // #94's own finding: neither this path nor the Map ever exposed one).
+    let (current_concept_id, current_concept_title): (Uuid, String) = sqlx::query_as(
+        "SELECT cc.concept_id, cc.title FROM study_threads st \
          JOIN canonical_concepts cc ON cc.concept_id = st.current_concept_id \
          WHERE st.thread_id = $1",
     )
@@ -1529,5 +1573,5 @@ pub async fn get_journey_thread(
     .await?;
     tx.commit().await?;
 
-    Ok(Some(ThreadHydration { thread_id, current_concept_title, messages: rows }))
+    Ok(Some(ThreadHydration { thread_id, current_concept_id, current_concept_title, messages: rows }))
 }
