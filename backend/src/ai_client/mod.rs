@@ -229,11 +229,19 @@ pub async fn transcribe(
     ai_service_url: &str,
     audio_bytes: Vec<u8>,
     filename: &str,
+    // deferred.md #98 — Some(seconds) for the chunked live-caption path
+    // (bounds re-transcription cost regardless of total recording
+    // length); None for the one-shot upload and the final authoritative
+    // call on stop, both of which need the complete transcript.
+    window_seconds: Option<f32>,
 ) -> Result<String, AiClientError> {
     let url = format!("{ai_service_url}/transcribe");
 
     let part = reqwest::multipart::Part::bytes(audio_bytes).file_name(filename.to_string());
-    let form = reqwest::multipart::Form::new().part("file", part);
+    let mut form = reqwest::multipart::Form::new().part("file", part);
+    if let Some(window_seconds) = window_seconds {
+        form = form.text("window_seconds", window_seconds.to_string());
+    }
 
     let response = client
         .post(&url)
@@ -1364,7 +1372,7 @@ mod tests {
             .expect("failed to read ../icons/test.m4a — run from the backend/ crate root");
 
         let client = production_client();
-        let result = transcribe(&client, AI_SERVICE_URL, audio_bytes, "test.m4a")
+        let result = transcribe(&client, AI_SERVICE_URL, audio_bytes, "test.m4a", None)
             .await
             .expect("transcribe() call failed");
 

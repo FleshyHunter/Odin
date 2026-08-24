@@ -36,6 +36,14 @@ const CHUNK_INTERVAL_MS = 4000;
 // dependency.
 const SESSION_OPEN_TIMEOUT_MS = 2500;
 
+// deferred.md #98 — a hard guardrail, not a fix for the growing-buffer
+// cost problem itself (see #98's own entry): re-transcribing the whole
+// recording every ~4s gets slower the longer it runs, and this is the
+// backstop that keeps a runaway recording from degrading indefinitely.
+// 90s is generous for a spoken question into a chat composer — nobody
+// reasonably needs several continuous minutes of dictation here.
+export const MAX_RECORDING_DURATION_MS = 90_000;
+
 function pickSupportedMimeType(): string | null {
   if (typeof MediaRecorder === 'undefined') return null;
   return MIME_TYPE_PREFERENCE.find((type) => MediaRecorder.isTypeSupported(type)) ?? null;
@@ -54,13 +62,14 @@ export function useVoiceInput() {
   // dedicated error component — Composer.tsx just renders this as a
   // small inline message near the mic button.
   const [error, setError] = useState<string | null>(null);
-  // Live, best-effort re-transcription of the growing recording, only
+  // Live, best-effort transcript of the recording so far, only
   // meaningful while status === 'recording'. This hook doesn't touch
   // the composer's own text state directly (Composer.tsx owns that) —
   // it just exposes this value, and Composer writes it straight into
-  // its live text as it updates, replacing on every tick rather than
-  // appending (each result is the full transcript-so-far, not an
-  // increment).
+  // its live text as it updates. deferred.md #98: this now accumulates
+  // (each server tick sends only the NEW words, already diffed against
+  // its own previous window server-side — see openStreamingSession's
+  // own onPartial handler), it does not replace on every tick anymore.
   const [partialTranscript, setPartialTranscript] = useState('');
   const recorderRef = useRef<MediaRecorder | null>(null);
   const streamRef = useRef<MediaStream | null>(null);
@@ -110,7 +119,15 @@ export function useVoiceInput() {
             clearTimeout(timeoutId);
             finish();
           },
-          onPartial: (text) => setPartialTranscript(text),
+          // deferred.md #98 — the backend now sends only the NEW words
+          // each tick (a diff against its own previous windowed
+          // transcript), not the full transcript-so-far, so this
+          // accumulates rather than replaces — matches how chat's own
+          // onDelta already works. See the backend's diff_new_suffix
+          // for why: re-transcribing the whole growing recording every
+          // tick is what caused live captions to visibly freeze/slow
+          // down the longer a recording ran.
+          onPartial: (delta) => setPartialTranscript((prev) => (prev ? `${prev} ${delta}` : delta)),
           onError: () => {
             // Best-effort feature — a streaming failure doesn't
             // interrupt recording, it just means no live captions for

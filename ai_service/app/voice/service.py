@@ -5,6 +5,7 @@ from functools import lru_cache
 from typing import Any
 
 import whisper
+from whisper.audio import SAMPLE_RATE
 
 # Locked model (PRD.md, Voice Input) — base, 74M params, ~1GB VRAM.
 # Do NOT swap to a larger Whisper variant without revisiting the VRAM
@@ -28,7 +29,7 @@ def get_model() -> Any:
     return whisper.load_model(MODEL_NAME)
 
 
-def transcribe_audio(audio_bytes: bytes, filename: str) -> str:
+def transcribe_audio(audio_bytes: bytes, filename: str, window_seconds: float | None = None) -> str:
     # Whisper's transcribe() wants a file path, not raw bytes — it shells
     # out to ffmpeg internally to decode whatever format arrives, so a
     # temp file is the simplest correct bridge, not extra ceremony. The
@@ -44,6 +45,25 @@ def transcribe_audio(audio_bytes: bytes, filename: str) -> str:
     with tempfile.NamedTemporaryFile(suffix=suffix) as tmp:
         tmp.write(audio_bytes)
         tmp.flush()
+
+        # deferred.md #98 — chunked live-caption calls pass window_seconds
+        # so cost stays roughly flat regardless of total recording length
+        # (re-transcribing the WHOLE growing buffer every ~4s is what
+        # actually caused the reported freeze — cost grows with total
+        # length, not just the new audio). None (the one-shot /transcribe
+        # call, and the final authoritative call on stop) keeps the
+        # original full-file behavior untouched — that one call needs
+        # the complete, accurate transcript, not a windowed guess.
+        # whisper.load_audio() shells out to ffmpeg the same way
+        # transcribe() does internally, just returns the decoded samples
+        # instead of feeding them straight to the model — same decode
+        # path, no new dependency.
+        audio: Any = tmp.name
+        if window_seconds is not None:
+            samples = whisper.load_audio(tmp.name)
+            window_samples = int(window_seconds * SAMPLE_RATE)
+            audio = samples[-window_samples:]
+
         # deferred.md #67 — pinned English, same failure class as the
         # already-fixed langdetect bug (problems.md #25): Whisper's own
         # language-ID is unreliable on short utterances, exactly what a
@@ -51,5 +71,5 @@ def transcribe_audio(audio_bytes: bytes, filename: str) -> str:
         # locks English-only. Without this, Whisper ran its own
         # auto-detection (and paid for that extra pass) on every clip.
         with _TRANSCRIBE_LOCK:
-            result = model.transcribe(tmp.name, language="en")
+            result = model.transcribe(audio, language="en")
     return result["text"].strip()

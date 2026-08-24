@@ -58,10 +58,13 @@ export async function transcribeAudio(
 
 export interface VoiceStreamHandlers {
   onSessionId: (id: string) => void;
-  // Always the FULL re-decoded transcript-so-far, never an increment —
-  // Whisper re-transcribes the entire growing buffer on every chunk, so
-  // the caller must replace its displayed text with this value, not
-  // append to it. See useVoiceInput.ts's own comment.
+  // deferred.md #98 — only the NEW words since the last partial, not
+  // the full transcript-so-far: the backend only re-transcribes a
+  // bounded trailing window each tick (not the whole growing
+  // recording — that's what caused live captions to visibly slow down
+  // the longer a recording ran) and diffs it server-side against its
+  // own previous window, so the caller should APPEND this to whatever
+  // it's already shown. See useVoiceInput.ts's own comment.
   onPartial: (text: string) => void;
   onError: (message: string) => void;
 }

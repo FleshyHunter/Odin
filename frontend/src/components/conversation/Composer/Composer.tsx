@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState, type ChangeEvent, type KeyboardEvent } from 'react';
-import { useVoiceInput } from '../../../hooks/useVoiceInput';
+import { MAX_RECORDING_DURATION_MS, useVoiceInput } from '../../../hooks/useVoiceInput';
 import { ComposerNotice } from './ComposerNotice';
 import { AttachmentRow } from './AttachmentRow/AttachmentRow';
 import { UploadRoleModal } from './UploadRoleModal/UploadRoleModal';
@@ -54,6 +54,13 @@ export function Composer({
   // partials get appended after this, never replacing it, so starting
   // voice input mid-draft doesn't blow away what's already there.
   const baseValueRef = useRef('');
+  // deferred.md #98 — auto-stop guardrail. Owned here, not inside
+  // useVoiceInput, because finishing a recording (applying the final
+  // transcript to `value`) is Composer's own job either way — a timer
+  // living in the hook would still need some way to hand the result
+  // back up, so it's simpler to just have the timer trigger the exact
+  // same finish path a manual mic-off click already uses.
+  const maxDurationTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const attachEnabled = onAttachFiles !== undefined;
   const currentPendingFile = pendingFiles && pendingFiles.length > 0 ? pendingFiles[0] : null;
 
@@ -70,17 +77,49 @@ export function Composer({
   }, [value]);
 
   // Live transcript writes straight into the real composer text while
-  // recording — each tick is a full re-transcription of the growing
-  // buffer, not an increment, so this REPLACES the voice-contributed
-  // part of the value every time (revising earlier words as more
-  // speech gives them context) rather than appending piecemeal.
-  // baseValueRef anchors whatever was already typed before the mic was
-  // pressed, so that part is never touched.
+  // recording. partialTranscript (useVoiceInput.ts) already accumulates
+  // correctly on its own — deferred.md #98: the backend only
+  // re-transcribes a bounded trailing window each tick, not the whole
+  // growing recording, and diffs it server-side so only genuinely new
+  // words arrive here — so this effect just needs to combine it with
+  // whatever was already typed before the mic was pressed (baseValueRef,
+  // never touched by voice input) on every change.
   useEffect(() => {
     if (status !== 'recording') return;
     const base = baseValueRef.current;
     setValue(base ? `${base} ${partialTranscript}` : partialTranscript);
   }, [partialTranscript, status]);
+
+  // Clear the max-duration timer on unmount so it can't fire against a
+  // gone component.
+  useEffect(() => {
+    return () => {
+      if (maxDurationTimeoutRef.current !== null) clearTimeout(maxDurationTimeoutRef.current);
+    };
+  }, []);
+
+  const clearMaxDurationTimeout = () => {
+    if (maxDurationTimeoutRef.current !== null) {
+      clearTimeout(maxDurationTimeoutRef.current);
+      maxDurationTimeoutRef.current = null;
+    }
+  };
+
+  // Shared by a manual mic-off click and the max-duration auto-stop
+  // (deferred.md #98) — same finish behavior either way, the student
+  // just didn't have to press the button themselves in the timeout case.
+  const finishRecording = async () => {
+    clearMaxDurationTimeout();
+    const transcribed = await stopRecording();
+    const base = baseValueRef.current;
+    // Locked Voice Input UX: transcribed text stays in the input box
+    // for the user to review/edit — never auto-sent (ARCHITECTURE_LOCK.md,
+    // Upload System — Voice Input, step 6). On failure (see
+    // useVoiceInput's own error state, rendered separately below),
+    // fall back to just the pre-recording base — the live partial that
+    // had been showing was never authoritative.
+    setValue(transcribed ? (base ? `${base} ${transcribed}` : transcribed) : base);
+  };
 
   const handleSend = () => {
     if (isSending) {
@@ -92,6 +131,7 @@ export function Composer({
     // recording outright — no extra final-transcribe round-trip, that
     // would only add latency for text already sitting in the box.
     if (status === 'recording') {
+      clearMaxDurationTimeout();
       cancelRecording();
     }
     const trimmed = value.trim();
@@ -107,6 +147,7 @@ export function Composer({
   // by the browser) is kept as-is; recording just stops contributing.
   const handleTextareaChange = (event: ChangeEvent<HTMLTextAreaElement>) => {
     if (status === 'recording') {
+      clearMaxDurationTimeout();
       cancelRecording();
     }
     setValue(event.target.value);
@@ -127,18 +168,16 @@ export function Composer({
       // asynchronously; the hook's own status/error state drives the UI
       // from here, this click handler doesn't need to wait on it.
       void startRecording();
+      // deferred.md #98 — hard guardrail against the growing-buffer
+      // cost problem (see that entry). void: finishRecording() already
+      // handles its own state, nothing here needs to await it.
+      maxDurationTimeoutRef.current = setTimeout(() => {
+        void finishRecording();
+      }, MAX_RECORDING_DURATION_MS);
       return;
     }
     if (status === 'recording') {
-      const transcribed = await stopRecording();
-      const base = baseValueRef.current;
-      // Locked Voice Input UX: transcribed text stays in the input box
-      // for the user to review/edit — never auto-sent (ARCHITECTURE_LOCK.md,
-      // Upload System — Voice Input, step 6). On failure (see
-      // useVoiceInput's own error state, rendered separately below),
-      // fall back to just the pre-recording base — the live partial
-      // that had been showing was never authoritative.
-      setValue(transcribed ? (base ? `${base} ${transcribed}` : transcribed) : base);
+      await finishRecording();
     }
   };
 
