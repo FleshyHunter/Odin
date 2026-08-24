@@ -46,9 +46,14 @@ export function Composer({
   onRetryAttachment,
 }: ComposerProps) {
   const [value, setValue] = useState('');
-  const { status, error: voiceError, partialTranscript, startRecording, stopRecording } = useVoiceInput();
+  const { status, error: voiceError, partialTranscript, startRecording, stopRecording, cancelRecording } =
+    useVoiceInput();
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
+  // Whatever was already typed the moment recording started — live
+  // partials get appended after this, never replacing it, so starting
+  // voice input mid-draft doesn't blow away what's already there.
+  const baseValueRef = useRef('');
   const attachEnabled = onAttachFiles !== undefined;
   const currentPendingFile = pendingFiles && pendingFiles.length > 0 ? pendingFiles[0] : null;
 
@@ -64,15 +69,47 @@ export function Composer({
     el.style.height = `${el.scrollHeight}px`;
   }, [value]);
 
+  // Live transcript writes straight into the real composer text while
+  // recording — each tick is a full re-transcription of the growing
+  // buffer, not an increment, so this REPLACES the voice-contributed
+  // part of the value every time (revising earlier words as more
+  // speech gives them context) rather than appending piecemeal.
+  // baseValueRef anchors whatever was already typed before the mic was
+  // pressed, so that part is never touched.
+  useEffect(() => {
+    if (status !== 'recording') return;
+    const base = baseValueRef.current;
+    setValue(base ? `${base} ${partialTranscript}` : partialTranscript);
+  }, [partialTranscript, status]);
+
   const handleSend = () => {
     if (isSending) {
       onStop?.();
       return;
     }
+    // Sending while still recording: take whatever's currently shown
+    // (already a live transcript, good enough to act on) and abort the
+    // recording outright — no extra final-transcribe round-trip, that
+    // would only add latency for text already sitting in the box.
+    if (status === 'recording') {
+      cancelRecording();
+    }
     const trimmed = value.trim();
     if (!trimmed) return;
     onSend(trimmed);
     setValue('');
+  };
+
+  // Manually editing the composer while voice is live is treated as an
+  // explicit "I'll take it from here" — recording stops instantly
+  // rather than fighting the next tick's re-transcription over the
+  // same text. The user's own edit (already applied to event.target.value
+  // by the browser) is kept as-is; recording just stops contributing.
+  const handleTextareaChange = (event: ChangeEvent<HTMLTextAreaElement>) => {
+    if (status === 'recording') {
+      cancelRecording();
+    }
+    setValue(event.target.value);
   };
 
   const handleKeyDown = (event: KeyboardEvent<HTMLTextAreaElement>) => {
@@ -85,6 +122,7 @@ export function Composer({
 
   const handleMicClick = async () => {
     if (status === 'idle') {
+      baseValueRef.current = value;
       // Not awaited — getUserMedia()/permission prompt resolves
       // asynchronously; the hook's own status/error state drives the UI
       // from here, this click handler doesn't need to wait on it.
@@ -93,14 +131,14 @@ export function Composer({
     }
     if (status === 'recording') {
       const transcribed = await stopRecording();
-      // Locked Voice Input UX: transcribed text drops into the input box
+      const base = baseValueRef.current;
+      // Locked Voice Input UX: transcribed text stays in the input box
       // for the user to review/edit — never auto-sent (ARCHITECTURE_LOCK.md,
-      // Upload System — Voice Input, step 6). Empty on any failure (see
-      // useVoiceInput's own error state, rendered separately below) —
-      // nothing to insert in that case.
-      if (transcribed) {
-        setValue((prev) => (prev ? `${prev} ${transcribed}` : transcribed));
-      }
+      // Upload System — Voice Input, step 6). On failure (see
+      // useVoiceInput's own error state, rendered separately below),
+      // fall back to just the pre-recording base — the live partial
+      // that had been showing was never authoritative.
+      setValue(transcribed ? (base ? `${base} ${transcribed}` : transcribed) : base);
     }
   };
 
@@ -154,7 +192,7 @@ export function Composer({
               rows={1}
               placeholder="Ask a question, or say what you're stuck on..."
               value={value}
-              onChange={(event) => setValue(event.target.value)}
+              onChange={handleTextareaChange}
               onKeyDown={handleKeyDown}
               // Stays editable while isSending — a turn is still
               // strictly one-at-a-time server-side (handleSend's own
@@ -228,16 +266,6 @@ export function Composer({
                 </button>
               </div>
             </div>
-            {/* Best-effort live caption while recording — chunked
-                re-transcription (see useVoiceInput.ts), never written
-                into the real composer value. Replaces on every tick
-                rather than appending: each result is the full
-                transcript-so-far, not an increment, and earlier words
-                can visibly revise as more context arrives — expected,
-                not a bug. */}
-            {status === 'recording' && partialTranscript && (
-              <p className="composer-voice-caption">{partialTranscript}</p>
-            )}
             {/* deferred.md #80 — scoped down deliberately: no retry
                 affordance, no dedicated error component, just a small
                 inline message near the mic button that caused it. */}

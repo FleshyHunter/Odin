@@ -54,10 +54,13 @@ export function useVoiceInput() {
   // dedicated error component — Composer.tsx just renders this as a
   // small inline message near the mic button.
   const [error, setError] = useState<string | null>(null);
-  // Live, best-effort caption shown only while status === 'recording'.
-  // Never written into the composer's real text value — only the
-  // authoritative stopRecording() result gets appended there, exactly
-  // like before this feature existed.
+  // Live, best-effort re-transcription of the growing recording, only
+  // meaningful while status === 'recording'. This hook doesn't touch
+  // the composer's own text state directly (Composer.tsx owns that) —
+  // it just exposes this value, and Composer writes it straight into
+  // its live text as it updates, replacing on every tick rather than
+  // appending (each result is the full transcript-so-far, not an
+  // increment).
   const [partialTranscript, setPartialTranscript] = useState('');
   const recorderRef = useRef<MediaRecorder | null>(null);
   const streamRef = useRef<MediaStream | null>(null);
