@@ -66,6 +66,26 @@ def _is_acronym(token: Token) -> bool:
     return len(core) >= 2 and core.isupper()
 
 
+def _is_single_letter(token: Token) -> bool:
+    # deferred.md #96 — third instance of #52/#90's same failure mode,
+    # a different token shape again: a single math-variable letter
+    # ("x", "e", "a", "b", "f"...) has no entry of its own in
+    # symspellpy's dictionary either, and at MAX_EDIT_DISTANCE=2 it's
+    # well within range of a common short real word — "a" above all,
+    # since it's both a real dictionary entry AND only one substitution
+    # away from almost any other single letter. Confirmed live: "x * e^x"
+    # -> "a * a^a", "f(x) = xe^x" -> "of(a) = be^a" (multiple single-
+    # letter tokens all independently collapsing toward "a", "of", "be").
+    # Protecting ALL single alphabetic characters, not just lowercase
+    # ones, is safe: the two real single-letter English words ("a", "I")
+    # are already correctly spelled, so leaving them uncorrected changes
+    # nothing for genuine use — this only stops the mangling of
+    # everything else. Same "safe, narrow heuristic, not a substitute
+    # for Step 2's vocabulary-based protection" posture as
+    # `_is_acronym()`.
+    return len(token.text) == 1 and token.text.isalpha()
+
+
 def correct_spelling(text: str, protected_spans: list[tuple[int, int]]) -> str:
     """Step 3 — general English spelling correction, skipping any span
     Step 2 marked as protected domain vocabulary.
@@ -83,7 +103,12 @@ def correct_spelling(text: str, protected_spans: list[tuple[int, int]]) -> str:
     last_end = 0
     for token in tokens:
         pieces.append(text[last_end : token.start])
-        if _is_protected(token, protected_spans) or _is_numeric(token) or _is_acronym(token):
+        if (
+            _is_protected(token, protected_spans)
+            or _is_numeric(token)
+            or _is_acronym(token)
+            or _is_single_letter(token)
+        ):
             pieces.append(token.text)
         else:
             suggestions = sym_spell.lookup(
