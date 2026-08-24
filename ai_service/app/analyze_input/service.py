@@ -1,5 +1,7 @@
+import asyncio
 import json
 import logging
+from dataclasses import dataclass
 
 from pydantic import ValidationError
 
@@ -16,45 +18,34 @@ from app.nlp.spellcheck import correct_spelling
 logger = logging.getLogger(__name__)
 
 
-async def analyze_input(
+@dataclass
+class _BlockingResult:
+    response: dict
+    # None unless Stage 1 left it AMBIGUOUS and titles are present —
+    # analyze_input() uses this to decide whether Stage 2 (the one real
+    # network call in the whole pipeline) needs to fire.
+    gap_band: GapBand | None
+    cleaned_query: str
+
+
+def _analyze_input_blocking(
     text: str,
     known_terms: list[str],
-    current_concept_id: str | None = None,
-    subject_id: str | None = None,
-    dag_version: int | None = None,
-    subject_title: str | None = None,
-    current_concept_title: str | None = None,
-) -> dict:
-    """Thin orchestrator — sequences the 6-step pipeline in the exact
-    order ARCHITECTURE.md/RULES.md rule 33 specify. All the actual logic
-    lives in nlp/ and intent/; this just wires steps together and shapes
-    the response.
-
-    known_terms comes from Rust, not a local DB query — ai_service has
-    zero Postgres dependencies (confirmed: no driver in
-    requirements.txt), so canonical_concepts/concept_aliases vocabulary
-    has to be supplied by the caller. Subject-scoped: the current
-    journey's subject's concepts only, not the full cross-subject
-    vocabulary bank (Tangent Mode's global-KB search is the one
-    explicit exception to subject-scoping; this isn't it).
-
-    current_concept_id: the concept the student is currently on, if
-    mid-journey (nullable). Only used to decide TANGENT vs OUT_OF_SCOPE
-    when is_on_topic is False — see classify_intent.
-
-    subject_id/dag_version (deferred.md #75/2b): only meaningful
-    alongside current_concept_id — together they're enough to look up
-    that concept's own stored embedding (concept_embeddings, id format
-    concept_id:subject_id:dag_version) for the richer on-topic check
-    below. All three are None for memoryless mode (no subject exists to
-    look anything up in), same as current_concept_id always was.
-
-    subject_title/current_concept_title (deferred.md #2b): display
-    names, only used to build Stage 2's classify_gap() prompt if it
-    fires — nothing else here needs them. None-able independently of
-    subject_id/dag_version (a caller could plausibly have the IDs but
-    not fetch titles) — Stage 2 is just skipped, staying AMBIGUOUS,
-    rather than treating a missing title as an error.
+    current_concept_id: str | None,
+    subject_id: str | None,
+    dag_version: int | None,
+) -> _BlockingResult:
+    """Steps 1-6 plus Stage 1 gap classification — every genuinely
+    synchronous/CPU-bound piece of the pipeline (spaCy, symspell,
+    rapidfuzz, embeddings, ChromaDB's own sync client). Split out so
+    analyze_input() can run this on a worker thread instead of the
+    event loop (V3's audit-list bug #3: this whole pipeline used to run
+    inline in an `async def`, blocking every other concurrent ai_service
+    request for its full duration on this single-worker container).
+    Stage 2's classify_gap() stays OUT of this function and in
+    analyze_input() itself as a normal await — it's already async (a
+    real Dify HTTP call), so offloading it to a thread too would be
+    pointless.
     """
     step1_text = expand_shorthand(text)
 
@@ -83,6 +74,7 @@ async def analyze_input(
     # detected_intent stays exactly what it always was (TANGENT for
     # either sub-case) until there's real behavior to route to.
     gap_classification: str | None = None
+    gap_band: GapBand | None = None
     if not is_on_topic and current_concept_id and subject_id and dag_version is not None:
         [reply_embedding] = embed_texts([step4_text])
         is_on_topic = is_reply_on_topic_for_concept(reply_embedding, current_concept_id, subject_id, dag_version)
@@ -96,32 +88,86 @@ async def analyze_input(
                 is_on_topic = True
             else:
                 gap_classification = gap_signal.band.value
-                if gap_signal.band == GapBand.AMBIGUOUS and subject_title and current_concept_title:
-                    # Stage 2 (expensive, LLM) — only for the band
-                    # Stage 1 couldn't resolve on vector math alone.
-                    # Fails soft: Dify isn't configured in every
-                    # environment (DifyNotConfigured is a DifyError
-                    # subclass), and even a genuine failure just means
-                    # "stays ambiguous" — no caller acts on off_topic
-                    # vs dag_gap differently yet, so nothing behavioral
-                    # is lost either way.
-                    try:
-                        gap_result = await classify_gap(
-                            subject_title, known_terms, current_concept_title, step4_text
-                        )
-                        gap_classification = gap_result.classification
-                    except (DifyError, ValidationError, json.JSONDecodeError, TypeError) as err:
-                        logger.info("classify_gap: Stage 2 unavailable, staying ambiguous: %s", err)
+                gap_band = gap_signal.band
 
     intent = classify_intent(step4_text, is_on_topic, current_concept_id)
 
-    return {
-        "raw_input": text,
-        "cleaned_query": step4_text,
-        "lemmas": nlp_result.lemmas,
-        "keywords": nlp_result.keywords,
-        "is_on_topic": is_on_topic,
-        "matched_concepts": matched_concepts,
-        "detected_intent": intent.value,
-        "gap_classification": gap_classification,
-    }
+    return _BlockingResult(
+        response={
+            "raw_input": text,
+            "cleaned_query": step4_text,
+            "lemmas": nlp_result.lemmas,
+            "keywords": nlp_result.keywords,
+            "is_on_topic": is_on_topic,
+            "matched_concepts": matched_concepts,
+            "detected_intent": intent.value,
+            "gap_classification": gap_classification,
+        },
+        gap_band=gap_band,
+        cleaned_query=step4_text,
+    )
+
+
+async def analyze_input(
+    text: str,
+    known_terms: list[str],
+    current_concept_id: str | None = None,
+    subject_id: str | None = None,
+    dag_version: int | None = None,
+    subject_title: str | None = None,
+    current_concept_title: str | None = None,
+) -> dict:
+    """Thin orchestrator — sequences the 6-step pipeline in the exact
+    order ARCHITECTURE.md/RULES.md rule 33 specify. All the actual logic
+    lives in nlp/ and intent/; this just wires steps together and shapes
+    the response. The blocking steps run via asyncio.to_thread (see
+    _analyze_input_blocking's own doc comment) — only Stage 2's
+    classify_gap() (the one genuine network call) runs directly on this
+    coroutine.
+
+    known_terms comes from Rust, not a local DB query — ai_service has
+    zero Postgres dependencies (confirmed: no driver in
+    requirements.txt), so canonical_concepts/concept_aliases vocabulary
+    has to be supplied by the caller. Subject-scoped: the current
+    journey's subject's concepts only, not the full cross-subject
+    vocabulary bank (Tangent Mode's global-KB search is the one
+    explicit exception to subject-scoping; this isn't it).
+
+    current_concept_id: the concept the student is currently on, if
+    mid-journey (nullable). Only used to decide TANGENT vs OUT_OF_SCOPE
+    when is_on_topic is False — see classify_intent.
+
+    subject_id/dag_version (deferred.md #75/2b): only meaningful
+    alongside current_concept_id — together they're enough to look up
+    that concept's own stored embedding (concept_embeddings, id format
+    concept_id:subject_id:dag_version) for the richer on-topic check
+    below. All three are None for memoryless mode (no subject exists to
+    look anything up in), same as current_concept_id always was.
+
+    subject_title/current_concept_title (deferred.md #2b): display
+    names, only used to build Stage 2's classify_gap() prompt if it
+    fires — nothing else here needs them. None-able independently of
+    subject_id/dag_version (a caller could plausibly have the IDs but
+    not fetch titles) — Stage 2 is just skipped, staying AMBIGUOUS,
+    rather than treating a missing title as an error.
+    """
+    blocking = await asyncio.to_thread(
+        _analyze_input_blocking, text, known_terms, current_concept_id, subject_id, dag_version
+    )
+
+    if blocking.gap_band == GapBand.AMBIGUOUS and subject_title and current_concept_title:
+        # Stage 2 (expensive, LLM) — only for the band Stage 1 couldn't
+        # resolve on vector math alone. Fails soft: Dify isn't
+        # configured in every environment (DifyNotConfigured is a
+        # DifyError subclass), and even a genuine failure just means
+        # "stays ambiguous" — no caller acts on off_topic vs dag_gap
+        # differently yet, so nothing behavioral is lost either way.
+        try:
+            gap_result = await classify_gap(
+                subject_title, known_terms, current_concept_title, blocking.cleaned_query
+            )
+            blocking.response["gap_classification"] = gap_result.classification
+        except (DifyError, ValidationError, json.JSONDecodeError, TypeError) as err:
+            logger.info("classify_gap: Stage 2 unavailable, staying ambiguous: %s", err)
+
+    return blocking.response

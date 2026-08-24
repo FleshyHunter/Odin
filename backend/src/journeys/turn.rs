@@ -28,6 +28,7 @@ use uuid::Uuid;
 
 use crate::ai_client::{self, AiClientError, ConceptMeta, HistoryMessage};
 use crate::auth::middleware::begin_rls_transaction;
+use crate::auth::rate_limit;
 use crate::exercises;
 use crate::knowledge;
 use crate::state::AppState;
@@ -747,25 +748,46 @@ async fn set_pending_branch_topic(pool: &PgPool, user_id: Uuid, thread_id: Uuid,
 /// fallback). Errs toward requiring a recognizable affirmative: an
 /// unmatched reply is treated as declined and just falls through to a
 /// normal turn — never silently creates a journey on an ambiguous
-/// read. Known, accepted false-positive: a reply that STARTS with an
-/// affirmative word but is actually declining ("yeah, no thanks") would
-/// misread as confirmed — acceptable for a low-stakes, easily-undone
-/// action (the created journey is deletable like any other track), not
-/// worth a real classifier call for.
+/// read.
+///
+/// deferred.md #84/V3 audit bug #4: originally a reply that STARTS with
+/// an affirmative word but is actually declining ("yeah, no thanks")
+/// misread as confirmed — accepted at the time as low-stakes since the
+/// created journey was "deletable like any other track." That premise
+/// turned out false (no delete path existed anywhere — #84), so this
+/// now guards against a negation word landing immediately after the
+/// matched affirmative ("yeah, no thanks" -> declined). Deliberately
+/// narrow (adjacency only, not a whole-string negation scan) so a
+/// negation word appearing LATER in a genuine yes doesn't misfire
+/// ("yes, let's do it, no doubt about it" still confirms — "no" isn't
+/// adjacent to "yes"). Known, accepted remaining gap: an idiom where
+/// "no" immediately follows an affirmative WITHOUT negating it ("yeah,
+/// no doubt, let's do it") still misreads as declined — genuinely
+/// ambiguous without real intent classification, not worth one for
+/// this low-stakes a decision either.
 fn is_branch_confirmed(text: &str) -> bool {
     const AFFIRMATIVE: &[&str] = &[
         "yes", "yeah", "yep", "yup", "sure", "ok", "okay", "alright", "please", "go for it", "do it",
         "sounds good", "lets do it", "let's do it", "start it", "i guess", "go ahead", "please do",
     ];
+    const NEGATION: &[&str] = &["no", "not", "nope", "nah", "dont", "don't"];
+
     let normalized: String = text
         .trim()
         .to_lowercase()
         .chars()
         .filter(|c| c.is_alphanumeric() || c.is_whitespace() || *c == '\'')
         .collect();
-    AFFIRMATIVE
-        .iter()
-        .any(|phrase| normalized == *phrase || normalized.starts_with(&format!("{phrase} ")))
+
+    AFFIRMATIVE.iter().any(|phrase| {
+        if normalized == *phrase {
+            return true;
+        }
+        let Some(rest) = normalized.strip_prefix(&format!("{phrase} ")) else {
+            return false;
+        };
+        !NEGATION.iter().any(|neg| rest == *neg || rest.starts_with(&format!("{neg} ")))
+    })
 }
 
 /// deferred.md #2d — the confirmation-only turn once a branch has just
@@ -1204,6 +1226,17 @@ pub async fn send_journey_message(
     if let Some(topic) = pending_branch_topic {
         clear_pending_branch_topic(&state.pool, user_id, thread_id).await?;
         if is_branch_confirmed(&raw_input) {
+            // Found live (V3's audit list, bug #5): this call site skipped
+            // journey_start_rate_limit entirely — the only other caller of
+            // service::start() (handlers::start) checks it first. Same
+            // check, same placement, matching that path exactly.
+            let mut conn = state.get_redis_connection().await?;
+            let (max, window) = state.journey_start_rate_limit;
+            if !rate_limit::check_and_increment(&mut conn, &rate_limit::journey_start_key(user_id), max, window)
+                .await?
+            {
+                return Err(JourneyError::RateLimited);
+            }
             match super::service::start(state, user_id, topic.clone(), None, None, None).await {
                 Ok(super::service::StartOutcome::JourneyCreated { .. }) => {
                     return respond_to_confirmed_branch(state, user_id, journey_id, thread_id, &topic, raw_input, think)

@@ -69,6 +69,32 @@ export function useMemorylessChat(
   // "our own navigate() just caught up" branch, which is still the
   // same thread continuing forward).
   const hasNudgedRef = useRef(false);
+  // deferred.md #65: send() and runUpload() are two independent async
+  // paths that can BOTH start from threadIdRef.current === null and
+  // each create their own brand-new real thread server-side — whichever
+  // resolved LAST used to unconditionally overwrite threadIdRef and
+  // re-fire onThreadId, silently orphaning whatever the other one
+  // already put on screen. Bumped on every genuine thread switch below,
+  // so it also covers #65's other failure mode: a stale upload that
+  // finally resolves after the user already navigated away from the
+  // thread it belongs to.
+  const threadEpochRef = useRef(0);
+  // Single reconciliation point for both send() and runUpload() (was
+  // duplicated ad hoc in each before — V3's own send()-side abortRef
+  // check stays as-is alongside this, it guards a different thing:
+  // "has THIS specific call been superseded," not "did another call
+  // already win the race"). Only the FIRST resolution within the
+  // current epoch is ever adopted; a later one that also (incorrectly,
+  // now that the first already won) created its own thread just leaves
+  // that thread as a harmless orphan instead of clobbering the one
+  // already showing.
+  const reconcileThreadId = useCallback((newId: string, epoch: number): boolean => {
+    if (epoch !== threadEpochRef.current) return false;
+    if (threadIdRef.current !== null && threadIdRef.current !== newId) return false;
+    const isNewThread = threadIdRef.current !== newId;
+    threadIdRef.current = newId;
+    return isNewThread;
+  }, []);
 
   useEffect(() => {
     if (justCreatedRef.current && initialThreadId === threadIdRef.current) {
@@ -76,6 +102,7 @@ export function useMemorylessChat(
       return;
     }
     threadIdRef.current = initialThreadId;
+    threadEpochRef.current += 1;
     hasNudgedRef.current = false;
     // deferred.md #63: attachments/pendingFiles fell into the same
     // pre-existing hole composerNotice/isSending sit in — this effect
@@ -181,6 +208,7 @@ export function useMemorylessChat(
 
     const controller = new AbortController();
     abortRef.current = controller;
+    const epoch = threadEpochRef.current;
     let receivedDelta = false;
     let sawError = false;
 
@@ -195,9 +223,7 @@ export function useMemorylessChat(
             // back to it and corrupt threadIdRef for whatever the
             // now-current thread's own send() needs next.
             if (abortRef.current !== controller) return;
-            const isNewThread = threadIdRef.current !== id;
-            threadIdRef.current = id;
-            if (isNewThread) {
+            if (reconcileThreadId(id, epoch)) {
               justCreatedRef.current = true;
               onThreadId?.(id);
             }
@@ -275,7 +301,7 @@ export function useMemorylessChat(
         abortRef.current = null;
       }
     }
-  }, [onThreadId]);
+  }, [onThreadId, reconcileThreadId]);
 
   // Aborting the fetch IS the cancel signal the backend listens for
   // (see api/memoryless.ts's doc comment) — no separate endpoint call.
@@ -300,18 +326,16 @@ export function useMemorylessChat(
   // lives here once.
   const runUpload = useCallback(
     async (id: string, file: File, role: UploadRole) => {
+      // deferred.md #65: captured before the request starts, same as
+      // send()'s own epoch capture — see reconcileThreadId's own
+      // comment for why this (not an unconditional overwrite) is what
+      // actually fixes the race.
+      const epoch = threadEpochRef.current;
       try {
         const result = await uploadsApi.uploadFile(file, role, threadIdRef.current, null);
-        // Same reconciliation as send()'s onThreadId handler above: a
-        // staged upload can create a brand-new thread just as easily as a
-        // message can, if this is the very first thing the user does.
-        if (result.threadId) {
-          const isNewThread = threadIdRef.current !== result.threadId;
-          threadIdRef.current = result.threadId;
-          if (isNewThread) {
-            justCreatedRef.current = true;
-            onThreadId?.(result.threadId);
-          }
+        if (result.threadId && reconcileThreadId(result.threadId, epoch)) {
+          justCreatedRef.current = true;
+          onThreadId?.(result.threadId);
         }
         setAttachments((prev) =>
           prev.map((a) =>
@@ -328,7 +352,7 @@ export function useMemorylessChat(
         );
       }
     },
-    [onThreadId],
+    [onThreadId, reconcileThreadId],
   );
 
   // Queues files the instant they're selected/dropped — no upload yet,
