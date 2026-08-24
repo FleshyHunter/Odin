@@ -224,6 +224,24 @@ pub async fn convert(
     let entry =
         journeys::turn::fetch_entry_concept(&state.pool, user_id, req.journey_id, subject_id, dag_version).await?;
 
+    // deferred.md #87: study_threads.journey_id has no UNIQUE constraint,
+    // and the INSERT below only conflicts on thread_id (this thread's own
+    // primary key) — without this check, a DIFFERENT memoryless thread
+    // converting to a journey_id another thread already owns would create
+    // two real mode='journey' rows sharing that journey_id, silently.
+    // Same guard journeys::turn::start_journey_thread already applies to
+    // its own creation path, reused here rather than duplicated. Only
+    // blocks a genuinely different thread — re-converting this exact
+    // thread_id (idempotent retry) is unaffected, same as the ON CONFLICT
+    // below already tolerates.
+    if let Some(existing_thread_id) = journeys::turn::find_thread(&state.pool, user_id, req.journey_id).await?
+        && existing_thread_id != thread.thread_id
+    {
+        return Err(MemorylessError::Validation(
+            "this journey already has a teaching thread".to_string(),
+        ));
+    }
+
     let mut tx = begin_rls_transaction(&state.pool, user_id).await?;
 
     sqlx::query(

@@ -102,7 +102,12 @@ pub(crate) async fn verify_journey_and_subject(
     row.map(|(id,)| id).ok_or(JourneyError::NotFound)
 }
 
-async fn find_thread(pool: &PgPool, user_id: Uuid, journey_id: Uuid) -> Result<Option<Uuid>, JourneyError> {
+// deferred.md #87: pub(crate), not private — memoryless::handlers::convert()
+// also needs this same "does a journey-mode thread already exist for this
+// journey_id" check (its own ON CONFLICT only guards against re-converting
+// the SAME thread_id twice, not a DIFFERENT thread_id converting into a
+// journey_id another thread already owns).
+pub(crate) async fn find_thread(pool: &PgPool, user_id: Uuid, journey_id: Uuid) -> Result<Option<Uuid>, JourneyError> {
     let mut tx = begin_rls_transaction(pool, user_id).await?;
     let row: Option<(Uuid,)> =
         sqlx::query_as("SELECT thread_id FROM study_threads WHERE journey_id = $1 AND mode = 'journey'")
