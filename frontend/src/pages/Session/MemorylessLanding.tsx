@@ -1,4 +1,4 @@
-import { useRef, useState, type DragEvent } from 'react';
+import { useEffect, useRef, useState, type DragEvent } from 'react';
 import { Composer } from '../../components/conversation/Composer/Composer';
 import { DragOverlay } from '../../components/conversation/Composer/DragOverlay/DragOverlay';
 import { MessageList } from '../../components/conversation/Messages/MessageList';
@@ -62,6 +62,53 @@ export function MemorylessLanding({ onStartTrack, threadId = null, onThreadCreat
   const [isDraggingOver, setIsDraggingOver] = useState(false);
   const dragCounterRef = useRef(0);
 
+  // deferred.md #99/#100 — the empty state starts genuinely centered
+  // (.empty-main's own justify-content: center, exact by construction,
+  // no guessed offset). The moment the composer grows past its resting
+  // single-line height, this measures where the title is ACTUALLY
+  // sitting right now (the real centered position, not an
+  // approximation) and locks .empty-main to that exact offset via an
+  // inline style, switching off dynamic centering so further growth
+  // only pushes the "Start a track" pill below further down — the
+  // title never moves once locked. Reverts to null (dynamic centering
+  // resumes) if the composer shrinks back down to empty, so deleting
+  // everything genuinely re-centers rather than staying pinned at a
+  // stale offset.
+  const emptyMainRef = useRef<HTMLElement>(null);
+  const titleRef = useRef<HTMLHeadingElement>(null);
+  const composerWrapperRef = useRef<HTMLDivElement>(null);
+  const restHeightRef = useRef<number | null>(null);
+  const [lockedPaddingTop, setLockedPaddingTop] = useState<number | null>(null);
+
+  useEffect(() => {
+    const wrapper = composerWrapperRef.current;
+    if (!wrapper) return;
+
+    const observer = new ResizeObserver(([entry]) => {
+      const height = entry.contentRect.height;
+      // First observation after mount establishes the resting (single-
+      // line) height — nothing to compare against yet.
+      if (restHeightRef.current === null) {
+        restHeightRef.current = height;
+        return;
+      }
+      if (height > restHeightRef.current) {
+        // Only measure/lock once — later ticks while already grown
+        // shouldn't re-measure (the title's real position no longer
+        // reflects "centered," it reflects "already locked").
+        if (lockedPaddingTop === null && emptyMainRef.current && titleRef.current) {
+          const containerTop = emptyMainRef.current.getBoundingClientRect().top;
+          const titleTop = titleRef.current.getBoundingClientRect().top;
+          setLockedPaddingTop(titleTop - containerTop);
+        }
+      } else if (height <= restHeightRef.current) {
+        setLockedPaddingTop(null);
+      }
+    });
+    observer.observe(wrapper);
+    return () => observer.disconnect();
+  }, [lockedPaddingTop]);
+
   const handleDragEnter = (event: DragEvent<HTMLElement>) => {
     event.preventDefault();
     if (!event.dataTransfer.types.includes('Files')) return;
@@ -109,19 +156,28 @@ export function MemorylessLanding({ onStartTrack, threadId = null, onThreadCreat
 
   if (messages.length === 0) {
     return (
-      <main className="empty-main" {...dragHandlers}>
+      <main
+        className="empty-main"
+        ref={emptyMainRef}
+        style={lockedPaddingTop !== null ? { justifyContent: 'flex-start', paddingTop: lockedPaddingTop } : undefined}
+        {...dragHandlers}
+      >
         <DragOverlay active={isDraggingOver} />
-        <h1 className="display">What do you want to learn?</h1>
+        <h1 className="display" ref={titleRef}>
+          What do you want to learn?
+        </h1>
         <p>Ask a quick question, or start a track to build real progress over time.</p>
 
-        <Composer
-          onSend={send}
-          isSending={isSending}
-          onStop={cancel}
-          notice={composerNotice}
-          onDismissNotice={dismissComposerNotice}
-          {...attachProps}
-        />
+        <div ref={composerWrapperRef} style={{ width: '100%' }}>
+          <Composer
+            onSend={send}
+            isSending={isSending}
+            onStop={cancel}
+            notice={composerNotice}
+            onDismissNotice={dismissComposerNotice}
+            {...attachProps}
+          />
+        </div>
 
         <button className="start-track-pill" onClick={() => onStartTrack()}>
           <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2}>

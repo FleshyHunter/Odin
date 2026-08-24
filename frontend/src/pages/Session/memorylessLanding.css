@@ -4,27 +4,17 @@
 .empty-main {
   display: flex; flex-direction: column;
   align-items: center;
-  /* flex-start + padding-top, not justify-content: center — with
-     center, growing the composer (below) pushed the whole
-     title+subtitle+composer+pill block outward symmetrically (title
-     crept up, pill crept down). flex-start anchors the title/subtitle
-     in place instead: only the composer's own growth pushes the pill
-     below it further down, matching how Claude's real empty-landing
-     composer grows (top fixed, extends downward into empty space) —
-     confirmed against real screenshots, deliberately NOT the same as
-     Claude's in-chat composer (bottom-anchored, grows upward), which
-     protects message history that doesn't exist on this empty state.
-     padding-top is a plain aesthetic starting position (flex-start is
-     what makes the growth direction correct, this is just where the
-     block sits by default) — adjust to taste, not a value that needs
-     pixel-perfect tuning. */
-  justify-content: flex-start;
-  padding-top: 18vh;
+  /* deferred.md #99/#100 — genuinely centered by default (exact, not a
+     guessed padding value); MemorylessLanding.tsx switches this to
+     flex-start + an inline paddingTop the instant the composer grows
+     past its resting height, measured live from the real centered
+     position at that moment rather than approximated here. This rule
+     is only ever the AT-REST state — see the component's own comment
+     for the locking mechanism. */
+  justify-content: center;
   flex: 1;
   min-width: 0;
-  padding-inline: 2rem;
-  padding-bottom: 2rem;
-  text-align: center;
+  padding: 2rem; text-align: center;
   /* Anchors DragOverlay's position: absolute; inset: 0 — see MemorylessLanding.tsx. */
   position: relative;
 }
