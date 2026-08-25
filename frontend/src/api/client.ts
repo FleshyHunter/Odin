@@ -1,7 +1,20 @@
 // Talks to the Rust backend ONLY. Per the locked AI Gateway Pattern
 // (ARCHITECTURE_LOCK.md), the frontend never calls FastAPI directly —
 // Rust is the sole boundary the browser talks to.
-export const API_BASE_URL = import.meta.env.VITE_API_BASE_URL ?? 'http://localhost:8080';
+//
+// Default derives from window.location.hostname rather than a hardcoded
+// 'localhost' — added 2026-08-22 alongside vite.config.ts's host:true /
+// backend's multi-origin FRONTEND_ORIGIN (both needed for LAN/phone
+// access). A literal 'localhost' here would resolve to whichever device
+// is actually running the browser: correct when that's the Mac itself,
+// silently wrong (targets the phone's own loopback, nothing listening)
+// when the page is loaded from another device on the LAN. Matching the
+// page's own hostname keeps working for both without needing a new env
+// var to update every time the Mac's LAN IP changes. VITE_API_BASE_URL
+// still overrides this outright, for a real future deployment where the
+// frontend and backend genuinely live on different hosts.
+export const API_BASE_URL =
+  import.meta.env.VITE_API_BASE_URL ?? `http://${window.location.hostname}:8080`;
 
 // Real backend wiring started with auth (api/auth.ts) — every other
 // api/*.ts function is still a typed stub shaped like the real eventual

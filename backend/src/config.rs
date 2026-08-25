@@ -28,6 +28,16 @@ pub struct Config {
     pub smtp_relay: Option<String>,
     pub smtp_username: Option<String>,
     pub smtp_password: Option<String>,
+    // Found live 2026-08-25: mailer.send().await (auth/email.rs) had no
+    // timeout at all — on a network that lets the initial SMTP TCP
+    // connect through but then stalls the STARTTLS handshake (observed
+    // on a cellular hotspot; raw `nc` to port 587 connected fine, the
+    // real signup request still hung 30s+ with zero response), the
+    // whole HTTP request just hangs forever with it. Same "a clear
+    // failure beats an indefinite hang" reasoning already applied to
+    // Redis (AppState::get_redis()'s 5s wrap) — SMTP just never got the
+    // same treatment.
+    pub smtp_send_timeout_seconds: u64,
     // The browser's own same-origin policy, not an auth/authorization
     // layer (JWT + RLS already cover that) — needed the moment the
     // frontend makes real cross-origin requests (5174 -> 8080) with
@@ -170,6 +180,10 @@ impl Config {
         // fix in .env.example addresses, but this handles the value
         // itself regardless of quoting).
         let smtp_password = env::var("SMTP_PASSWORD").ok().map(|p| p.replace(' ', ""));
+        let smtp_send_timeout_seconds = env::var("SMTP_SEND_TIMEOUT_SECONDS")
+            .ok()
+            .and_then(|v| v.parse().ok())
+            .unwrap_or(15);
         // 5174, not Vite's own factory default of 5173 — a separate
         // local project ("veritas") already owns 5173 on this machine,
         // and frontend/vite.config.ts is pinned to 5174 for the same
@@ -271,6 +285,7 @@ impl Config {
             smtp_relay,
             smtp_username,
             smtp_password,
+            smtp_send_timeout_seconds,
             frontend_origin,
             cookie_secure,
             ai_service_url,

@@ -15,5 +15,12 @@ export default defineConfig({
     // start) instead of silently drifting to yet another port.
     port: 5174,
     strictPort: true,
+    // Binds to all interfaces, not just loopback, so another device on
+    // the same LAN (e.g. a phone) can reach this at the Mac's real LAN
+    // IP:5174 instead of only localhost:5174. The backend's CORS
+    // allow-list (FRONTEND_ORIGIN, backend/src/main.rs) has to separately
+    // include that same LAN origin — this flag alone only makes the page
+    // loadable, it doesn't touch CORS at all.
+    host: true,
   },
 })

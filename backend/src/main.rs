@@ -34,7 +34,7 @@ use axum::http::{header, HeaderValue, Method};
 use axum::Router;
 use config::Config;
 use state::AppState;
-use tower_http::cors::CorsLayer;
+use tower_http::cors::{AllowOrigin, CorsLayer};
 
 #[tokio::main]
 async fn main() {
@@ -60,8 +60,13 @@ async fn main() {
     let email_sender: Arc<dyn auth::email::EmailSender> =
         match (&config.smtp_relay, &config.smtp_username, &config.smtp_password) {
             (Some(relay), Some(username), Some(password)) => {
-                let sender = auth::email::SmtpEmailSender::new(relay, username.clone(), password.clone())
-                    .expect("invalid SMTP configuration");
+                let sender = auth::email::SmtpEmailSender::new(
+                    relay,
+                    username.clone(),
+                    password.clone(),
+                    config.smtp_send_timeout_seconds,
+                )
+                .expect("invalid SMTP configuration");
                 tracing::info!(%relay, %username, "SMTP email sender configured");
                 Arc::new(sender)
             }
@@ -110,13 +115,30 @@ async fn main() {
     // the browser will actually attach/accept the httpOnly refresh_token
     // cookie cross-origin (5174 -> 8080 in local dev); that flag can't be
     // paired with a wildcard origin (tower-http rejects it at runtime),
-    // so this is one explicit origin, not Any.
-    let cors_origin: HeaderValue = config
+    // so this stays an explicit allow-list, never Any.
+    // FRONTEND_ORIGIN accepts a comma-separated list, not just one origin
+    // — added so a phone/other device on the same LAN can reach the Vite
+    // dev server (started with --host, see vite.config.ts) at the Mac's
+    // real LAN IP while `localhost:5174` keeps working for the Mac itself.
+    // Still every entry is a single, explicit, exact origin string — this
+    // widens the allow-list, it doesn't loosen the match into a wildcard
+    // or a pattern.
+    let cors_origins: Vec<HeaderValue> = config
         .frontend_origin
-        .parse()
-        .expect("FRONTEND_ORIGIN must be a valid header value (e.g. http://localhost:5174)");
+        .split(',')
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .map(|origin| {
+            origin.parse().unwrap_or_else(|_| {
+                panic!(
+                    "FRONTEND_ORIGIN entry {origin:?} is not a valid header value \
+                     (e.g. http://localhost:5174)"
+                )
+            })
+        })
+        .collect();
     let cors = CorsLayer::new()
-        .allow_origin(cors_origin)
+        .allow_origin(AllowOrigin::list(cors_origins))
         .allow_credentials(true)
         .allow_methods([Method::GET, Method::POST, Method::DELETE])
         .allow_headers([header::CONTENT_TYPE, header::AUTHORIZATION]);
