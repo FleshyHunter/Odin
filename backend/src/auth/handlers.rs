@@ -155,6 +155,19 @@ pub async fn signup_complete(
     Json(req): Json<CompleteSignupRequest>,
 ) -> Result<(CookieJar, Json<AuthResponse>), AuthError> {
     let email = normalize_email(&req.email);
+
+    // Found live 2026-08-25: validate BEFORE consuming the proof token,
+    // not after. consume_signup_verified deletes the token unconditionally
+    // the moment it's called — with validation running afterward, a
+    // rejected password (too short, etc.) still burned the one-time
+    // token on that first attempt, so every retry with a CORRECTED
+    // password then hit "verification expired" even though the real OTP
+    // proof was still well within its 30-minute TTL. The token should
+    // only ever be spent on an attempt that's actually going to succeed
+    // past this point, not on every attempt regardless of outcome.
+    password::validate_password(&req.password, state.password_min_length)
+        .map_err(AuthError::Validation)?;
+
     let mut conn = state.get_redis().await?;
 
     // Step 3 only proceeds if step 2 actually succeeded recently for
@@ -164,8 +177,6 @@ pub async fn signup_complete(
         return Err(AuthError::VerificationRequired);
     }
 
-    password::validate_password(&req.password, state.password_min_length)
-        .map_err(AuthError::Validation)?;
     let password_hash = password::hash_password(&req.password)?;
 
     // ONE single INSERT (Auth section) — no partial/pending row ever
@@ -478,6 +489,14 @@ pub async fn password_reset_complete(
     Json(req): Json<PasswordResetCompleteRequest>,
 ) -> Result<(CookieJar, Json<AuthResponse>), AuthError> {
     let email = normalize_email(&req.email);
+
+    // Same reordering fix as signup_complete (2026-08-25) — validate
+    // BEFORE consuming the one-time proof token, so a rejected password
+    // doesn't burn it and force starting the whole OTP flow over again
+    // just to retry with a corrected password.
+    password::validate_password(&req.new_password, state.password_min_length)
+        .map_err(AuthError::Validation)?;
+
     let mut conn = state.get_redis().await?;
 
     // Same "step 3 only proceeds if step 2 actually succeeded recently
@@ -486,8 +505,6 @@ pub async fn password_reset_complete(
         return Err(AuthError::VerificationRequired);
     }
 
-    password::validate_password(&req.new_password, state.password_min_length)
-        .map_err(AuthError::Validation)?;
     let new_hash = password::hash_password(&req.new_password)?;
 
     let user = sqlx::query_as::<_, User>(
