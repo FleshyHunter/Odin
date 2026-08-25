@@ -5,6 +5,7 @@ from typing import Iterator
 from ollama import Client
 
 from app.observability import track_generation
+from app.search.tools import SEARCH_TOOLS, run_tool
 
 # Currently-adopted operational model (ARCHITECTURE.md, Fine-Tuning
 # Roadmap — Qwen3.5-9B adopted ahead of the original evaluation plan,
@@ -107,6 +108,79 @@ def generate_text_stream(
             stream=True,
         )
         for chunk in stream:
+            content = chunk.message.content
+            if content:
+                yield content
+
+
+# deferred.md #93 — real-model-verified (this session, against the
+# actual Ollama host) before being written: streaming + tools work
+# together, and critically, when think=True and the model DOES call a
+# tool, no visible text streams first — the tool-call decision resolves
+# silently within the same "thinking" delay every reasoning-mode call
+# already pays, so offering tools costs nothing extra on the (common)
+# no-tool path versus generate_text_stream() above. Deliberately a
+# SEPARATE function, not a parameter added to generate_text_stream()
+# itself — some callers (e.g. journeys/turn.rs's branch-confirmation
+# acknowledgment) want a short, deterministic reply and should never
+# have a search tool available to reach for, same "scope new behavior
+# narrowly" reasoning generation/router.py's own _SYSTEM_PROMPT already
+# follows (folded into specific endpoints, not every qwen caller).
+def generate_text_stream_with_tools(
+    prompt: str,
+    think: bool = True,
+    system: str | None = None,
+    history: list[dict[str, str]] | None = None,
+) -> Iterator[str]:
+    with track_generation():
+        client = get_client()
+        messages = _build_messages(prompt, system, history)
+        stream = client.chat(
+            model=MODEL_NAME,
+            messages=messages,
+            think=think,
+            tools=SEARCH_TOOLS,
+            options={"num_ctx": OLLAMA_NUM_CTX},
+            stream=True,
+        )
+
+        tool_call = None
+        for chunk in stream:
+            content = chunk.message.content
+            if content:
+                yield content
+            calls = getattr(chunk.message, "tool_calls", None)
+            if calls:
+                # v1 scope: only the first tool call in a response is
+                # acted on. Not observed to request more than one in
+                # real testing; revisit if that changes.
+                tool_call = calls[0]
+                break
+
+        if tool_call is None:
+            # No tool call — the stream above already WAS the real
+            # answer, nothing more to do. This is the common path and
+            # it's identical in shape/cost to generate_text_stream().
+            return
+
+        tool_result = run_tool(tool_call.function.name, dict(tool_call.function.arguments))
+
+        # Ollama's own expected shape for feeding a tool result back —
+        # verified directly against the real model before this was
+        # written (see the diagnostic this entry references): an
+        # assistant message carrying the tool_calls it made, followed
+        # by a tool-role message carrying the result.
+        messages.append({"role": "assistant", "tool_calls": [tool_call]})
+        messages.append({"role": "tool", "content": tool_result})
+
+        follow_up = client.chat(
+            model=MODEL_NAME,
+            messages=messages,
+            think=think,
+            options={"num_ctx": OLLAMA_NUM_CTX},
+            stream=True,
+        )
+        for chunk in follow_up:
             content = chunk.message.content
             if content:
                 yield content

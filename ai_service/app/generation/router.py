@@ -4,7 +4,7 @@ from fastapi import APIRouter
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 
-from app.generation.service import generate_text, generate_text_stream
+from app.generation.service import generate_text, generate_text_stream, generate_text_stream_with_tools
 
 router = APIRouter()
 
@@ -86,13 +86,14 @@ def generate(request: GenerateRequest) -> GenerateResponse:
 # one {"error": "..."} as the LAST line if generation fails partway —
 # the HTTP status is already 200 by the time any of this is streaming,
 # so a status code can't carry a mid-stream failure; this is the only
-# way to signal one to the caller.
-def _stream_lines(prompt: str, think: bool, history: list[HistoryMessage]):
-    history_dicts = [{"role": message.role, "content": message.content} for message in history]
+# way to signal one to the caller. Shared by both streaming endpoints
+# below — takes an already-built delta iterator so each endpoint's own
+# generator-construction (which service function, which args) stays
+# separate and explicit rather than this helper needing to know about
+# tools/history plumbing itself.
+def _wrap_ndjson(deltas):
     try:
-        for delta in generate_text_stream(
-            prompt, think, system=_SYSTEM_PROMPT, history=history_dicts
-        ):
+        for delta in deltas:
             yield json.dumps({"delta": delta}) + "\n"
     except Exception as exc:  # noqa: BLE001 - deliberately broad: whatever
         # Ollama/the client raises here must still reach the caller as a
@@ -102,7 +103,24 @@ def _stream_lines(prompt: str, think: bool, history: list[HistoryMessage]):
 
 @router.post("/generate/stream")
 def generate_stream(request: GenerateRequest) -> StreamingResponse:
-    return StreamingResponse(
-        _stream_lines(request.prompt, request.think, request.history),
-        media_type="application/x-ndjson",
+    history_dicts = [{"role": message.role, "content": message.content} for message in request.history]
+    deltas = generate_text_stream(request.prompt, request.think, system=_SYSTEM_PROMPT, history=history_dicts)
+    return StreamingResponse(_wrap_ndjson(deltas), media_type="application/x-ndjson")
+
+
+# deferred.md #93 — genuinely separate from /generate/stream above, not
+# a shared `tools: bool` flag on GenerateRequest: some real callers
+# (e.g. journeys/turn.rs's branch-confirmation acknowledgment) want a
+# short, deterministic reply and should never have a search tool
+# available to reach for. "Capability before caller" — no Rust call
+# site wired to this yet; built and real-model-verified
+# (generation/service.py's own comment on generate_text_stream_with_
+# tools has the verification detail) so it's ready when that wiring
+# happens.
+@router.post("/generate/stream_with_tools")
+def generate_stream_with_tools(request: GenerateRequest) -> StreamingResponse:
+    history_dicts = [{"role": message.role, "content": message.content} for message in request.history]
+    deltas = generate_text_stream_with_tools(
+        request.prompt, request.think, system=_SYSTEM_PROMPT, history=history_dicts
     )
+    return StreamingResponse(_wrap_ndjson(deltas), media_type="application/x-ndjson")

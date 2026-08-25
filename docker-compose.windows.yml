@@ -39,6 +39,14 @@
 # DIFY_BASE_URL if self-hosting instead of Dify Cloud. Until these are
 # set, /acquire, /generate_dag, /generate_exercise_template each return
 # a clean 503 rather than failing to boot — see .env.example.
+#
+# deferred.md #93: that same .env optionally needs WOLFRAM_APP_ID (see
+# ai_service/app/search/wolfram_client.py) — unset means query_wolfram
+# fails soft with a per-call error, same "not configured yet" posture
+# as Dify's own keys, never a startup failure. SEARXNG_URL is also
+# optional (defaults to host.docker.internal:8888, matching the
+# single-container SearXNG deploy this assumes — see searxng_client.py)
+# and only needs overriding if that deployment used a different port.
 services:
   postgres:
     image: postgres:17
@@ -96,6 +104,9 @@ services:
       DIFY_ACQUIRE_API_KEY: ${DIFY_ACQUIRE_API_KEY:-}
       DIFY_DAG_API_KEY: ${DIFY_DAG_API_KEY:-}
       DIFY_EXERCISE_TEMPLATE_API_KEY: ${DIFY_EXERCISE_TEMPLATE_API_KEY:-}
+      # deferred.md #93 — see header comment above.
+      WOLFRAM_APP_ID: ${WOLFRAM_APP_ID:-}
+      SEARXNG_URL: ${SEARXNG_URL:-http://host.docker.internal:8888}
     ports:
       - "8000:8000"
 
