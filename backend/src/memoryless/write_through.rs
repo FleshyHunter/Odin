@@ -102,11 +102,12 @@ pub async fn write_through_turn(
     }
 
     let matched_concepts = serde_json::json!(audit_event.matched_concepts);
+    // deferred.md #60: queued_ms/generation_ms, real instrumentation now.
     sqlx::query(
         "INSERT INTO audit_logs \
          (thread_id, user_input, cleaned_query, matched_concepts, detected_intent, \
-          mode, response_text, model_used, error, timestamp) \
-         VALUES ($1, $2, $3, $4, $5, 'memoryless', $6, $7, $8, $9)",
+          mode, response_text, model_used, error, queued_ms, generation_ms, timestamp) \
+         VALUES ($1, $2, $3, $4, $5, 'memoryless', $6, $7, $8, $9, $10, $11)",
     )
     .bind(thread_id)
     .bind(&audit_event.user_input)
@@ -116,6 +117,8 @@ pub async fn write_through_turn(
     .bind(&audit_event.response_text)
     .bind(&audit_event.model_used)
     .bind(&audit_event.error)
+    .bind(audit_event.queued_ms)
+    .bind(audit_event.generation_ms)
     .bind(audit_event.timestamp)
     .execute(&mut *tx)
     .await?;

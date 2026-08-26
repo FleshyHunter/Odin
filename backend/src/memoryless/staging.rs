@@ -31,8 +31,11 @@ pub struct StagedMessage {
 
 // Mirrors the subset of audit_logs' columns (models/audit.rs) that a
 // bare, foundation-less memoryless turn can actually populate — no
-// retrieved_chunk_ids/strategy_used/assessment_result/queued_ms/
-// generation_ms, since retrieval and grading don't run in this pass.
+// retrieved_chunk_ids/strategy_used/assessment_result, since retrieval
+// and grading don't run in this pass. queued_ms/generation_ms WERE also
+// excluded here (deferred.md #60) until real timing instrumentation was
+// added around turn.rs's own generate_stream() call — now populated for
+// real, like every other field below.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct StagedAuditEvent {
     pub user_input: String,
@@ -49,6 +52,13 @@ pub struct StagedAuditEvent {
     // partial text was generated before the cutoff (industrial
     // Claude/ChatGPT behavior — never silently discarded).
     pub error: Option<String>,
+    // deferred.md #60. #[serde(default)] so a thread already staged in
+    // Redis from before this field existed still deserializes cleanly
+    // (defaults to 0) instead of failing turn hydration mid-TTL.
+    #[serde(default)]
+    pub queued_ms: i32,
+    #[serde(default)]
+    pub generation_ms: i32,
     pub timestamp: DateTime<Utc>,
 }
 

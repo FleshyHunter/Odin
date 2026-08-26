@@ -291,11 +291,12 @@ pub async fn convert(
         .await?;
     for event in thread.audit_events.iter().skip(existing_audit_count as usize) {
         let matched_concepts = json!(event.matched_concepts);
+        // deferred.md #60: queued_ms/generation_ms, real instrumentation now.
         sqlx::query(
             "INSERT INTO audit_logs \
              (thread_id, user_input, cleaned_query, matched_concepts, detected_intent, \
-              mode, response_text, model_used, error, timestamp) \
-             VALUES ($1, $2, $3, $4, $5, 'memoryless', $6, $7, $8, $9)",
+              mode, response_text, model_used, error, queued_ms, generation_ms, timestamp) \
+             VALUES ($1, $2, $3, $4, $5, 'memoryless', $6, $7, $8, $9, $10, $11)",
         )
         .bind(thread.thread_id)
         .bind(&event.user_input)
@@ -305,6 +306,8 @@ pub async fn convert(
         .bind(&event.response_text)
         .bind(&event.model_used)
         .bind(&event.error)
+        .bind(event.queued_ms)
+        .bind(event.generation_ms)
         .bind(event.timestamp)
         .execute(&mut *tx)
         .await?;
