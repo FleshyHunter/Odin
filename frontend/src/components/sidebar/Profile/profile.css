@@ -5,11 +5,16 @@
   position: relative;
 }
 
+/* position: fixed + left/bottom set inline from the trigger's real
+   getBoundingClientRect() (Profile.tsx) — portaled to document.body, so
+   this is no longer sized/clipped by the sidebar's own box (see
+   Profile.tsx's comment for why). min-width replaces the old
+   `left: 0; right: 0` stretch-to-parent trick, which is what pinned it
+   to the collapsed sidebar's ~64px column. */
 .profile-menu {
-  position: absolute;
-  bottom: calc(100% + 6px);
-  left: 0;
-  right: 0;
+  position: fixed;
+  min-width: 200px;
+  max-width: 260px;
   background: var(--surface-raised);
   border: 1px solid var(--border);
   border-radius: 10px;
