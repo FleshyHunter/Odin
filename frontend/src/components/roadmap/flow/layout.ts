@@ -34,7 +34,7 @@ const NODE_X = Math.max(OUTER_R_JUNCTION, COLLAPSED_WIDTH / 2) + 8;
 // this is a fixed generous budget, not a measured one. Moving the
 // column from a centered 170 to a left-anchored NODE_X actually frees
 // UP more of this width for labels than before, not less.
-const VIEWBOX_WIDTH = 340;
+const VIEWBOX_WIDTH = 230;
 const FIRST_Y = 32;
 const SPACING = 58;
 const COLLAPSED_EXTRA_GAP = 10;

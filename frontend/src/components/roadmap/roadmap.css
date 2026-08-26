@@ -28,13 +28,17 @@
 /* The actual scroll region — separate from roadmap-canvas-wrap itself
    so roadmap-zoom-controls (a sibling, not a child of this) can stay
    pinned to a fixed corner rather than scrolling away with the SVG.
-   The SVG's own real pixel width/height (RoadmapCanvas.tsx) is what
-   makes this need to scroll in the first place — at any zoom level,
-   not just when content is unusually long. */
+   Vertical-only: the SVG's width is always fixed to exactly
+   viewBoxWidth (RoadmapCanvas.tsx), never wider than this wrap in
+   practice, so overflow-x is locked out rather than left auto — a
+   panel resized narrower than that fixed width clips instead of
+   scrolling sideways, a deliberate tradeoff for "no horizontal scroll,
+   ever" over full arbitrary-width responsiveness. */
 .roadmap-canvas-scroll {
   width: 100%;
   height: 100%;
-  overflow: auto;
+  overflow-y: auto;
+  overflow-x: hidden;
 }
 
 .roadmap-zoom-controls {

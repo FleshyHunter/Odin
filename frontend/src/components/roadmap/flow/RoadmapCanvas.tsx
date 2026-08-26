@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { Edge } from '../edges/Edge';
 import { PulseRing } from '../effects/PulseRing';
 import { CollapsedNode } from '../nodes/CollapsedNode';
@@ -12,15 +12,18 @@ interface RoadmapCanvasProps {
 }
 
 const RING_GAP = 6;
-// zoom is a plain multiplier on the SVG's own authored/native unit
-// size (node radii, label font-size, item spacing all render at
-// exactly their authored values at 1.0) — a pure camera control, not a
-// layout recompute: layoutRoadmap() never re-runs on zoom change, only
-// how large the same fixed layout renders. Bounds are illustrative,
-// not exact — easy to retune once it's visually in front of you.
-const ZOOM_MIN = 0.6;
-const ZOOM_MAX = 1.6;
-const ZOOM_STEP = 0.2;
+// zoomFraction (0..1) is a viewport-relative position, not an absolute
+// scale — decouples the +/- buttons (fixed steps in this space) from
+// the real scale factor, which depends on the container's actual
+// measured width (see below) and can shift on its own when the panel
+// is resized. 0 = min zoom (more of the chain visible, at a scale
+// below "fills the width exactly"); 1 = max zoom (content width
+// exactly fills the real viewport, zero blank margin — the natural
+// ceiling, not a guessed constant).
+const ZOOM_STEP_FRACTION = 0.25;
+// S_MIN = S_MAX * MIN_ZOOM_RATIO — how much smaller the zoomed-out
+// scale is than the "fills exactly" ceiling. Below 1, always.
+const MIN_ZOOM_RATIO = 0.7;
 
 // deferred.md #42: a collapsed group in `expandedGroupIds` is swapped
 // for its real concepts (as plain pending nodes) plus a same-id
@@ -46,7 +49,26 @@ function expandItems(items: RoadmapItem[], expandedGroupIds: Set<string>): Roadm
 
 export function RoadmapCanvas({ items, onNodeClick }: RoadmapCanvasProps) {
   const [expandedGroupIds, setExpandedGroupIds] = useState<Set<string>>(new Set());
-  const [zoom, setZoom] = useState(1);
+  // 0 = zoomed out (see more of the chain at once); 1 = zoomed in (content
+  // width exactly fills the real viewport). Defaults to max zoom (1).
+  const [zoomFraction, setZoomFraction] = useState(1);
+  const [viewportWidthPx, setViewportWidthPx] = useState<number | null>(null);
+  const scrollRef = useRef<HTMLDivElement>(null);
+
+  // Tracks the SCROLL element's real width (roadmap-canvas-wrap's own
+  // inner width, effectively) — a ResizeObserver, not a window resize
+  // listener, since ActivePanel's width changes from a manual drag, not
+  // a window-level event.
+  useEffect(() => {
+    const el = scrollRef.current;
+    if (!el) return;
+    const observer = new ResizeObserver((entries) => {
+      const width = entries[0]?.contentRect.width;
+      if (width) setViewportWidthPx(width);
+    });
+    observer.observe(el);
+    return () => observer.disconnect();
+  }, []);
 
   const toggleGroup = (id: string) => {
     setExpandedGroupIds((prev) => {
@@ -60,7 +82,20 @@ export function RoadmapCanvas({ items, onNodeClick }: RoadmapCanvasProps) {
     });
   };
 
-  const { positions, edges, viewBoxWidth, viewBoxHeight } = layoutRoadmap(expandItems(items, expandedGroupIds));
+  const { positions, edges, viewBoxWidth: contentWidthUnits, viewBoxHeight } = layoutRoadmap(
+    expandItems(items, expandedGroupIds),
+  );
+
+  // Before the first ResizeObserver callback lands, fall back to
+  // rendering the content at its own natural width/scale (S == 1) —
+  // avoids a zero-size flash, and is a perfectly reasonable first paint.
+  const scale = viewportWidthPx ? viewportWidthPx / contentWidthUnits : null;
+  const sMax = scale;
+  const sMin = sMax !== null ? sMax * MIN_ZOOM_RATIO : null;
+  const s = sMax !== null && sMin !== null ? sMin + (sMax - sMin) * zoomFraction : 1;
+  const svgWidthPx = viewportWidthPx ?? contentWidthUnits;
+  const renderedViewBoxWidth = viewportWidthPx ? viewportWidthPx / s : contentWidthUnits;
+  const renderedHeightPx = viewBoxHeight * s;
 
   return (
     <>
@@ -72,33 +107,36 @@ export function RoadmapCanvas({ items, onNodeClick }: RoadmapCanvasProps) {
         <button
           type="button"
           className="roadmap-zoom-btn"
-          aria-label="Zoom out"
-          disabled={zoom <= ZOOM_MIN}
-          onClick={() => setZoom((z) => Math.max(ZOOM_MIN, +(z - ZOOM_STEP).toFixed(2)))}
+          aria-label="Zoom in"
+          disabled={zoomFraction >= 1}
+          onClick={() => setZoomFraction((f) => Math.min(1, +(f + ZOOM_STEP_FRACTION).toFixed(2)))}
         >
-          −
+          +
         </button>
         <button
           type="button"
           className="roadmap-zoom-btn"
-          aria-label="Zoom in"
-          disabled={zoom >= ZOOM_MAX}
-          onClick={() => setZoom((z) => Math.min(ZOOM_MAX, +(z + ZOOM_STEP).toFixed(2)))}
+          aria-label="Zoom out"
+          disabled={zoomFraction <= 0}
+          onClick={() => setZoomFraction((f) => Math.max(0, +(f - ZOOM_STEP_FRACTION).toFixed(2)))}
         >
-          +
+          −
         </button>
       </div>
 
-      {/* Real pixel width/height (not 100%/100%) so viewBox maps 1:1 to
-          the chain's true coordinates — zoom directly scales the SVG's
-          own rendered size, and roadmap-canvas-scroll's overflow:auto
-          picks up native scrollbars whenever that exceeds the wrap's
-          box, at any zoom level (not just as an overflow edge case). */}
-      <div className="roadmap-canvas-scroll">
+      {/* width is always the real measured viewport width (never wider) —
+          horizontal scroll is structurally impossible, not just hidden.
+          viewBox's width portion is what scales with zoom instead
+          (renderedViewBoxWidth, always >= contentWidthUnits by
+          construction) — the standard SVG "camera zoom" pattern. height
+          uses the SAME scale `s` on both the pixel value and the
+          viewBox's own height-in-units ratio, so x/y stay uniformly
+          scaled — circles stay circular, text isn't stretched. */}
+      <div className="roadmap-canvas-scroll" ref={scrollRef}>
         <svg
-          width={viewBoxWidth * zoom}
-          height={viewBoxHeight * zoom}
-          viewBox={`0 0 ${viewBoxWidth} ${viewBoxHeight}`}
+          width={svgWidthPx}
+          height={renderedHeightPx}
+          viewBox={`0 0 ${renderedViewBoxWidth} ${viewBoxHeight}`}
           role="img"
           aria-label="Journey map"
         >

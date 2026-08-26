@@ -30,8 +30,12 @@ export function TargetNode({ x, y, title, subtitle, status, isJunction, onClick 
   const innerR = isJunction ? INNER_R_JUNCTION : INNER_R;
   const lit = status === 'mastered' || status === 'current';
   const labelX = x + outerR + LABEL_GAP;
-  const titleY = subtitle ? y - 4 : y + 4;
-  const subtitleY = y + 8;
+  // Title always sits on the node's own centerline (y + 4, a small
+  // baseline-compensation offset — same value used whether or not a
+  // subtitle exists), never shifted up to make room above it. Any
+  // subtitle renders strictly below that line instead.
+  const titleY = y + 4;
+  const subtitleY = titleY + 11;
 
   const handleKeyDown = (event: KeyboardEvent<SVGGElement>) => {
     if (!onClick) return;
