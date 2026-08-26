@@ -49,6 +49,7 @@ export function TargetNode({ x, y, title, subtitle, status, isJunction, onClick 
       role={onClick ? 'button' : undefined}
       tabIndex={onClick ? 0 : undefined}
     >
+      {status === 'locked' && <title>Locked — prerequisite not yet complete</title>}
       <circle cx={x} cy={y} r={outerR} className="roadmap-target-outer" />
       <circle cx={x} cy={y} r={innerR} className="roadmap-target-inner" />
       <text x={labelX} y={titleY} className={`roadmap-node-title ${status === 'current' ? 'current' : ''}`}>

@@ -921,3 +921,124 @@ async fn finalize(
     tx.commit().await?;
     Ok(journey_id)
 }
+
+/// deferred.md #94 — Map/Roadmap's real ordering. `order_index` is NOT
+/// usable for this (see the "#4 audit fix" comment above: raw array
+/// position from the original Dify response, unrelated to actual DAG
+/// structure) — the real order is a topological walk of the prerequisite
+/// graph, rooted at `subjects.entry_concept_id` (the one column already
+/// proven, via that same audit fix, to be the real root).
+///
+/// Kahn's algorithm: `edges` is `(concept_id, prereq_concept_id)` pairs
+/// straight off `journey_prerequisites` (concept_id depends on
+/// prereq_concept_id). Only `entry_concept_id` seeds the ready queue —
+/// nodes become ready purely by having every prerequisite already
+/// visited, never by an independent zero in-degree of their own — so a
+/// node not actually reachable by walking forward from the entry concept
+/// (shouldn't happen given how the DAG is built, but not structurally
+/// impossible) never enters the main walk. It's still returned exactly
+/// once: appended at the end, sorted by title, rather than silently
+/// dropped. Ties among multiple simultaneously-ready nodes (a real
+/// branch point) are broken by title for deterministic output.
+pub fn topological_order(nodes: &[(Uuid, String)], edges: &[(Uuid, Uuid)], entry_concept_id: Uuid) -> Vec<Uuid> {
+    use std::collections::BTreeSet;
+
+    let title_of: HashMap<Uuid, &str> = nodes.iter().map(|(id, title)| (*id, title.as_str())).collect();
+    let mut in_degree: HashMap<Uuid, usize> = nodes.iter().map(|(id, _)| (*id, 0)).collect();
+    let mut dependents: HashMap<Uuid, Vec<Uuid>> = HashMap::new();
+    for &(concept_id, prereq_concept_id) in edges {
+        *in_degree.entry(concept_id).or_insert(0) += 1;
+        dependents.entry(prereq_concept_id).or_default().push(concept_id);
+    }
+
+    let key = |id: Uuid| (title_of.get(&id).copied().unwrap_or("").to_string(), id);
+
+    let mut ready: BTreeSet<(String, Uuid)> = BTreeSet::new();
+    if title_of.contains_key(&entry_concept_id) {
+        ready.insert(key(entry_concept_id));
+    }
+
+    let mut visited: std::collections::HashSet<Uuid> = std::collections::HashSet::new();
+    let mut result: Vec<Uuid> = Vec::new();
+    while let Some(next) = ready.iter().next().cloned() {
+        ready.remove(&next);
+        let (_, id) = next;
+        if !visited.insert(id) {
+            continue;
+        }
+        result.push(id);
+        for &dependent_id in dependents.get(&id).map(Vec::as_slice).unwrap_or(&[]) {
+            if let Some(degree) = in_degree.get_mut(&dependent_id) {
+                *degree -= 1;
+                if *degree == 0 && !visited.contains(&dependent_id) {
+                    ready.insert(key(dependent_id));
+                }
+            }
+        }
+    }
+
+    let mut unreached: Vec<Uuid> = nodes.iter().map(|(id, _)| *id).filter(|id| !visited.contains(id)).collect();
+    unreached.sort_by_key(|id| title_of.get(id).copied().unwrap_or("").to_string());
+    result.extend(unreached);
+
+    result
+}
+
+#[cfg(test)]
+mod topological_order_tests {
+    use super::topological_order;
+    use uuid::Uuid;
+
+    #[test]
+    fn linear_chain_orders_entry_first() {
+        let (a, b, c) = (Uuid::new_v4(), Uuid::new_v4(), Uuid::new_v4());
+        let nodes = vec![(a, "A".to_string()), (b, "B".to_string()), (c, "C".to_string())];
+        let edges = vec![(b, a), (c, b)]; // b depends on a, c depends on b
+        assert_eq!(topological_order(&nodes, &edges, a), vec![a, b, c]);
+    }
+
+    #[test]
+    fn branch_point_breaks_ties_by_title() {
+        let (entry, zebra, apple) = (Uuid::new_v4(), Uuid::new_v4(), Uuid::new_v4());
+        let nodes = vec![
+            (entry, "Entry".to_string()),
+            (zebra, "Zebra concept".to_string()),
+            (apple, "Apple concept".to_string()),
+        ];
+        // Both zebra and apple become ready the moment entry is visited —
+        // alphabetical tie-break means apple (< zebra) comes first.
+        let edges = vec![(zebra, entry), (apple, entry)];
+        assert_eq!(topological_order(&nodes, &edges, entry), vec![entry, apple, zebra]);
+    }
+
+    #[test]
+    fn junction_waits_for_all_prerequisites() {
+        let (entry, side, junction) = (Uuid::new_v4(), Uuid::new_v4(), Uuid::new_v4());
+        let nodes = vec![
+            (entry, "Entry".to_string()),
+            (side, "Side".to_string()),
+            (junction, "Junction".to_string()),
+        ];
+        // junction depends on BOTH entry and side — must not become ready
+        // until side (which itself depends on entry) is also visited.
+        let edges = vec![(side, entry), (junction, entry), (junction, side)];
+        assert_eq!(topological_order(&nodes, &edges, entry), vec![entry, side, junction]);
+    }
+
+    #[test]
+    fn node_unreachable_from_entry_is_appended_not_dropped() {
+        let (entry, reachable, orphan) = (Uuid::new_v4(), Uuid::new_v4(), Uuid::new_v4());
+        let nodes = vec![
+            (entry, "Entry".to_string()),
+            (reachable, "Reachable".to_string()),
+            (orphan, "Orphan".to_string()),
+        ];
+        // orphan has no edges at all — not reachable by walking forward
+        // from entry, but must still appear exactly once in the output.
+        let edges = vec![(reachable, entry)];
+        let order = topological_order(&nodes, &edges, entry);
+        assert_eq!(order.len(), 3);
+        assert_eq!(&order[..2], &[entry, reachable]);
+        assert_eq!(order[2], orphan);
+    }
+}

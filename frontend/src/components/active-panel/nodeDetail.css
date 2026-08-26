@@ -22,6 +22,15 @@
 
 .node-title { font-family: 'Fraunces', serif; font-size: 1.15rem; margin: 0 0 1.1rem; color: var(--text); }
 
+/* deferred.md #94 — advisory, not a gate (PRD.md's locked "Prerequisite
+   Philosophy"). Same warning language as composer-notice.css's own
+   .composer-notice-warning, reused rather than a new color pairing. */
+.node-advisory {
+  background: var(--glow-dim); border: 1px solid var(--glow); color: var(--glow);
+  border-radius: var(--radius-md); padding: 0.55rem 0.75rem; font-size: 0.8rem;
+  line-height: 1.4; margin: 0 0 1.1rem;
+}
+
 .node-section-label {
   font-size: 0.7rem; letter-spacing: 0.05em; text-transform: uppercase; color: var(--text-muted);
   font-weight: 600; margin: 0 0 0.6rem;

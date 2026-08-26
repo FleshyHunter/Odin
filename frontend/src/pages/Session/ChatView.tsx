@@ -59,6 +59,13 @@ export function ChatView() {
   const activePanelShellRef = useRef<HTMLDivElement>(null);
 
   const [exercise, setExercise] = useState<Exercise | null>(null);
+  // Which concept `exercise` actually belongs to — now that #94 lets the
+  // Map start an attempt on ANY unlocked node (not just currentConceptId),
+  // `exercise` and `mastery` (below) can point at two DIFFERENT concepts
+  // at once. Tracked separately so handleSubmitAnswer can tell whether
+  // it's safe to fold a grading result into the currently-displayed
+  // mastery bar.
+  const [exerciseConceptId, setExerciseConceptId] = useState<string | null>(null);
   const [mastery, setMastery] = useState<MasteryStatus | null>(null);
 
   // deferred.md #43: /chat/:id is the one real URL for either a mock
@@ -88,6 +95,7 @@ export function ChatView() {
       if (!cancelled) setMastery(result);
     });
     setExercise(null);
+    setExerciseConceptId(null);
     return () => {
       cancelled = true;
     };
@@ -96,23 +104,28 @@ export function ChatView() {
   const handleSubmitAnswer = async (answer: string) => {
     if (!exercise) return undefined;
     const result = await submitExerciseAnswer(exercise.id, answer);
-    if (result) {
+    // Only fold the grade into the mastery bar if the just-graded exercise
+    // is for the SAME concept the bar is currently showing — a Map-
+    // triggered attempt on some other unlocked node grades and persists
+    // for real either way, it just shouldn't overwrite what's on screen
+    // for a different concept (see exerciseConceptId's own comment above).
+    if (result && exerciseConceptId === currentConceptId) {
       setMastery((prev) => (prev ? { ...prev, masteryScore: result.newMastery } : prev));
     }
     return result ?? undefined;
   };
 
-  // deferred.md #94: Map/Roadmap has no real backend wiring yet, so
-  // selectedNode.id (the only caller of onStartAttempt) is never a real
-  // concept_id — guarded here rather than silently sending a fake id to
-  // the real backend. Only actually starts an attempt in the one case
-  // that's real right now: the Map happening to be pointed at the SAME
-  // concept the tutor is already teaching. Revisit once #94's own real
-  // DAG-fetch wiring lands.
-  const handleStartAttempt = async (nodeId: string, difficulty: Difficulty) => {
-    if (!journeyId || !currentConceptId || nodeId !== currentConceptId) return;
-    const result = await exercisesApi.startAttempt(journeyId, currentConceptId, difficulty, activeTrack?.currentConceptTitle ?? '');
+  // deferred.md #94: nodeId is now always a real concept_id (Roadmap.tsx's
+  // real DAG fetch) — the old currentConceptId-only guard only existed to
+  // stop a fake Map id reaching the real backend, and that's gone now
+  // that every Map node is real. No status check here either, consistent
+  // with PRD.md's no-hard-gates Prerequisite Philosophy: attempting a
+  // `locked` node is allowed, same as an `available` one.
+  const handleStartAttempt = async (nodeId: string, nodeTitle: string, difficulty: Difficulty) => {
+    if (!journeyId) return;
+    const result = await exercisesApi.startAttempt(journeyId, nodeId, difficulty, nodeTitle);
     setExercise(result);
+    setExerciseConceptId(nodeId);
   };
 
   const handleDeleteTrack = () => {
@@ -302,6 +315,8 @@ export function ChatView() {
           onSubmitAnswer={handleSubmitAnswer}
           onStartAttempt={handleStartAttempt}
           width={panelWidth}
+          journeyId={journeyId}
+          trackTitle={activeTrack.title}
         />
       </div>
     </>

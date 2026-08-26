@@ -420,6 +420,89 @@ pub async fn get_node_history(
 }
 
 #[derive(Serialize)]
+pub struct RoadmapNodeInfo {
+    concept_id: Uuid,
+    title: String,
+    // Raw "locked"/"available"/"in_progress"/"complete" — matches this
+    // codebase's established split (backend returns DB-shaped data,
+    // frontend toX() mappers translate), same as every other api/*.ts
+    // file already does.
+    status: String,
+    prerequisite_ids: Vec<Uuid>,
+}
+
+/// GET /journeys/{journey_id}/roadmap — deferred.md #94: the Map tab's
+/// real data, replacing `sampleData.ts`. Order is a topological walk
+/// (`service::topological_order`), not `journey_concepts.order_index`
+/// (proven unreliable for graph semantics — see that function's own doc
+/// comment) — entry concept first, every other node exactly once.
+pub async fn get_roadmap(
+    AuthUser(user_id): AuthUser,
+    State(state): State<AppState>,
+    Path(journey_id): Path<Uuid>,
+) -> Result<Json<Vec<RoadmapNodeInfo>>, JourneyError> {
+    let mut tx = begin_rls_transaction(&state.pool, user_id).await?;
+
+    // No row at all means this journey doesn't exist or isn't owned by
+    // this user (RLS-filtered) — NotFound. A row that exists but whose
+    // subject somehow has no entry_concept_id set is a genuine invariant
+    // violation, not a not-found case — same distinction service.rs's
+    // own `subject.entry_concept_id.ok_or(JourneyError::Internal)` draws
+    // elsewhere.
+    let subject_row: Option<(Option<Uuid>,)> = sqlx::query_as(
+        "SELECT s.entry_concept_id FROM journeys j JOIN subjects s ON s.subject_id = j.subject_id WHERE j.journey_id = $1",
+    )
+    .bind(journey_id)
+    .fetch_optional(&mut *tx)
+    .await?;
+    let entry_concept_id = match subject_row {
+        None => return Err(JourneyError::NotFound),
+        Some((entry,)) => entry.ok_or(JourneyError::Internal)?,
+    };
+
+    let node_rows: Vec<(Uuid, String, String)> = sqlx::query_as(
+        "SELECT jc.concept_id, cc.title, jc.status FROM journey_concepts jc \
+         JOIN canonical_concepts cc ON cc.concept_id = jc.concept_id WHERE jc.journey_id = $1",
+    )
+    .bind(journey_id)
+    .fetch_all(&mut *tx)
+    .await?;
+
+    let edge_rows: Vec<(Uuid, Uuid)> = sqlx::query_as(
+        "SELECT concept_id, prereq_concept_id FROM journey_prerequisites WHERE journey_id = $1",
+    )
+    .bind(journey_id)
+    .fetch_all(&mut *tx)
+    .await?;
+
+    tx.commit().await?;
+
+    let mut status_by_id: std::collections::HashMap<Uuid, String> =
+        node_rows.iter().map(|(id, _, status)| (*id, status.clone())).collect();
+    let mut prereqs_by_id: std::collections::HashMap<Uuid, Vec<Uuid>> = std::collections::HashMap::new();
+    for &(concept_id, prereq_concept_id) in &edge_rows {
+        prereqs_by_id.entry(concept_id).or_default().push(prereq_concept_id);
+    }
+    let title_by_id: std::collections::HashMap<Uuid, String> =
+        node_rows.iter().map(|(id, title, _)| (*id, title.clone())).collect();
+    let nodes_for_order: Vec<(Uuid, String)> = node_rows.into_iter().map(|(id, title, _)| (id, title)).collect();
+
+    let ordered_ids = service::topological_order(&nodes_for_order, &edge_rows, entry_concept_id);
+
+    Ok(Json(
+        ordered_ids
+            .into_iter()
+            .map(|id| RoadmapNodeInfo {
+                concept_id: id,
+                title: title_by_id.get(&id).cloned().unwrap_or_default(),
+                status: status_by_id.remove(&id).unwrap_or_else(|| "locked".to_string()),
+                prerequisite_ids: prereqs_by_id.remove(&id).unwrap_or_default(),
+            })
+            .collect(),
+    ))
+}
+
+#[derive(Serialize)]
 pub struct JourneyMessageInfo {
     role: String,
     content: String,

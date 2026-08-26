@@ -11,6 +11,9 @@ export function Legend() {
         <span className="roadmap-legend-dot pending" /> Not yet reached
       </div>
       <div className="roadmap-legend-item">
+        <span className="roadmap-legend-dot locked" /> Locked
+      </div>
+      <div className="roadmap-legend-item">
         <span className="roadmap-legend-swatch-collapsed" /> Collapsed chain (tap to expand)
       </div>
     </div>

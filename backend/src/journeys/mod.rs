@@ -61,4 +61,6 @@ pub fn router() -> Router<AppState> {
             "/journeys/{journey_id}/concepts/{concept_id}/history",
             get(handlers::get_node_history),
         )
+        // deferred.md #94: Map/Roadmap's real data, replacing sampleData.ts.
+        .route("/journeys/{journey_id}/roadmap", get(handlers::get_roadmap))
 }

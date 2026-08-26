@@ -25,6 +25,53 @@
   overflow: hidden;
 }
 
+/* The actual scroll region — separate from roadmap-canvas-wrap itself
+   so roadmap-zoom-controls (a sibling, not a child of this) can stay
+   pinned to a fixed corner rather than scrolling away with the SVG.
+   The SVG's own real pixel width/height (RoadmapCanvas.tsx) is what
+   makes this need to scroll in the first place — at any zoom level,
+   not just when content is unusually long. */
+.roadmap-canvas-scroll {
+  width: 100%;
+  height: 100%;
+  overflow: auto;
+}
+
+.roadmap-zoom-controls {
+  position: absolute;
+  top: 8px;
+  right: 8px;
+  z-index: 5;
+  display: flex;
+  gap: 0.3rem;
+}
+
+.roadmap-zoom-btn {
+  width: 24px;
+  height: 24px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: var(--surface-raised);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  color: var(--text);
+  font-size: 0.95rem;
+  line-height: 1;
+  cursor: pointer;
+}
+.roadmap-zoom-btn:hover:not(:disabled) {
+  background: var(--surface);
+}
+.roadmap-zoom-btn:disabled {
+  opacity: 0.4;
+  cursor: default;
+}
+.roadmap-zoom-btn:focus-visible {
+  outline: 2px solid var(--focus);
+  outline-offset: -2px;
+}
+
 .roadmap-legend {
   display: flex;
   flex-wrap: wrap;
@@ -57,6 +104,16 @@
   box-shadow:
     0 0 0 2px var(--bg),
     0 0 0 3px var(--glow);
+}
+
+/* Hollow ring vs. .pending's solid fill — same dim node underneath (a
+   locked node renders identically to pending on the canvas itself, no
+   hard-gate visual treatment), but distinguishable at a glance here in
+   the legend, per PRD.md's Prerequisite Philosophy ("warn if
+   prerequisites unmet"). */
+.roadmap-legend-dot.locked {
+  background: transparent;
+  border: 1.5px solid var(--text-muted);
 }
 
 .roadmap-legend-swatch-collapsed {

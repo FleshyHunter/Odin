@@ -1,11 +1,16 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
+import * as exercisesApi from '../../api/exercises';
 import type { Attempt, Difficulty } from '../../types';
+import type { ConceptStatus } from '../roadmap/types';
 import { AttemptHistoryList } from './AttemptHistoryList';
 import './nodeDetail.css';
 
 interface NodeDetailProps {
+  journeyId: string | null;
   nodeId: string;
   nodeTitle: string;
+  status: ConceptStatus;
+  unmetPrerequisiteTitles: string[];
   onBack: () => void;
   onAttempt: (difficulty: Difficulty) => void;
 }
@@ -24,12 +29,22 @@ const DIFFICULTIES: { value: Difficulty; label: string }[] = [
 // templates, max 3 per concept — one per difficulty — each
 // re-instantiated fresh on request), so this is deliberately two small,
 // real lists: tiers to attempt, and past attempts to review.
-// deferred.md #94: nodeId here is always a Map/Roadmap-derived id
-// (sampleData.ts, never real), and this component has no journeyId
-// prop to call the real history endpoint with even if it were —
-// attempts stays empty until #94's own real DAG-fetch wiring lands.
-export function NodeDetail({ nodeId: _nodeId, nodeTitle, onBack, onAttempt }: NodeDetailProps) {
-  const [attempts] = useState<Attempt[]>([]);
+// deferred.md #94: nodeId is now always a real concept_id (Roadmap.tsx's
+// real DAG fetch), so the real history endpoint is meaningful again.
+export function NodeDetail({ journeyId, nodeId, nodeTitle, status, unmetPrerequisiteTitles, onBack, onAttempt }: NodeDetailProps) {
+  const [attempts, setAttempts] = useState<Attempt[]>([]);
+
+  useEffect(() => {
+    setAttempts([]);
+    if (!journeyId) return;
+    let cancelled = false;
+    exercisesApi.getNodeHistory(journeyId, nodeId).then((result) => {
+      if (!cancelled) setAttempts(result);
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [journeyId, nodeId]);
 
   return (
     <div className="node-detail">
@@ -37,6 +52,17 @@ export function NodeDetail({ nodeId: _nodeId, nodeTitle, onBack, onAttempt }: No
         ‹ Back to map
       </button>
       <h3 className="node-title">{nodeTitle}</h3>
+
+      {/* No hard gating — PRD.md's locked "Prerequisite Philosophy" (line
+          260): "No prerequisite ever blocks navigation." Tiers below stay
+          fully clickable regardless of status; this is advisory only
+          ("warn if prerequisites unmet"), never a gate. */}
+      {status === 'locked' && (
+        <p className="node-advisory">
+          Prerequisite not yet complete
+          {unmetPrerequisiteTitles.length > 0 ? `: ${unmetPrerequisiteTitles.join(', ')}` : ''}.
+        </p>
+      )}
 
       <p className="node-section-label">Practice</p>
       <div className="tier-row">

@@ -1,4 +1,10 @@
-export type ConceptStatus = 'mastered' | 'current' | 'pending';
+// deferred.md #94: 'locked' added alongside the mockup's original three —
+// journey_concepts.status genuinely distinguishes "reachable now"
+// (available -> pending here) from "not reachable yet" (locked), and
+// PRD.md's locked "Prerequisite Philosophy" (line 260, "warn if
+// prerequisites unmet") calls for surfacing exactly that, not collapsing
+// the two into one dim state.
+export type ConceptStatus = 'mastered' | 'current' | 'pending' | 'locked';
 
 export interface RoadmapNode {
   kind: 'node';
@@ -10,6 +16,12 @@ export interface RoadmapNode {
   // second prerequisite ("+ Vector spaces"), the current node uses it
   // for "you are here". Never both at once in the mockup.
   subtitle?: string;
+  // Titles of this node's NOT-YET-mastered prerequisites — empty for a
+  // node with no unmet prerequisites. Only meaningful for a 'locked'
+  // node (NodeDetail's advisory line); carried on every node rather than
+  // computed lazily since buildRoadmapData.ts already has every other
+  // node's mapped status in scope when building this one.
+  unmetPrerequisiteTitles?: string[];
 }
 
 export interface CollapsedGroupItem {

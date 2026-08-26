@@ -1,18 +1,18 @@
 import { Legend } from './Legend';
 import { RoadmapCanvas } from './flow/RoadmapCanvas';
 import './roadmap.css';
-import { sampleRoadmap } from './sampleData';
-import type { RoadmapData } from './types';
+import type { ConceptStatus, RoadmapData } from './types';
 
 interface RoadmapProps {
-  data?: RoadmapData;
-  onNodeClick?: (id: string, title: string) => void;
+  data: RoadmapData;
+  onNodeClick?: (id: string, title: string, status: ConceptStatus, unmetPrerequisiteTitles: string[]) => void;
 }
 
-// Public entry point for the Map tab. No trackId/data wiring yet —
-// that's separate follow-up work — so this renders standalone sample
-// data by default until a real fetch is threaded in from ChatView.
-export function Roadmap({ data = sampleRoadmap, onNodeClick }: RoadmapProps) {
+// Public entry point for the Map tab — deferred.md #94: ActivePanel.tsx
+// owns the real fetch and only ever renders this once it resolves (a
+// loading placeholder shows until then), so `data` is always real here,
+// never sample/placeholder.
+export function Roadmap({ data, onNodeClick }: RoadmapProps) {
   return (
     <div className="roadmap">
       <div className="roadmap-header">
