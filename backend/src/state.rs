@@ -56,11 +56,14 @@ pub struct AppState {
     // instead — reqwest's own doc comment: "applies to each read
     // operation, and resets after a successful read... more appropriate
     // for detecting stalled connections when the size isn't known
-    // beforehand" — the actually-correct primitive for a stream, used
-    // ONLY by ai_client::generate_stream(). Every other ai_client call
-    // (generate/analyze_input/embed/etc.) keeps using http_client's
-    // total-deadline semantics, which are correct for a single blocking
-    // response.
+    // beforehand" — the actually-correct primitive for a stream, used by
+    // ai_client::generate_stream()/generate_stream_with_tools() and,
+    // deliberately, by voice/handlers.rs's transcribe() too (see its own
+    // comment). Every other ai_client call (analyze_input/embed/etc.)
+    // keeps using http_client's total-deadline semantics, which are
+    // correct for a single blocking response. deferred.md #102: its
+    // read_timeout is 300s, not 120s — see main.rs's own comment on this
+    // client for why.
     pub streaming_http_client: reqwest::Client,
     pub ai_service_url: Arc<str>,
     // Block 11: sliding TTL for Redis-staged memoryless threads.

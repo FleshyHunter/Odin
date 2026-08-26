@@ -39,6 +39,14 @@ use super::errors::JourneyError;
 // same reasoning as memoryless/turn.rs's own identical constant.
 const MODEL_USED: &str = "qwen3.5:9b";
 const CHUNK_INACTIVITY_TIMEOUT: Duration = Duration::from_secs(120);
+// deferred.md #102 — same split, same reasoning, as memoryless/turn.rs's
+// identical constant: a single 120s bound applied to the wait for the
+// very first chunk too is unsafe now that generate_stream_with_tools()
+// can silently spend a pre-first-chunk tool round-trip before yielding
+// anything. Applied to every turn through stream_to_completion, not
+// only tool-using ones — see that file's own comment for the full
+// reasoning (worst-case sizing, why this isn't tool-call-specific).
+const FIRST_CHUNK_TIMEOUT: Duration = Duration::from_secs(300);
 const HISTORY_WINDOW_MESSAGES: usize = 10;
 
 pub enum TurnEvent {
@@ -317,12 +325,32 @@ async fn fetch_journey_upload_context(
     Ok(Some(rows.into_iter().map(|(text,)| text).collect::<Vec<_>>().join("\n\n")))
 }
 
+// deferred.md #60: `call_start` is captured by the caller right before
+// its own generate_stream(...).await — this function measures from
+// there, not from when it itself starts running, since queued_ms is
+// meant to capture time genuinely spent waiting on ai_service/Ollama
+// (real GPU contention per ARCHITECTURE.md's locked "GPU Queuing"
+// section), not any scheduling delay of this async fn itself.
+// deferred.md #102: first_chunk_timeout/chunk_timeout are parameters,
+// not a direct read of FIRST_CHUNK_TIMEOUT/CHUNK_INACTIVITY_TIMEOUT
+// below, specifically so stream_to_completion_tests can exercise the
+// real branching logic with small, fast durations instead of needing
+// to actually wait out the real 300s/120s values. All 4 real callers
+// pass the real module consts; only tests pass anything else.
 async fn stream_to_completion(
     chunks: impl Stream<Item = Result<String, AiClientError>> + Send + 'static,
     tx: &mpsc::Sender<TurnEvent>,
-) -> (String, Option<String>) {
+    call_start: std::time::Instant,
+    first_chunk_timeout: Duration,
+    chunk_timeout: Duration,
+) -> (String, Option<String>, i32, i32) {
     let mut accumulated = String::new();
     let mut cutoff_reason: Option<String> = None;
+    // Set the instant the FIRST real delta arrives — the only unambiguous
+    // "generation has actually started producing output" signal available
+    // from the Rust side alone (an approximation of real GPU queue time,
+    // not ai_service's own internal accounting, which doesn't exist).
+    let mut first_chunk_at: Option<std::time::Instant> = None;
     tokio::pin!(chunks);
 
     loop {
@@ -346,9 +374,18 @@ async fn stream_to_completion(
                 cutoff_reason = Some("cancelled by user".to_string());
                 break;
             }
-            result = tokio::time::timeout(CHUNK_INACTIVITY_TIMEOUT, chunks.next()) => {
+            // deferred.md #102: FIRST_CHUNK_TIMEOUT until the first
+            // delta has ever arrived, then the tighter
+            // CHUNK_INACTIVITY_TIMEOUT for every gap after that —
+            // first_chunk_at (already tracked below for the queued_ms
+            // metric) is exactly the right signal to key this off.
+            result = {
+                let timeout_duration = if first_chunk_at.is_none() { first_chunk_timeout } else { chunk_timeout };
+                tokio::time::timeout(timeout_duration, chunks.next())
+            } => {
                 match result {
                     Ok(Some(Ok(delta))) => {
+                        first_chunk_at.get_or_insert_with(std::time::Instant::now);
                         accumulated.push_str(&delta);
                         // tx.closed() above already covers the
                         // cancellation case — this remains as a harmless
@@ -367,7 +404,12 @@ async fn stream_to_completion(
                     }
                     Ok(None) => break,
                     Err(_) => {
-                        let reason = format!("generation stalled — no output for {}s", CHUNK_INACTIVITY_TIMEOUT.as_secs());
+                        // first_chunk_at is still None here (a Some would
+                        // mean a delta already arrived and reset the
+                        // wait) — safe to re-derive which bound just
+                        // fired from that same signal.
+                        let fired = if first_chunk_at.is_none() { first_chunk_timeout } else { chunk_timeout };
+                        let reason = format!("generation stalled — no output for {}s", fired.as_secs());
                         let _ = tx.send(TurnEvent::Error(reason.clone())).await;
                         cutoff_reason = Some(reason);
                         break;
@@ -376,7 +418,131 @@ async fn stream_to_completion(
             }
         }
     }
-    (accumulated, cutoff_reason)
+    let end = std::time::Instant::now();
+    // No chunk ever arrived (immediate error/cutoff): all elapsed time
+    // was spent "queued" in the sense that zero generation ever happened,
+    // generation_ms is genuinely 0, not unknown.
+    let queued_ms = (first_chunk_at.unwrap_or(end) - call_start).as_millis() as i32;
+    let generation_ms = first_chunk_at.map(|t| (end - t).as_millis() as i32).unwrap_or(0);
+    (accumulated, cutoff_reason, queued_ms, generation_ms)
+}
+
+#[cfg(test)]
+mod stream_to_completion_tests {
+    use super::*;
+    use futures_util::stream;
+
+    // deferred.md #60: the one genuinely novel piece of this pass — the
+    // rest is threading these two values through existing persistence
+    // functions. Real time.sleep, not mocked, since Instant itself can't
+    // be faked without a much bigger refactor (an injectable clock) that
+    // isn't warranted for two debugging-only fields.
+    #[tokio::test]
+    async fn queued_ms_measures_the_gap_before_the_first_chunk() {
+        let (tx, _rx) = mpsc::channel::<TurnEvent>(16);
+        let call_start = std::time::Instant::now();
+        tokio::time::sleep(Duration::from_millis(40)).await;
+        let chunks = stream::iter(vec![Ok("hello".to_string()), Ok(" world".to_string())]);
+
+        let (accumulated, cutoff_reason, queued_ms, generation_ms) =
+            stream_to_completion(chunks, &tx, call_start, FIRST_CHUNK_TIMEOUT, CHUNK_INACTIVITY_TIMEOUT).await;
+
+        assert_eq!(accumulated, "hello world");
+        assert_eq!(cutoff_reason, None);
+        // Generous lower bound (not ~40) — CI/dev-machine scheduling
+        // jitter, never flaky-tight.
+        assert!(queued_ms >= 20, "expected queued_ms to reflect the delay before streaming started, got {queued_ms}");
+        // Both chunks are ready instantly once streaming starts (stream::
+        // iter, no artificial gap between them) — generation_ms should
+        // stay small, nowhere near queued_ms's ~40ms.
+        assert!(generation_ms < queued_ms, "generation_ms ({generation_ms}) should be well under queued_ms ({queued_ms})");
+    }
+
+    #[tokio::test]
+    async fn no_chunk_ever_arriving_yields_zero_generation_ms() {
+        let (tx, _rx) = mpsc::channel::<TurnEvent>(16);
+        let call_start = std::time::Instant::now();
+        let chunks = stream::iter(vec![Err(AiClientError::ServiceUnavailable)]);
+
+        let (accumulated, cutoff_reason, queued_ms, generation_ms) =
+            stream_to_completion(chunks, &tx, call_start, FIRST_CHUNK_TIMEOUT, CHUNK_INACTIVITY_TIMEOUT).await;
+
+        assert_eq!(accumulated, "");
+        assert!(cutoff_reason.is_some());
+        assert_eq!(generation_ms, 0);
+        assert!(queued_ms >= 0);
+    }
+
+    // deferred.md #102 — the actual gap flagged in review: the two tests
+    // above only ever exercise queued_ms/generation_ms bookkeeping
+    // (their fake streams resolve every item instantly), never the
+    // FIRST_CHUNK_TIMEOUT/CHUNK_INACTIVITY_TIMEOUT split itself. These
+    // two use small, fast durations passed directly (see
+    // stream_to_completion's own comment on why that parameter exists)
+    // instead of waiting out the real 300s/120s values.
+    #[tokio::test]
+    async fn first_chunk_timeout_survives_a_slow_tool_delayed_start() {
+        let (tx, _rx) = mpsc::channel::<TurnEvent>(16);
+        let call_start = std::time::Instant::now();
+        // Simulates generate_stream_with_tools()'s pre-first-chunk tool
+        // round-trip: nothing arrives for 300ms. chunk_timeout (100ms)
+        // is deliberately SHORTER than that delay — if the OLD
+        // single-timeout behavior were still in effect (chunk_timeout
+        // applied to this wait too), this would incorrectly cut off as
+        // a stall. first_chunk_timeout (1s) is long enough to survive
+        // it, proving the split itself is what's actually selected here,
+        // not just that a generous constant exists somewhere.
+        let chunks = stream::once(async {
+            tokio::time::sleep(Duration::from_millis(300)).await;
+            Ok("hello".to_string())
+        });
+
+        let (accumulated, cutoff_reason, _queued_ms, _generation_ms) = stream_to_completion(
+            chunks,
+            &tx,
+            call_start,
+            Duration::from_secs(1),
+            Duration::from_millis(100),
+        )
+        .await;
+
+        assert_eq!(accumulated, "hello");
+        assert_eq!(cutoff_reason, None, "a slow-but-legitimate first chunk must not be treated as a stall");
+    }
+
+    #[tokio::test]
+    async fn chunk_inactivity_timeout_still_kills_a_stall_after_the_first_chunk() {
+        let (tx, _rx) = mpsc::channel::<TurnEvent>(16);
+        let call_start = std::time::Instant::now();
+        // First item resolves instantly (first_chunk_timeout, 1s, is
+        // irrelevant here and deliberately far more generous than
+        // chunk_timeout) — the SECOND poll then hangs forever, real
+        // silence rather than a slow-but-alive generation. Proves the
+        // tight post-first-chunk bound (chunk_timeout, 100ms) still
+        // applies and fires even with a much larger first_chunk_timeout
+        // in play — the split doesn't accidentally widen the
+        // inter-chunk bound too.
+        let chunks = stream::unfold(0u8, |state| async move {
+            if state == 0 {
+                Some((Ok("hello".to_string()), 1))
+            } else {
+                std::future::pending::<Option<(Result<String, AiClientError>, u8)>>().await
+            }
+        });
+
+        let (accumulated, cutoff_reason, _queued_ms, _generation_ms) = stream_to_completion(
+            chunks,
+            &tx,
+            call_start,
+            Duration::from_secs(1),
+            Duration::from_millis(100),
+        )
+        .await;
+
+        assert_eq!(accumulated, "hello");
+        let reason = cutoff_reason.expect("a real post-first-chunk stall must still be caught");
+        assert!(reason.contains("stalled"), "expected a stall cutoff reason, got: {reason}");
+    }
 }
 
 /// POST /journeys/{journey_id}/start — one-time call. Errors if a thread
@@ -417,6 +583,7 @@ pub async fn start_journey_thread(
         entry.learning_objective.as_ref().map(|o| format!(" Learning objective: {o}.")).unwrap_or_default(),
     );
 
+    let call_start = std::time::Instant::now();
     let chunks =
         ai_client::generate_stream(&state.streaming_http_client, &state.ai_service_url, prompt, think, Vec::new())
             .await?;
@@ -428,7 +595,8 @@ pub async fn start_journey_thread(
     let concept_title = entry.title.clone();
 
     tokio::spawn(async move {
-        let (accumulated, cutoff_reason) = stream_to_completion(chunks, &tx).await;
+        let (accumulated, cutoff_reason, queued_ms, generation_ms) =
+            stream_to_completion(chunks, &tx, call_start, FIRST_CHUNK_TIMEOUT, CHUNK_INACTIVITY_TIMEOUT).await;
         let now = Utc::now();
 
         if let Err(err) = persist_opening_turn(
@@ -440,6 +608,8 @@ pub async fn start_journey_thread(
             now,
             &accumulated,
             cutoff_reason.as_deref(),
+            queued_ms,
+            generation_ms,
         )
         .await
         {
@@ -489,6 +659,7 @@ pub(crate) async fn create_journey_thread_sync(
         entry.learning_objective.as_ref().map(|o| format!(" Learning objective: {o}.")).unwrap_or_default(),
     );
 
+    let call_start = std::time::Instant::now();
     let chunks = ai_client::generate_stream(
         &state.streaming_http_client,
         &state.ai_service_url,
@@ -500,9 +671,18 @@ pub(crate) async fn create_journey_thread_sync(
     tokio::pin!(chunks);
 
     let mut accumulated = String::new();
+    // deferred.md #60: same first-chunk-arrival signal as
+    // stream_to_completion's own doc comment — no SSE tx here (this path
+    // is awaited synchronously, not streamed to a live client), so it's
+    // tracked inline instead of via that shared helper.
+    let mut first_chunk_at: Option<std::time::Instant> = None;
     while let Some(chunk) = chunks.next().await {
+        first_chunk_at.get_or_insert_with(std::time::Instant::now);
         accumulated.push_str(&chunk?);
     }
+    let end = std::time::Instant::now();
+    let queued_ms = (first_chunk_at.unwrap_or(end) - call_start).as_millis() as i32;
+    let generation_ms = first_chunk_at.map(|t| (end - t).as_millis() as i32).unwrap_or(0);
 
     let thread_id = Uuid::new_v4();
     let now = Utc::now();
@@ -539,14 +719,17 @@ pub(crate) async fn create_journey_thread_sync(
         .execute(&mut *tx)
         .await?;
 
-    // Rule 4: mandatory every turn, all modes.
+    // Rule 4: mandatory every turn, all modes. deferred.md #60:
+    // queued_ms/generation_ms, real instrumentation now.
     sqlx::query(
-        "INSERT INTO audit_logs (thread_id, mode, response_text, model_used, error, timestamp) \
-         VALUES ($1, 'journey', $2, $3, NULL, $4)",
+        "INSERT INTO audit_logs (thread_id, mode, response_text, model_used, error, queued_ms, generation_ms, timestamp) \
+         VALUES ($1, 'journey', $2, $3, NULL, $4, $5, $6)",
     )
     .bind(thread_id)
     .bind(&accumulated)
     .bind(MODEL_USED)
+    .bind(queued_ms)
+    .bind(generation_ms)
     .bind(now)
     .execute(&mut *tx)
     .await?;
@@ -566,6 +749,8 @@ async fn persist_opening_turn(
     now: chrono::DateTime<Utc>,
     response_text: &str,
     error: Option<&str>,
+    queued_ms: i32,
+    generation_ms: i32,
 ) -> Result<(), JourneyError> {
     let mut tx = begin_rls_transaction(pool, user_id).await?;
 
@@ -598,14 +783,17 @@ async fn persist_opening_turn(
 
     // Rule 4: mandatory every turn, all modes — user_input/cleaned_query
     // NULL is correct here, not an omission: nothing was said yet.
+    // deferred.md #60: queued_ms/generation_ms, real instrumentation now.
     sqlx::query(
-        "INSERT INTO audit_logs (thread_id, mode, response_text, model_used, error, timestamp) \
-         VALUES ($1, 'journey', $2, $3, $4, $5)",
+        "INSERT INTO audit_logs (thread_id, mode, response_text, model_used, error, queued_ms, generation_ms, timestamp) \
+         VALUES ($1, 'journey', $2, $3, $4, $5, $6, $7)",
     )
     .bind(thread_id)
     .bind(response_text)
     .bind(MODEL_USED)
     .bind(error)
+    .bind(queued_ms)
+    .bind(generation_ms)
     .bind(now)
     .execute(&mut *tx)
     .await?;
@@ -848,6 +1036,7 @@ async fn respond_to_confirmed_branch(
     );
 
     let history = load_recent_history(&state.pool, user_id, thread_id).await?;
+    let call_start = std::time::Instant::now();
     let chunks = ai_client::generate_stream(
         &state.streaming_http_client,
         &state.ai_service_url,
@@ -861,7 +1050,8 @@ async fn respond_to_confirmed_branch(
     let state = state.clone();
 
     tokio::spawn(async move {
-        let (accumulated, cutoff_reason) = stream_to_completion(chunks, &tx).await;
+        let (accumulated, cutoff_reason, queued_ms, generation_ms) =
+            stream_to_completion(chunks, &tx, call_start, FIRST_CHUNK_TIMEOUT, CHUNK_INACTIVITY_TIMEOUT).await;
         let now = Utc::now();
 
         if let Err(err) = persist_turn(
@@ -875,6 +1065,8 @@ async fn respond_to_confirmed_branch(
             "branch_confirmed",
             &accumulated,
             cutoff_reason.as_deref(),
+            queued_ms,
+            generation_ms,
         )
         .await
         {
@@ -1191,6 +1383,7 @@ pub async fn submit_exercise_answer(
     );
 
     let history = load_recent_history(&state.pool, user_id, thread_id).await?;
+    let call_start = std::time::Instant::now();
     let chunks = ai_client::generate_stream(
         &state.streaming_http_client,
         &state.ai_service_url,
@@ -1217,7 +1410,8 @@ pub async fn submit_exercise_answer(
     let state = state.clone();
 
     tokio::spawn(async move {
-        let (accumulated, cutoff_reason) = stream_to_completion(chunks, &tx).await;
+        let (accumulated, cutoff_reason, queued_ms, generation_ms) =
+            stream_to_completion(chunks, &tx, call_start, FIRST_CHUNK_TIMEOUT, CHUNK_INACTIVITY_TIMEOUT).await;
         let now = Utc::now();
 
         if let Err(err) = persist_turn(
@@ -1231,6 +1425,8 @@ pub async fn submit_exercise_answer(
             "exercise_answer",
             &accumulated,
             cutoff_reason.as_deref(),
+            queued_ms,
+            generation_ms,
         )
         .await
         {
@@ -1450,7 +1646,12 @@ pub async fn send_journey_message(
 
     let history = load_recent_history(&state.pool, user_id, thread_id).await?;
 
-    let chunks = ai_client::generate_stream(
+    // deferred.md #101/#102: this is the normal student-message path in
+    // journey mode — the tools-enabled endpoint, now safe against
+    // FIRST_CHUNK_TIMEOUT (stream_to_completion, above) covering a
+    // pre-first-chunk tool round-trip.
+    let call_start = std::time::Instant::now();
+    let chunks = ai_client::generate_stream_with_tools(
         &state.streaming_http_client,
         &state.ai_service_url,
         prompt,
@@ -1466,7 +1667,8 @@ pub async fn send_journey_message(
     let detected_intent = analysis.detected_intent;
 
     tokio::spawn(async move {
-        let (accumulated, cutoff_reason) = stream_to_completion(chunks, &tx).await;
+        let (accumulated, cutoff_reason, queued_ms, generation_ms) =
+            stream_to_completion(chunks, &tx, call_start, FIRST_CHUNK_TIMEOUT, CHUNK_INACTIVITY_TIMEOUT).await;
         let now = Utc::now();
 
         if let Err(err) = persist_turn(
@@ -1480,6 +1682,8 @@ pub async fn send_journey_message(
             &detected_intent,
             &accumulated,
             cutoff_reason.as_deref(),
+            queued_ms,
+            generation_ms,
         )
         .await
         {
@@ -1502,6 +1706,8 @@ async fn persist_turn(
     detected_intent: &str,
     response_text: &str,
     error: Option<&str>,
+    queued_ms: i32,
+    generation_ms: i32,
 ) -> Result<(), JourneyError> {
     let mut tx = begin_rls_transaction(pool, user_id).await?;
 
@@ -1524,10 +1730,11 @@ async fn persist_turn(
         .await?;
 
     let matched_concepts_json = serde_json::json!(matched_concepts);
+    // deferred.md #60: queued_ms/generation_ms, real instrumentation now.
     sqlx::query(
         "INSERT INTO audit_logs \
-         (thread_id, user_input, cleaned_query, matched_concepts, detected_intent, mode, response_text, model_used, error, timestamp) \
-         VALUES ($1, $2, $3, $4, $5, 'journey', $6, $7, $8, $9)",
+         (thread_id, user_input, cleaned_query, matched_concepts, detected_intent, mode, response_text, model_used, error, queued_ms, generation_ms, timestamp) \
+         VALUES ($1, $2, $3, $4, $5, 'journey', $6, $7, $8, $9, $10, $11)",
     )
     .bind(thread_id)
     .bind(raw_input)
@@ -1537,6 +1744,8 @@ async fn persist_turn(
     .bind(response_text)
     .bind(MODEL_USED)
     .bind(error)
+    .bind(queued_ms)
+    .bind(generation_ms)
     .bind(now)
     .execute(&mut *tx)
     .await?;

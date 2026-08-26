@@ -157,8 +157,47 @@ pub async fn generate_stream(
     think: bool,
     history: Vec<HistoryMessage>,
 ) -> Result<impl Stream<Item = Result<String, AiClientError>> + Send + 'static, AiClientError> {
-    let url = format!("{ai_service_url}/generate/stream");
+    stream_generate_request(client, format!("{ai_service_url}/generate/stream"), prompt, think, history).await
+}
 
+/// deferred.md #101/#102 — calls FastAPI's POST /generate/stream_with_
+/// tools instead of plain /generate/stream: same NDJSON contract and
+/// same per-item Result semantics as generate_stream (see its own doc
+/// comment), but ai_service may now silently spend a pre-first-chunk
+/// round-trip deciding on/running a search tool before any delta
+/// arrives. Callers MUST give this a longer first-chunk timeout than
+/// generate_stream's own callers use — see FIRST_CHUNK_TIMEOUT in
+/// memoryless/turn.rs and journeys/turn.rs, and #102 for why a single
+/// 120s timeout was unsafe here.
+///
+/// Deliberately a separate function, not a `tools: bool` parameter on
+/// generate_stream — mirrors ai_service's own generate_text_stream_
+/// with_tools() being a separate function from generate_text_stream(),
+/// so call sites that should never offer a search tool (e.g.
+/// journeys::turn::respond_to_confirmed_branch, the branch-confirmation
+/// acknowledgment) simply never call this one, rather than needing to
+/// remember to pass `tools: false`.
+pub async fn generate_stream_with_tools(
+    client: &reqwest::Client,
+    ai_service_url: &str,
+    prompt: String,
+    think: bool,
+    history: Vec<HistoryMessage>,
+) -> Result<impl Stream<Item = Result<String, AiClientError>> + Send + 'static, AiClientError> {
+    stream_generate_request(client, format!("{ai_service_url}/generate/stream_with_tools"), prompt, think, history)
+        .await
+}
+
+// Shared by generate_stream and generate_stream_with_tools above — the
+// two endpoints have an identical NDJSON contract (generation/router.py's
+// own _wrap_ndjson serves both), so only the URL differs between callers.
+async fn stream_generate_request(
+    client: &reqwest::Client,
+    url: String,
+    prompt: String,
+    think: bool,
+    history: Vec<HistoryMessage>,
+) -> Result<impl Stream<Item = Result<String, AiClientError>> + Send + 'static, AiClientError> {
     let response = client
         .post(&url)
         .json(&GenerateRequest { prompt, think, history })

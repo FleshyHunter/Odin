@@ -103,10 +103,25 @@ async fn main() {
     // instead is reqwest's actual per-chunk-reset primitive (its own doc
     // comment: "resets after a successful read... appropriate for
     // detecting stalled connections when the size isn't known
-    // beforehand") — used ONLY by generate_stream(), which already has
-    // its own redundant, correct safety net at the application layer.
+    // beforehand") — used by generate_stream()/generate_stream_with_
+    // tools() (which already have their own redundant, correct safety
+    // net at the application layer) and, deliberately, by
+    // voice/handlers.rs's transcribe() too (see its own comment on this
+    // client).
+    //
+    // deferred.md #102: 300s, not 120s — generate_stream_with_tools()
+    // can silently spend a pre-first-chunk tool round-trip (decide ->
+    // call tool -> get result -> resume) before this client ever reads a
+    // byte, and this read_timeout sits underneath turn.rs's own
+    // application-level FIRST_CHUNK_TIMEOUT, applying independently to
+    // that same wait — raised to match it rather than left at 120s, which
+    // could still kill a legitimate tool-using turn here even with that
+    // application-level fix in place. The loop-level timeout remains the
+    // primary, faster defense for a genuine post-first-chunk stall; this
+    // is defense-in-depth underneath it, so a higher ceiling here costs
+    // nothing on that path.
     let streaming_http_client = reqwest::Client::builder()
-        .read_timeout(Duration::from_secs(120))
+        .read_timeout(Duration::from_secs(300))
         .build()
         .expect("failed to build streaming reqwest client");
 

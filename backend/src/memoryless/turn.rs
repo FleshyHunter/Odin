@@ -110,6 +110,22 @@ async fn query_knowledge_context(state: &AppState, user_id: Uuid, query: &str) -
 // http_client-level timeout, repurposed rather than invented fresh.
 const CHUNK_INACTIVITY_TIMEOUT: Duration = Duration::from_secs(120);
 
+// deferred.md #102: split from CHUNK_INACTIVITY_TIMEOUT above — a single
+// 120s bound applied to the WAIT FOR THE VERY FIRST chunk too, which is
+// unsafe now that generate_stream_with_tools() can silently spend a
+// pre-first-chunk round-trip (decide -> call tool -> get result ->
+// resume) before yielding anything. This project's own observed
+// single-call generation times run 22s-120s+ under load, so a two-call
+// tool sequence's worst case is genuinely in the 200s+ range — sized
+// generously here rather than tightly. Applied to EVERY turn through
+// this loop, not only tool-using ones: the underlying risk (a
+// legitimately slow first token under load, mistaken for a stall) was
+// already latent for plain think=True turns too, so this closes that
+// gap as well, at zero cost to the common fast case. Once streaming has
+// actually started, CHUNK_INACTIVITY_TIMEOUT still applies unchanged —
+// this only widens the PRE-first-chunk wait.
+const FIRST_CHUNK_TIMEOUT: Duration = Duration::from_secs(300);
+
 // deferred.md #54: previously every turn was generated as if it were
 // the first — thread.messages was loaded from Redis but never read
 // before calling generate_stream(). 10 messages (5 turn-pairs), plain
@@ -230,7 +246,12 @@ pub async fn start_turn_stream(
     // regardless of this function's own CHUNK_INACTIVITY_TIMEOUT below.
     // streaming_http_client uses .read_timeout() instead, reqwest's
     // actual per-chunk-reset primitive — see state.rs's own comment.
-    let chunks = ai_client::generate_stream(
+    // deferred.md #101/#102: this is the one normal-message path in
+    // memoryless mode — the tools-enabled endpoint, now safe against
+    // FIRST_CHUNK_TIMEOUT above covering a pre-first-chunk tool
+    // round-trip.
+    let call_start = std::time::Instant::now();
+    let chunks = ai_client::generate_stream_with_tools(
         &state.streaming_http_client,
         &state.ai_service_url,
         prompt,
@@ -250,6 +271,10 @@ pub async fn start_turn_stream(
         let mut thread = thread;
         let mut accumulated = String::new();
         let mut cutoff_reason: Option<String> = None;
+        // deferred.md #60: same first-chunk-arrival signal as
+        // journeys/turn.rs's stream_to_completion — tracked inline here
+        // since this loop isn't shared with that helper (separate module).
+        let mut first_chunk_at: Option<std::time::Instant> = None;
 
         // Pinned HERE, inside the spawned task's own stack frame — not
         // in start_turn_stream's, which returns (and so its frame goes
@@ -289,9 +314,20 @@ pub async fn start_turn_stream(
                         cutoff_reason = Some("cancelled by user".to_string());
                         break;
                     }
-                    result = tokio::time::timeout(CHUNK_INACTIVITY_TIMEOUT, chunks.next()) => {
+                    // deferred.md #102: FIRST_CHUNK_TIMEOUT until the
+                    // first delta has ever arrived, then the tighter
+                    // CHUNK_INACTIVITY_TIMEOUT for every gap after that —
+                    // first_chunk_at (already tracked below for the
+                    // queued_ms metric) is exactly the right signal to
+                    // key this off, no separate tracking needed.
+                    result = {
+                        let timeout_duration =
+                            if first_chunk_at.is_none() { FIRST_CHUNK_TIMEOUT } else { CHUNK_INACTIVITY_TIMEOUT };
+                        tokio::time::timeout(timeout_duration, chunks.next())
+                    } => {
                         match result {
                             Ok(Some(Ok(delta))) => {
+                                first_chunk_at.get_or_insert_with(std::time::Instant::now);
                                 accumulated.push_str(&delta);
                                 // tx.closed() above already covers the
                                 // cancellation case for any turn that's
@@ -318,9 +354,16 @@ pub async fn start_turn_stream(
                             }
                             Ok(None) => break, // stream ended normally — full response received
                             Err(_) => {
+                                // first_chunk_at is still None here (a
+                                // Some would mean a delta already arrived
+                                // and reset the wait) — safe to re-derive
+                                // which bound just fired from that same
+                                // signal, rather than threading the
+                                // chosen duration out of the block above.
+                                let fired = if first_chunk_at.is_none() { FIRST_CHUNK_TIMEOUT } else { CHUNK_INACTIVITY_TIMEOUT };
                                 let reason = format!(
                                     "generation stalled — no output for {}s",
-                                    CHUNK_INACTIVITY_TIMEOUT.as_secs()
+                                    fired.as_secs()
                                 );
                                 let _ = tx.send(TurnEvent::Error(reason.clone())).await;
                                 cutoff_reason = Some(reason);
@@ -331,6 +374,13 @@ pub async fn start_turn_stream(
                 }
             }
         }
+
+        let end = std::time::Instant::now();
+        // deferred.md #60: no chunk ever arrived (immediate error/cutoff)
+        // — all elapsed time was spent "queued" in the sense that zero
+        // generation ever happened, generation_ms is genuinely 0.
+        let queued_ms = (first_chunk_at.unwrap_or(end) - call_start).as_millis() as i32;
+        let generation_ms = first_chunk_at.map(|t| (end - t).as_millis() as i32).unwrap_or(0);
 
         let now = Utc::now();
         let user_message = StagedMessage { role: "user".to_string(), content: raw_input.clone(), timestamp: now };
@@ -350,6 +400,8 @@ pub async fn start_turn_stream(
             response_text: accumulated,
             model_used: MODEL_USED.to_string(),
             error: cutoff_reason,
+            queued_ms,
+            generation_ms,
             timestamp: now,
         };
         thread.audit_events.push(audit_event.clone());
