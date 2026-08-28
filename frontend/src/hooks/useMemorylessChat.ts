@@ -115,6 +115,10 @@ export function useMemorylessChat(
     // switch, never on the justCreatedRef skip branch above), not
     // duplicated across each branch below.
     setAttachments([]);
+    // composerNotice was named in the comment above but never actually
+    // got its own reset call — an error/nudge banner raised in thread A
+    // stayed on screen after switching to thread B. Same fix, same spot.
+    setComposerNotice(null);
     // A genuine switch always starts this hook fresh for the newly-
     // viewed thread, even if the OLD thread's send() is still running
     // in the background — left alone deliberately, not aborted, so it

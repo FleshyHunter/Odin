@@ -94,6 +94,19 @@ export function useJourneyChat(journeyId: string | null) {
     setIsSending(false);
     isSendingRef.current = false;
     abortRef.current = null;
+    // Same leak as useMemorylessChat.ts's own composerNotice fix
+    // (deferred.md #63's class of bug) — an error/nudge banner raised
+    // in track A otherwise stays on screen after switching to track B,
+    // since this hook's instance persists across the switch (ChatView
+    // isn't remounted, App.tsx's /chat/:id route carries no key).
+    setComposerNotice(null);
+    // #63 itself, still open for journey mode specifically: a file
+    // staged (or mid-upload) in track A stayed visible above the
+    // composer after switching to track B — useMemorylessChat.ts's own
+    // switch effect already does this; this hook's send() does it
+    // too (line ~148) but only at send time, never on a plain switch.
+    setPendingFiles([]);
+    setAttachments([]);
     if (!journeyId) {
       setMessages([]);
       setIsHydrating(false);
