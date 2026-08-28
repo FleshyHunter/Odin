@@ -163,34 +163,74 @@ fn build_history(messages: &[StagedMessage]) -> Vec<ai_client::HistoryMessage> {
         .collect()
 }
 
-// deferred.md #92: same plain-phrase yes/no classifier as journeys/
-// turn.rs's is_branch_confirmed — duplicated rather than shared across
-// modules, matching this file's own existing precedent (CHUNK_
-// INACTIVITY_TIMEOUT/HISTORY_WINDOW_MESSAGES above are duplicated the
-// same way, not imported from journeys/turn.rs).
-fn is_affirmative(text: &str) -> bool {
-    const AFFIRMATIVE: &[&str] = &[
-        "yes", "yeah", "yep", "yup", "sure", "ok", "okay", "alright", "please", "go for it", "do it",
-        "sounds good", "lets do it", "let's do it", "please do",
-    ];
-    const NEGATION: &[&str] = &["no", "not", "nope", "nah", "dont", "don't"];
+// deferred.md #92: exact-string-only classifier — found LIVE (2026-08-28,
+// real end-to-end test) that a prefix-matching version of this ("yes"
+// followed by any trailing content, minus a negation-adjacency check)
+// wrongly promoted a file when the student replied "yes let's go
+// through problem 2" — answering an entirely different, later question,
+// not the promotion offer, which the model had correctly decided NOT
+// to even ask about that turn. journeys/turn.rs's is_branch_confirmed
+// independently hit and closed this exact bug class the same day (its
+// own doc comment has the full history: a negation-adjacency check,
+// then a trailing-word allowlist, both kept reproducing the same bug at
+// a different grain size) — mirrored here rather than re-deriving:
+// a closed list of complete, exact strings, matched only via `==`, plus
+// a '?' guard (a question is never a confirmation). Known, accepted
+// trade-off, same as that entry's: a real confirmation phrased outside
+// this list declines, same as any other unmatched reply — silently
+// promoting something the student didn't actually agree to is the
+// worse failure mode of the two, not a declined promotion that's
+// trivially re-offered next time an upload comes in.
+const PROMOTION_AFFIRMATIVE: &[&str] = &[
+    "yes", "yeah", "yep", "yup", "sure", "ok", "okay", "alright", "please", "go for it", "do it",
+    "sounds good", "lets do it", "let's do it", "please do", "sure thing", "yeah sure",
+];
 
+fn is_affirmative(text: &str) -> bool {
+    if text.contains('?') {
+        return false;
+    }
     let normalized: String = text
         .trim()
         .to_lowercase()
         .chars()
         .filter(|c| c.is_alphanumeric() || c.is_whitespace() || *c == '\'')
         .collect();
+    PROMOTION_AFFIRMATIVE.contains(&normalized.as_str())
+}
 
-    AFFIRMATIVE.iter().any(|phrase| {
-        if normalized == *phrase {
-            return true;
+#[cfg(test)]
+mod is_affirmative_tests {
+    use super::*;
+
+    #[test]
+    fn every_affirmative_entry_confirms() {
+        for phrase in PROMOTION_AFFIRMATIVE {
+            assert!(is_affirmative(phrase), "{phrase:?} should confirm");
         }
-        let Some(rest) = normalized.strip_prefix(&format!("{phrase} ")) else {
-            return false;
-        };
-        !NEGATION.iter().any(|neg| rest == *neg || rest.starts_with(&format!("{neg} ")))
-    })
+    }
+
+    #[test]
+    fn plain_declines_do_not_confirm() {
+        for text in ["no", "not now", "nope", "nah", "don't"] {
+            assert!(!is_affirmative(text), "{text:?} should not confirm");
+        }
+    }
+
+    // The actual live-found bug this whole rewrite exists for: a "yes"
+    // that's really answering something else entirely must not confirm
+    // just because it starts with an affirmative word.
+    #[test]
+    fn an_affirmative_word_followed_by_unrelated_content_does_not_confirm() {
+        for text in ["yes let's go through problem 2", "yeah, no thanks", "sure, not now", "ok, nope"] {
+            assert!(!is_affirmative(text), "{text:?} should not confirm");
+        }
+    }
+
+    #[test]
+    fn a_question_never_confirms_even_if_it_starts_with_an_affirmative_word() {
+        assert!(!is_affirmative("yes, but does that even matter?"));
+    }
 }
 
 /// Starts a streaming chat turn. Runs analyze_input and opens the
