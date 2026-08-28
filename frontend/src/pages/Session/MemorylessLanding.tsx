@@ -44,12 +44,8 @@ export function MemorylessLanding({ onStartTrack, threadId = null, onThreadCreat
     cancel,
     composerNotice,
     dismissComposerNotice,
-    pendingFiles,
     attachments,
     requestAttach,
-    confirmAttachRole,
-    cancelPendingFile,
-    retryAttachment,
     removeAttachment,
   } = useMemorylessChat(threadId, onThreadCreated, onConvert);
 
@@ -140,14 +136,21 @@ export function MemorylessLanding({ onStartTrack, threadId = null, onThreadCreat
     onDragLeave: handleDragLeave,
     onDrop: handleDrop,
   };
+  // deferred.md #92: no pendingFiles/onConfirmAttachRole/onCancelPendingFile
+  // — the role-picker modal is gone for memoryless mode. Composer.tsx
+  // itself needs no changes for this: UploadRoleModal already renders
+  // nothing when there's no pending file (its own "file: null means
+  // nothing pending" contract), so simply never producing one here is
+  // enough. onRetryAttachment points at the same removeAttachment as
+  // onRemoveAttachment — there's no clean per-file retry anymore once a
+  // whole turn (text + every attachment) has already gone out together;
+  // "retry" here just means "take it off and try again."
   const attachProps = {
     attachments,
-    pendingFiles,
     onAttachFiles: requestAttach,
-    onConfirmAttachRole: confirmAttachRole,
-    onCancelPendingFile: cancelPendingFile,
     onRemoveAttachment: removeAttachment,
-    onRetryAttachment: retryAttachment,
+    onRetryAttachment: removeAttachment,
+    allowEmptyTextWithAttachments: true,
   };
 
   if (isHydrating) {

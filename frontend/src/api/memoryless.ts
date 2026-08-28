@@ -20,8 +20,19 @@ export async function convertMemorylessThread(threadId: string, journeyId: strin
   });
 }
 
+export interface UploadResultEvent {
+  filename: string;
+  chunkCount: number;
+  deduped: boolean;
+  error: string | null;
+}
+
 export interface MemorylessStreamHandlers {
   onThreadId: (threadId: string) => void;
+  // deferred.md #92: one per file bundled into this turn (0-5), fired
+  // before any onDelta — see backend/src/memoryless/turn.rs's own
+  // TurnEvent::UploadResult.
+  onUploadResult: (result: UploadResultEvent) => void;
   onDelta: (text: string) => void;
   onError: (message: string) => void;
 }
@@ -58,6 +69,9 @@ interface SendMessageParams {
   threadId: string | null;
   message: string;
   think?: boolean;
+  // deferred.md #92: bundled into this SAME request, not a separate
+  // /uploads call — see the module doc comment on streamMessage below.
+  files?: File[];
 }
 
 async function extractErrorMessage(response: Response): Promise<string> {
@@ -74,6 +88,15 @@ async function extractErrorMessage(response: Response): Promise<string> {
 // itself, rather than the browser's native EventSource (which can't send
 // a POST body or an Authorization header).
 //
+// deferred.md #92: multipart, not a JSON body — the request now bundles
+// the message text with up to 5 file attachments (params.files) into ONE
+// call, matching the backend's own multipart contract. FormData sets its
+// own multipart boundary automatically; an explicit Content-Type header
+// here would break that, so (unlike the old JSON version) none is set —
+// the browser fills it in. Omitting `message`/`thread_id`/`think`
+// entirely when absent, same "don't send a field the backend has to
+// special-case" convention api/uploads.ts's uploadFile already uses.
+//
 // Cancellation: aborting `signal` closes the fetch, which is exactly
 // what the backend's turn.rs relies on to detect a client disconnect
 // (its spawned task's tx.send() starts failing, which IS the
@@ -86,21 +109,22 @@ export async function streamMessage(
   isRetry = false,
 ): Promise<void> {
   const accessToken = getAccessToken();
+  const body = new FormData();
+  body.append('message', params.message);
+  if (params.threadId) body.append('thread_id', params.threadId);
+  body.append('think', String(params.think ?? true));
+  for (const file of params.files ?? []) {
+    body.append('file', file, file.name);
+  }
+
   let response: Response;
   try {
     response = await fetch(`${API_BASE_URL}/memoryless/messages`, {
       method: 'POST',
       credentials: 'include',
       signal,
-      headers: {
-        'Content-Type': 'application/json',
-        ...(accessToken ? { Authorization: `Bearer ${accessToken}` } : {}),
-      },
-      body: JSON.stringify({
-        thread_id: params.threadId,
-        message: params.message,
-        think: params.think ?? true,
-      }),
+      headers: accessToken ? { Authorization: `Bearer ${accessToken}` } : {},
+      body,
     });
   } catch {
     if (signal.aborted) return; // user-initiated cancel, not a real failure
@@ -154,7 +178,29 @@ export async function streamMessage(
         const data = dataLines.join('\n');
 
         if (eventName === 'thread') handlers.onThreadId(data);
-        else if (eventName === 'delta') handlers.onDelta(data);
+        else if (eventName === 'upload_result') {
+          // deferred.md #92 — backend-emitted JSON, one per attached
+          // file, before any delta. Malformed/unparseable is treated as
+          // "nothing to report" rather than surfaced as a turn-level
+          // error — a display-only signal, not worth failing the whole
+          // stream over.
+          try {
+            const payload = JSON.parse(data) as {
+              filename: string;
+              chunk_count: number;
+              deduped: boolean;
+              error: string | null;
+            };
+            handlers.onUploadResult({
+              filename: payload.filename,
+              chunkCount: payload.chunk_count,
+              deduped: payload.deduped,
+              error: payload.error,
+            });
+          } catch {
+            // ignored — see comment above
+          }
+        } else if (eventName === 'delta') handlers.onDelta(data);
         // deferred.md #53: a real backend-signaled failure, distinct
         // from "delta" — previously a mid-generation failure was
         // invisible here, indistinguishable from an empty-but-

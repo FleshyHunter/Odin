@@ -108,6 +108,119 @@ pub struct UploadResponse {
     chunk_count: usize,
 }
 
+// deferred.md #92: one file's worth of the exact same content_hash ->
+// dedup -> ingest -> stage sequence `upload()` below already ran
+// single-file — extracted so memoryless::handlers::send_message can run
+// it in a loop (up to 5 attachments bundled into one turn) without
+// duplicating this logic. `rejected` is a SOFT outcome here (the size
+// guardrail tripped for THIS file) rather than an Err — `upload()` below
+// still turns it into a hard request failure (its one-file-per-call
+// contract), but a multi-file caller can report it via one file's own
+// upload_result and continue processing the rest of the batch.
+pub(crate) struct StagedFileOutcome {
+    pub filename: String,
+    pub deduped: bool,
+    pub chunk_count: usize,
+    pub extracted_text: String,
+    pub rejected: Option<String>,
+    // Some only for a real, newly-staged upload (rejected.is_none() &&
+    // !deduped) — the exact identifier deferred.md #92's pending-
+    // promotion mechanism needs to look this upload back up later by,
+    // since filenames aren't guaranteed unique within one batch.
+    pub content_hash: Option<String>,
+}
+
+pub(crate) async fn stage_one_file(
+    state: &AppState,
+    user_id: Uuid,
+    thread: &mut StagedThread,
+    file_bytes: Vec<u8>,
+    filename: String,
+    role: &str,
+) -> Result<StagedFileOutcome, MemorylessError> {
+    let max_bytes = state.memoryless_staged_upload_max_mb * 1024 * 1024;
+    if file_bytes.len() as u64 > max_bytes {
+        return Ok(StagedFileOutcome {
+            filename,
+            deduped: false,
+            chunk_count: 0,
+            extracted_text: String::new(),
+            rejected: Some(SIZE_GUARDRAIL_MESSAGE.to_string()),
+            content_hash: None,
+        });
+    }
+
+    let content_hash = dedup::compute_content_hash(&file_bytes);
+
+    if dedup::find_staged(thread, &content_hash).is_some()
+        || dedup::find_committed(&state.pool, user_id, &content_hash).await?.is_some()
+    {
+        return Ok(StagedFileOutcome {
+            filename,
+            deduped: true,
+            chunk_count: 0,
+            extracted_text: String::new(),
+            rejected: None,
+            content_hash: None,
+        });
+    }
+
+    let result = ai_client::ingest(
+        &state.http_client,
+        &state.ai_service_url,
+        file_bytes,
+        &filename,
+        role,
+        state.memoryless_staged_upload_max_chunks,
+        None,
+        None,
+    )
+    .await?;
+    if result.rejected {
+        return Ok(StagedFileOutcome {
+            filename,
+            deduped: false,
+            chunk_count: 0,
+            extracted_text: String::new(),
+            rejected: Some(result.rejection_reason.unwrap_or_else(|| "upload rejected".to_string())),
+            content_hash: None,
+        });
+    }
+
+    let chunk_count = result.chunks.len();
+    let staged_upload = StagedUpload {
+        content_hash,
+        filename: filename.clone(),
+        upload_role: role.to_string(),
+        extracted_text: result.extracted_text.clone(),
+        chunks: result
+            .chunks
+            .into_iter()
+            .map(|c| StagedChunk { text: c.text, token_count: c.token_count, embedding: c.embedding })
+            .collect(),
+        created_at: Utc::now(),
+    };
+    thread.staged_uploads.push(staged_upload.clone());
+
+    // Same fail-soft posture as upload()'s own identical call below —
+    // the upload already succeeded from the student's point of view
+    // (staged, usable this turn) even if this durability write fails.
+    if staged_upload.upload_role == "material_upload"
+        && let Err(err) = write_through::write_through_material_upload(state, user_id, &staged_upload, None).await
+    {
+        tracing::error!(?err, thread_id = %thread.thread_id, "failed to write material_upload through to Postgres");
+    }
+
+    Ok(StagedFileOutcome {
+        filename,
+        deduped: false,
+        chunk_count,
+        extracted_text: result.extracted_text,
+        rejected: None,
+        content_hash: Some(staged_upload.content_hash),
+    })
+}
+
 /// POST /uploads — handles all three roles (PRD.md, Roles: "How do you
 /// want to use this document?"). Ephemeral: extract and return text
 /// only, no persistence, no thread needed at all. prompt_upload/
@@ -164,98 +277,31 @@ pub async fn upload(
         return upload_to_journey(state, user_id, journey_id, parsed).await;
     }
 
-    let content_hash = dedup::compute_content_hash(&parsed.file_bytes);
-
     let mut thread = match parsed.thread_id {
         Some(id) => staging::load_owned(&state, id, user_id).await?,
         None => StagedThread::new(Uuid::new_v4(), user_id),
     };
 
-    if dedup::find_staged(&thread, &content_hash).is_some() {
-        return Ok(Json(UploadResponse {
-            thread_id: Some(thread.thread_id),
-            extracted_text: String::new(),
-            deduped: true,
-            chunk_count: 0,
-        }));
+    let outcome =
+        stage_one_file(&state, user_id, &mut thread, parsed.file_bytes, parsed.filename, &parsed.role).await?;
+    if let Some(reason) = outcome.rejected {
+        return Err(MemorylessError::Validation(reason));
     }
-    if dedup::find_committed(&state.pool, user_id, &content_hash).await?.is_some() {
-        // deferred.md #45: when parsed.thread_id was None, `thread` above
-        // is a brand-new StagedThread that has never been written to
-        // Redis — without this save, the thread_id handed back here is
-        // a "phantom" that any follow-up call (a message, another
-        // upload) would 410 on, even though it was never actually
-        // valid, not merely expired. Harmless no-op refresh for the
-        // already-existing-thread case.
-        staging::save(&state, &thread).await?;
-        return Ok(Json(UploadResponse {
-            thread_id: Some(thread.thread_id),
-            extracted_text: String::new(),
-            deduped: true,
-            chunk_count: 0,
-        }));
-    }
-
-    let result = ai_client::ingest(
-        &state.http_client,
-        &state.ai_service_url,
-        parsed.file_bytes,
-        &parsed.filename,
-        &parsed.role,
-        state.memoryless_staged_upload_max_chunks,
-        None,
-        None,
-    )
-    .await?;
-    if result.rejected {
-        return Err(MemorylessError::Validation(
-            result.rejection_reason.unwrap_or_else(|| "upload rejected".to_string()),
-        ));
-    }
-
-    // deferred.md #47: chunk-count guardrail now enforced ai_service-side,
-    // BEFORE embed_texts() runs (ai_service/app/ingestion/service.py) —
-    // ai_service returns `rejected` above if max_chunks was exceeded, so
-    // there is nothing left to check post-hoc here. chunk_count itself is
-    // still needed for UploadResponse below.
-    let chunk_count = result.chunks.len();
-    let staged_upload = StagedUpload {
-        content_hash,
-        filename: parsed.filename,
-        upload_role: parsed.role,
-        extracted_text: result.extracted_text.clone(),
-        chunks: result
-            .chunks
-            .into_iter()
-            .map(|c| StagedChunk { text: c.text, token_count: c.token_count, embedding: c.embedding })
-            .collect(),
-        created_at: Utc::now(),
-    };
-    thread.staged_uploads.push(staged_upload.clone());
+    // deferred.md #45: when parsed.thread_id was None, `thread` above is
+    // a brand-new StagedThread that has never been written to Redis —
+    // without a save, the thread_id handed back here is a "phantom"
+    // that any follow-up call would 410 on. Always saved here (covers
+    // both the real-new-upload path and the deduped-refresh path),
+    // unlike stage_one_file itself, which never saves — a multi-file
+    // caller wants exactly one save after its whole batch, not one per
+    // file.
     staging::save(&state, &thread).await?;
-
-    // deferred.md #56: material_upload write-through, immediately —
-    // `sources`' own CHECK constraint requires a real journey_id for
-    // prompt_upload (Milestone 10, same root cause as #27), so this is
-    // deliberately scoped to material_upload only, unlike turn.rs's
-    // write-through (which has no such split). Fail-soft, same
-    // reasoning as turn.rs's own write-through call: the upload already
-    // succeeded from the student's point of view (staged in Redis,
-    // usable immediately) — a write-through failure only means this
-    // upload's durability rests on Redis alone for now.
-    if staged_upload.upload_role == "material_upload" {
-        // None: no journey context exists in memoryless mode to tag as
-        // this upload's origin.
-        if let Err(err) = write_through::write_through_material_upload(&state, user_id, &staged_upload, None).await {
-            tracing::error!(?err, thread_id = %thread.thread_id, "failed to write material_upload through to Postgres");
-        }
-    }
 
     Ok(Json(UploadResponse {
         thread_id: Some(thread.thread_id),
-        extracted_text: result.extracted_text,
-        deduped: false,
-        chunk_count,
+        extracted_text: outcome.extracted_text,
+        deduped: outcome.deduped,
+        chunk_count: outcome.chunk_count,
     }))
 }
 

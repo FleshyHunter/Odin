@@ -28,6 +28,9 @@ interface ComposerProps {
   onCancelPendingFile?: (pendingId: string) => void;
   onRemoveAttachment?: (attachmentId: string) => void;
   onRetryAttachment?: (attachmentId: string) => void;
+  // deferred.md #92: memoryless-only opt-in — see handleSend's own
+  // comment for why this can't just be inferred from attachments alone.
+  allowEmptyTextWithAttachments?: boolean;
 }
 
 export function Composer({
@@ -44,6 +47,7 @@ export function Composer({
   onCancelPendingFile,
   onRemoveAttachment,
   onRetryAttachment,
+  allowEmptyTextWithAttachments,
 }: ComposerProps) {
   const [value, setValue] = useState('');
   const { status, error: voiceError, partialTranscript, startRecording, stopRecording, cancelRecording } =
@@ -135,7 +139,17 @@ export function Composer({
       cancelRecording();
     }
     const trimmed = value.trim();
-    if (!trimmed) return;
+    // deferred.md #92: empty text used to always block sending — now
+    // valid for memoryless mode as long as there's at least one
+    // attachment riding along (the tutor looks at the extracted content
+    // and responds to that instead). Gated on the explicit
+    // allowEmptyTextWithAttachments prop, NOT just "attachments is
+    // non-empty" — journey mode (ChatView.tsx/useJourneyChat.ts) also
+    // passes real attachments through this same prop, but its backend
+    // (journeys/handlers.rs's send_journey_message) still hard-rejects
+    // empty text; without this gate, an empty send would reach it and
+    // surface a confusing validation error there.
+    if (!trimmed && !(allowEmptyTextWithAttachments && attachments && attachments.length > 0)) return;
     onSend(trimmed);
     setValue('');
   };

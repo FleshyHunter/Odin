@@ -1,7 +1,11 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import * as memorylessApi from '../api/memoryless';
-import * as uploadsApi from '../api/uploads';
-import type { Attachment, ChatMessage, ComposerNoticeData, PendingFile, UploadRole } from '../types';
+import type { Attachment, ChatMessage, ComposerNoticeData } from '../types';
+
+// deferred.md #92: hard cap, matches backend/src/memoryless/handlers.rs's
+// own MAX_FILES_PER_SEND — enforced client-side too so a student never
+// even gets to fire a request the server will reject outright.
+const MAX_ATTACHMENTS = 5;
 
 // deferred.md #8: PRD.md's own "3-5" range has no exact number — the
 // middle, picked once as a fixed UX value (same "not an operational
@@ -41,7 +45,6 @@ export function useMemorylessChat(
   const [isSending, setIsSending] = useState(false);
   const [isHydrating, setIsHydrating] = useState(initialThreadId !== null);
   const [composerNotice, setComposerNotice] = useState<ComposerNoticeData | null>(null);
-  const [pendingFiles, setPendingFiles] = useState<PendingFile[]>([]);
   const [attachments, setAttachments] = useState<Attachment[]>([]);
   const threadIdRef = useRef<string | null>(initialThreadId);
   const abortRef = useRef<AbortController | null>(null);
@@ -104,15 +107,14 @@ export function useMemorylessChat(
     threadIdRef.current = initialThreadId;
     threadEpochRef.current += 1;
     hasNudgedRef.current = false;
-    // deferred.md #63: attachments/pendingFiles fell into the same
-    // pre-existing hole composerNotice/isSending sit in — this effect
-    // only ever reset messages/isHydrating, so a file staged for thread
-    // A stayed visible above the composer after switching to thread B.
-    // Reset here, once per genuine switch (this line already runs
-    // exactly once per real switch, never on the justCreatedRef skip
-    // branch above), not duplicated across each branch below.
+    // deferred.md #63: attachments fell into the same pre-existing hole
+    // composerNotice/isSending sit in — this effect only ever reset
+    // messages/isHydrating, so a file staged for thread A stayed visible
+    // above the composer after switching to thread B. Reset here, once
+    // per genuine switch (this line already runs exactly once per real
+    // switch, never on the justCreatedRef skip branch above), not
+    // duplicated across each branch below.
     setAttachments([]);
-    setPendingFiles([]);
     // A genuine switch always starts this hook fresh for the newly-
     // viewed thread, even if the OLD thread's send() is still running
     // in the background — left alone deliberately, not aborted, so it
@@ -186,12 +188,20 @@ export function useMemorylessChat(
     isSendingRef.current = true;
 
     setComposerNotice(null);
-    // Found live: attachments never cleared on send, only the textarea
-    // did — a sent message's attachment card sat in the composer
-    // indefinitely. Cleared here, same optimistic timing as the
-    // textarea's own immediate clear (Composer.tsx's handleSend).
-    setAttachments([]);
-    setPendingFiles([]);
+    // deferred.md #92: captured before any state changes below — these
+    // are the exact files (and their card ids, for matching upload_result
+    // events back to the right card in order) this turn bundles in.
+    // Attachments are no longer cleared here immediately (contrast the
+    // old per-file-upload flow, which cleared them at this exact point
+    // since uploading had already fully finished before Send was even
+    // possible) — they now stay visible, transitioning 'attached' ->
+    // 'uploading', while the bundled request/stream is in flight, and
+    // only clear once the turn actually finishes (see the finally block
+    // below).
+    const filesToSend = attachments.map((a) => ({ id: a.id, file: a.file }));
+    if (filesToSend.length > 0) {
+      setAttachments((prev) => prev.map((a) => ({ ...a, status: 'uploading' })));
+    }
     const studentMessage: ChatMessage = {
       id: `local-${Date.now()}`,
       role: 'student',
@@ -212,9 +222,17 @@ export function useMemorylessChat(
     let receivedDelta = false;
     let sawError = false;
 
+    // deferred.md #92: upload_result events arrive strictly in the same
+    // order the backend processed the files (a single sequential loop —
+    // see memoryless/handlers.rs::send_message), so a plain incrementing
+    // index reliably maps the Nth event back to the Nth entry in
+    // filesToSend — more robust than matching by filename, which isn't
+    // guaranteed unique within one batch.
+    let uploadResultIndex = 0;
+
     try {
       await memorylessApi.streamMessage(
-        { threadId: threadIdRef.current, message: text },
+        { threadId: threadIdRef.current, message: text, files: filesToSend.map((f) => f.file) },
         {
           onThreadId: (id) => {
             // Abandoned call from a thread we've since switched away
@@ -227,6 +245,24 @@ export function useMemorylessChat(
               justCreatedRef.current = true;
               onThreadId?.(id);
             }
+          },
+          onUploadResult: (result) => {
+            const target = filesToSend[uploadResultIndex];
+            uploadResultIndex += 1;
+            if (!target) return;
+            setAttachments((prev) =>
+              prev.map((a) =>
+                a.id === target.id
+                  ? {
+                      ...a,
+                      status: result.error ? 'error' : 'ready',
+                      errorMessage: result.error ?? undefined,
+                      chunkCount: result.chunkCount,
+                      deduped: result.deduped,
+                    }
+                  : a,
+              ),
+            );
           },
           onDelta: (delta) => {
             receivedDelta = true;
@@ -299,9 +335,21 @@ export function useMemorylessChat(
         isSendingRef.current = false;
         setIsSending(false);
         abortRef.current = null;
+        // deferred.md #92: cleared here now, not optimistically at the
+        // top of send() — the attach button stays disabled for the
+        // whole duration of isSending (Composer.tsx), so nothing could
+        // have added MORE attachments while this call was in flight;
+        // whatever's still in `attachments` at this point is exactly
+        // what this turn just bundled in.
+        if (filesToSend.length > 0) setAttachments([]);
       }
     }
-  }, [onThreadId, reconcileThreadId]);
+    // deferred.md #92: attachments is now read at the top of this
+    // function (filesToSend) — without it in deps, send() would keep
+    // closing over whatever attachments looked like the last time this
+    // callback was actually recreated, silently excluding newly-attached
+    // files from the next real send.
+  }, [onThreadId, reconcileThreadId, attachments]);
 
   // Aborting the fetch IS the cancel signal the backend listens for
   // (see api/memoryless.ts's doc comment) — no separate endpoint call.
@@ -319,86 +367,27 @@ export function useMemorylessChat(
 
   const dismissComposerNotice = useCallback(() => setComposerNotice(null), []);
 
-  // Shared by confirmAttachRole (first attempt) and retryAttachment (same
-  // file, same role, tried again) — the only difference between those two
-  // callers is where the Attachment entry already exists (retry) vs. still
-  // needs creating (first attempt), so the actual upload+outcome handling
-  // lives here once.
-  const runUpload = useCallback(
-    async (id: string, file: File, role: UploadRole) => {
-      // deferred.md #65: captured before the request starts, same as
-      // send()'s own epoch capture — see reconcileThreadId's own
-      // comment for why this (not an unconditional overwrite) is what
-      // actually fixes the race.
-      const epoch = threadEpochRef.current;
-      try {
-        const result = await uploadsApi.uploadFile(file, role, threadIdRef.current, null);
-        if (result.threadId && reconcileThreadId(result.threadId, epoch)) {
-          justCreatedRef.current = true;
-          onThreadId?.(result.threadId);
-        }
-        setAttachments((prev) =>
-          prev.map((a) =>
-            a.id === id ? { ...a, status: 'ready', chunkCount: result.chunkCount, deduped: result.deduped } : a,
-          ),
-        );
-      } catch (err) {
-        setAttachments((prev) =>
-          prev.map((a) =>
-            a.id === id
-              ? { ...a, status: 'error', errorMessage: err instanceof Error ? err.message : 'Upload failed.' }
-              : a,
-          ),
-        );
-      }
-    },
-    [onThreadId, reconcileThreadId],
-  );
-
-  // Queues files the instant they're selected/dropped — no upload yet,
-  // just makes them available for the role picker (Composer renders one
-  // for pendingFiles[0] and advances through the rest sequentially, per
-  // the "asked at upload time," one-modal-per-file decision).
+  // deferred.md #92: no upload, no role, no network call — just queues
+  // the file for whatever Send bundles it into next. Silently truncates
+  // past MAX_ATTACHMENTS (matching the backend's own hard cap) rather
+  // than surfacing a dedicated error UI for what's a rare, low-stakes
+  // case (a student attaching more than 5 files at once).
   const requestAttach = useCallback((files: File[]) => {
-    const queued = files.map((file) => ({ id: crypto.randomUUID(), file }));
-    setPendingFiles((prev) => [...prev, ...queued]);
+    setAttachments((prev) => {
+      const room = Math.max(0, MAX_ATTACHMENTS - prev.length);
+      const accepted: Attachment[] = files
+        .slice(0, room)
+        .map((file) => ({ id: crypto.randomUUID(), file, role: 'prompt_upload', status: 'attached' }));
+      return [...prev, ...accepted];
+    });
   }, []);
 
-  // Fires once a role is picked for a queued file — moves it out of the
-  // pending queue and into `attachments` as 'uploading', then kicks off
-  // the real POST /uploads.
-  const confirmAttachRole = useCallback(
-    (pendingId: string, role: UploadRole) => {
-      const pending = pendingFiles.find((p) => p.id === pendingId);
-      if (!pending) return;
-      setPendingFiles((prev) => prev.filter((p) => p.id !== pendingId));
-      setAttachments((prev) => [...prev, { id: pending.id, file: pending.file, role, status: 'uploading' }]);
-      void runUpload(pending.id, pending.file, role);
-    },
-    [pendingFiles, runUpload],
-  );
-
-  // Dismisses a file BEFORE its role was ever picked (e.g. closing the
-  // modal) — nothing was uploaded, so this is a full, clean undo.
-  const cancelPendingFile = useCallback((pendingId: string) => {
-    setPendingFiles((prev) => prev.filter((p) => p.id !== pendingId));
-  }, []);
-
-  const retryAttachment = useCallback(
-    (attachmentId: string) => {
-      const attachment = attachments.find((a) => a.id === attachmentId);
-      if (!attachment) return;
-      setAttachments((prev) =>
-        prev.map((a) => (a.id === attachmentId ? { ...a, status: 'uploading', errorMessage: undefined } : a)),
-      );
-      void runUpload(attachment.id, attachment.file, attachment.role);
-    },
-    [attachments, runUpload],
-  );
-
-  // UI-only: an already-uploaded staged attachment has no unstage/DELETE
-  // endpoint, so dismissing its card doesn't remove it from the thread's
-  // Redis blob — only hides it from this composer's own view.
+  // Removes a file before it's been sent. Once a turn has actually gone
+  // out, there's no unstage/DELETE endpoint for what it staged (same
+  // "UI-only" limitation the old flow already had) — this only ever
+  // acts on the pre-send queue, matching Composer's own `disabled={status
+  // === 'uploading'}` on the remove button, which already blocks this
+  // mid-send.
   const removeAttachment = useCallback((attachmentId: string) => {
     setAttachments((prev) => prev.filter((a) => a.id !== attachmentId));
   }, []);
@@ -411,12 +400,8 @@ export function useMemorylessChat(
     cancel,
     composerNotice,
     dismissComposerNotice,
-    pendingFiles,
     attachments,
     requestAttach,
-    confirmAttachRole,
-    cancelPendingFile,
-    retryAttachment,
     removeAttachment,
   };
 }

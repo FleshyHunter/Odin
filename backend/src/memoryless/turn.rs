@@ -53,6 +53,10 @@ const MODEL_USED: &str = "qwen3.5:9b";
 pub enum TurnEvent {
     Delta(String),
     Error(String),
+    // deferred.md #92: one per file bundled into this turn's Send,
+    // emitted before any Delta — lets the client show per-file progress
+    // instead of a silent wait while up to 5 files extract/chunk/embed.
+    UploadResult { filename: String, chunk_count: usize, deduped: bool, error: Option<String> },
 }
 
 // Found live (2026-08-12): the previous similarity-gated design
@@ -159,6 +163,36 @@ fn build_history(messages: &[StagedMessage]) -> Vec<ai_client::HistoryMessage> {
         .collect()
 }
 
+// deferred.md #92: same plain-phrase yes/no classifier as journeys/
+// turn.rs's is_branch_confirmed — duplicated rather than shared across
+// modules, matching this file's own existing precedent (CHUNK_
+// INACTIVITY_TIMEOUT/HISTORY_WINDOW_MESSAGES above are duplicated the
+// same way, not imported from journeys/turn.rs).
+fn is_affirmative(text: &str) -> bool {
+    const AFFIRMATIVE: &[&str] = &[
+        "yes", "yeah", "yep", "yup", "sure", "ok", "okay", "alright", "please", "go for it", "do it",
+        "sounds good", "lets do it", "let's do it", "please do",
+    ];
+    const NEGATION: &[&str] = &["no", "not", "nope", "nah", "dont", "don't"];
+
+    let normalized: String = text
+        .trim()
+        .to_lowercase()
+        .chars()
+        .filter(|c| c.is_alphanumeric() || c.is_whitespace() || *c == '\'')
+        .collect();
+
+    AFFIRMATIVE.iter().any(|phrase| {
+        if normalized == *phrase {
+            return true;
+        }
+        let Some(rest) = normalized.strip_prefix(&format!("{phrase} ")) else {
+            return false;
+        };
+        !NEGATION.iter().any(|neg| rest == *neg || rest.starts_with(&format!("{neg} ")))
+    })
+}
+
 /// Starts a streaming chat turn. Runs analyze_input and opens the
 /// generate() stream synchronously (so an unreachable ai_service still
 /// surfaces as a normal, immediate error to the caller — see
@@ -167,10 +201,66 @@ fn build_history(messages: &[StagedMessage]) -> Vec<ai_client::HistoryMessage> {
 /// receiving end for the caller to relay onward as SSE.
 pub async fn start_turn_stream(
     state: &AppState,
-    thread: StagedThread,
+    mut thread: StagedThread,
     raw_input: String,
     think: bool,
+    upload_outcomes: Vec<crate::uploads::handlers::StagedFileOutcome>,
 ) -> Result<mpsc::Receiver<TurnEvent>, MemorylessError> {
+    // deferred.md #92: resolve a PRIOR turn's "want this added to your
+    // library?" question first — same "check pending state at the start
+    // of the next turn" placement journeys/turn.rs uses for
+    // pending_branch_topic. Cleared unconditionally either way; a
+    // decline/ambiguous reply is silent (no extra framing), same
+    // precedent as a declined branch offer — the message still gets
+    // processed as a normal turn below regardless of which way this goes.
+    let mut extra_instruction: Option<String> = None;
+    if !thread.pending_promotion_hashes.is_empty() {
+        let pending = std::mem::take(&mut thread.pending_promotion_hashes);
+        if is_affirmative(&raw_input) {
+            let mut promoted_any = false;
+            for hash in &pending {
+                if let Some(upload) = thread.staged_uploads.iter().find(|u| &u.content_hash == hash).cloned() {
+                    match write_through::write_through_material_upload(state, thread.user_id, &upload, None).await {
+                        Ok(()) => promoted_any = true,
+                        Err(err) => {
+                            tracing::error!(?err, thread_id = %thread.thread_id, filename = %upload.filename, "failed to promote staged upload to the shared library")
+                        }
+                    }
+                }
+            }
+            if promoted_any {
+                extra_instruction = Some(
+                    "(You just added the student's file(s) to their permanent library, per their \
+                     confirmation — briefly acknowledge this, then continue naturally.)"
+                        .to_string(),
+                );
+            }
+        }
+    }
+
+    // deferred.md #92: a brand-new upload with no accompanying text is a
+    // legitimate turn on its own — the tutor looks at what was just
+    // extracted and, only if it seems durably reusable, asks (in its own
+    // reply) about adding it to the permanent library. One combined
+    // question for the whole batch, not one per file. Skipped when the
+    // block above already set an acknowledgment — a turn resolves at
+    // most one of "ask" or "just promoted," not both.
+    if extra_instruction.is_none() {
+        let new_hashes: Vec<String> = upload_outcomes.iter().filter_map(|o| o.content_hash.clone()).collect();
+        if !new_hashes.is_empty() && raw_input.trim().is_empty() {
+            thread.pending_promotion_hashes = new_hashes;
+            extra_instruction = Some(
+                "(The student just shared one or more files with no accompanying message. Look at \
+                 what was just extracted above and respond naturally to it. If any of it seems like \
+                 something genuinely worth keeping permanently — not just for this one conversation \
+                 — ask, in your own words, whether they'd like it added to their permanent library. \
+                 Otherwise just treat it as context for this conversation and continue naturally; \
+                 don't ask if it doesn't seem to warrant it.)"
+                    .to_string(),
+            );
+        }
+    }
+
     // known_terms empty, current_concept_id None: no journey/subject
     // exists in memoryless mode to scope either against (ai_client::
     // analyze_input's own doc comment — this is exactly its "no journey
@@ -228,14 +318,25 @@ pub async fn start_turn_stream(
     // check at these exact tag names — keep both in sync if either
     // changes. No wrapping needed when there's no reference material at
     // all — nothing for the model to conflate the query with.
-    let prompt = if context_blocks.is_empty() {
+    //
+    // deferred.md #92: extra_instruction is server-authored, never user
+    // content — kept outside both tag pairs, same distinction journeys/
+    // turn.rs's own send_journey_message already draws for its own
+    // extra_instruction (branch/fold-gap nudges).
+    let mut prompt_parts: Vec<String> = Vec::new();
+    if !context_blocks.is_empty() {
+        prompt_parts.push(format!("<reference_material>\n{}\n</reference_material>", context_blocks.join("\n\n")));
+    }
+    if let Some(instruction) = &extra_instruction {
+        prompt_parts.push(instruction.clone());
+    }
+    let prompt = if prompt_parts.is_empty() {
         analysis.cleaned_query.clone()
+    } else if context_blocks.is_empty() {
+        format!("{}\n\nStudent's question: {}", prompt_parts.join("\n\n"), analysis.cleaned_query)
     } else {
-        format!(
-            "<reference_material>\n{}\n</reference_material>\n\n<student_message>\n{}\n</student_message>",
-            context_blocks.join("\n\n"),
-            analysis.cleaned_query
-        )
+        prompt_parts.push(format!("<student_message>\n{}\n</student_message>", analysis.cleaned_query));
+        prompt_parts.join("\n\n")
     };
 
     let history = build_history(&thread.messages);
@@ -261,6 +362,22 @@ pub async fn start_turn_stream(
     .await?;
 
     let (tx, rx) = mpsc::channel::<TurnEvent>(16);
+
+    // deferred.md #92: sent before any Delta, so a multi-file batch shows
+    // per-file progress instead of a silent wait — best-effort, same as
+    // every other tx.send() in this file; a client that's already gone
+    // just means nothing was listening.
+    for outcome in &upload_outcomes {
+        let _ = tx
+            .send(TurnEvent::UploadResult {
+                filename: outcome.filename.clone(),
+                chunk_count: outcome.chunk_count,
+                deduped: outcome.deduped,
+                error: outcome.rejected.clone(),
+            })
+            .await;
+    }
+
     let state = state.clone();
     let cleaned_query = analysis.cleaned_query;
     let matched_concepts = analysis.matched_concepts;

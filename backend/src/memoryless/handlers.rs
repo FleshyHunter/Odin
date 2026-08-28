@@ -1,7 +1,7 @@
 use std::convert::Infallible;
 
 use axum::{
-    extract::{Path, State},
+    extract::{Multipart, Path, State},
     response::sse::{Event, KeepAlive, Sse},
     Json,
 };
@@ -15,40 +15,103 @@ use crate::auth::middleware::{begin_rls_transaction, AuthUser};
 use crate::auth::rate_limit;
 use crate::journeys;
 use crate::state::AppState;
+use crate::uploads::handlers::stage_one_file;
 
 use super::errors::MemorylessError;
 use super::staging::{self, load_owned, StagedAuditEvent, StagedMessage, StagedThread};
 use super::turn;
 use super::write_through;
 
-#[derive(Deserialize)]
-pub struct SendMessageRequest {
-    // Absent on the first message of a brand new thread — Rule 11: a
-    // thread exists only once the first message is sent, and (per the
-    // Memoryless Mode section) Rust generates its UUID itself upfront,
-    // never Postgres via DEFAULT gen_random_uuid().
+// deferred.md #92: every file attached via Send defaults to this role
+// (thread-scoped) — the upfront role modal is gone; promotion to the
+// shared library happens later, only via the tutor's own in-conversation
+// question + confirmation (turn.rs's pending_promotion_hashes), never at
+// attach time.
+const SEND_UPLOAD_ROLE: &str = "prompt_upload";
+
+// deferred.md #92: hard cap, enforced here (not just client-side) —
+// same "don't trust the client" posture as the standalone /uploads
+// endpoint's own size guardrail. pub(crate): mod.rs's own router() needs
+// it too, to size the route's multipart body limit.
+pub(crate) const MAX_FILES_PER_SEND: usize = 5;
+
+struct ParsedSendRequest {
     thread_id: Option<Uuid>,
     message: String,
-    // User-controlled, per markdown/deferred.md #20 point 1 — defaults
-    // to `true` (today's behavior) when omitted, NOT auto-decided by
-    // detected_intent.
     think: Option<bool>,
+    files: Vec<(Vec<u8>, String)>, // (bytes, filename)
+}
+
+async fn parse_send_multipart(mut multipart: Multipart) -> Result<ParsedSendRequest, MemorylessError> {
+    let mut thread_id: Option<Uuid> = None;
+    let mut message = String::new();
+    let mut think: Option<bool> = None;
+    let mut files: Vec<(Vec<u8>, String)> = Vec::new();
+
+    while let Some(field) = multipart
+        .next_field()
+        .await
+        .map_err(|_| MemorylessError::Validation("invalid multipart body".to_string()))?
+    {
+        match field.name() {
+            Some("message") => {
+                message = field.text().await.map_err(|_| MemorylessError::Validation("invalid message field".to_string()))?;
+            }
+            Some("thread_id") => {
+                let text = field
+                    .text()
+                    .await
+                    .map_err(|_| MemorylessError::Validation("invalid thread_id field".to_string()))?;
+                if !text.is_empty() {
+                    thread_id = Some(
+                        Uuid::parse_str(&text).map_err(|_| MemorylessError::Validation("invalid thread_id".to_string()))?,
+                    );
+                }
+            }
+            Some("think") => {
+                let text = field.text().await.map_err(|_| MemorylessError::Validation("invalid think field".to_string()))?;
+                think = Some(text == "true");
+            }
+            Some("file") => {
+                if files.len() >= MAX_FILES_PER_SEND {
+                    return Err(MemorylessError::Validation(format!("at most {MAX_FILES_PER_SEND} files per message")));
+                }
+                let filename = field.file_name().map(|s| s.to_string()).unwrap_or_else(|| "upload".to_string());
+                let bytes = field.bytes().await.map_err(|_| MemorylessError::Validation("could not read file".to_string()))?;
+                files.push((bytes.to_vec(), filename));
+            }
+            _ => {}
+        }
+    }
+
+    Ok(ParsedSendRequest { thread_id, message, think, files })
 }
 
 /// Streams the turn back as Server-Sent Events rather than one blocking
 /// JSON response (Block 11 follow-up — markdown/deferred.md #20 point 2):
-///   event: thread  — the thread_id, sent once immediately (the only way
-///                     a caller learns a brand-new thread's ID, since it
-///                     doesn't exist until this call creates it)
-///   event: delta   — one per text chunk, as qwen produces them
-///   event: done    — sent once persistence finishes, successful or not
-///                     (the turn's own outcome — cancelled/stalled/error
-///                     — already lives in the staged audit event, not in
-///                     this final marker)
+///   event: thread         — the thread_id, sent once immediately (the
+///                            only way a caller learns a brand-new
+///                            thread's ID, since it doesn't exist until
+///                            this call creates it)
+///   event: upload_result  — deferred.md #92, one per attached file
+///                            (0-5), sent before any delta
+///   event: delta          — one per text chunk, as qwen produces them
+///   event: done           — sent once persistence finishes, successful
+///                            or not (the turn's own outcome — cancelled/
+///                            stalled/error — already lives in the
+///                            staged audit event, not in this final
+///                            marker)
+///
+/// deferred.md #92: multipart, not a JSON body — bundles the message
+/// text with up to 5 file attachments into ONE request/ONE turn, so
+/// there's exactly one thread-identity resolution regardless of how many
+/// files are attached, closing #65's race (previously N independent
+/// /uploads calls, each its own race against this endpoint, for an
+/// N-file attach).
 pub async fn send_message(
     AuthUser(user_id): AuthUser,
     State(state): State<AppState>,
-    Json(req): Json<SendMessageRequest>,
+    multipart: Multipart,
 ) -> Result<Sse<impl Stream<Item = Result<Event, Infallible>>>, MemorylessError> {
     // deferred.md #78: a real generate_stream() call against Ollama —
     // checked before even loading/creating the staged thread, same
@@ -60,18 +123,36 @@ pub async fn send_message(
         return Err(MemorylessError::RateLimited);
     }
 
-    let thread = match req.thread_id {
+    let parsed = parse_send_multipart(multipart).await?;
+
+    // deferred.md #92: empty text is now valid — an attach-with-no-text
+    // turn is legitimate (turn.rs looks at the extracted content and
+    // responds to it) — only reject when there's truly nothing to act
+    // on at all.
+    if parsed.message.trim().is_empty() && parsed.files.is_empty() {
+        return Err(MemorylessError::Validation("message must not be empty".to_string()));
+    }
+
+    let mut thread = match parsed.thread_id {
         Some(thread_id) => load_owned(&state, thread_id, user_id).await?,
         None => StagedThread::new(Uuid::new_v4(), user_id),
     };
     let thread_id = thread.thread_id;
 
-    if req.message.trim().is_empty() {
-        return Err(MemorylessError::Validation("message must not be empty".to_string()));
+    let mut upload_outcomes = Vec::with_capacity(parsed.files.len());
+    for (bytes, filename) in parsed.files {
+        let outcome = stage_one_file(&state, user_id, &mut thread, bytes, filename, SEND_UPLOAD_ROLE).await?;
+        upload_outcomes.push(outcome);
     }
-    let think = req.think.unwrap_or(true);
+    // One save for the whole batch (not one per file) — same "phantom
+    // thread_id" reasoning as the standalone /uploads endpoint's own
+    // save, covering both the brand-new-thread case and refreshing an
+    // existing one's TTL.
+    staging::save(&state, &thread).await?;
 
-    let mut rx = turn::start_turn_stream(&state, thread, req.message, think).await?;
+    let think = parsed.think.unwrap_or(true);
+
+    let mut rx = turn::start_turn_stream(&state, thread, parsed.message, think, upload_outcomes).await?;
 
     let sse_stream = async_stream::stream! {
         yield Ok(Event::default().event("thread").data(thread_id.to_string()));
@@ -85,6 +166,10 @@ pub async fn send_message(
             match event {
                 turn::TurnEvent::Delta(text) => yield Ok(Event::default().event("delta").data(text)),
                 turn::TurnEvent::Error(reason) => yield Ok(Event::default().event("error").data(reason)),
+                turn::TurnEvent::UploadResult { filename, chunk_count, deduped, error } => {
+                    let payload = json!({ "filename": filename, "chunk_count": chunk_count, "deduped": deduped, "error": error });
+                    yield Ok(Event::default().event("upload_result").data(payload.to_string()));
+                }
             }
         }
         yield Ok(Event::default().event("done").data("ok"));

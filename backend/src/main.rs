@@ -163,7 +163,7 @@ async fn main() {
     let app = Router::new()
         .merge(routes::router())
         .merge(auth::router())
-        .merge(memoryless::router())
+        .merge(memoryless::router(config.memoryless_staged_upload_max_mb))
         .merge(uploads::router(config.memoryless_staged_upload_max_mb))
         .merge(exercises::router())
         .merge(content_flags::router())

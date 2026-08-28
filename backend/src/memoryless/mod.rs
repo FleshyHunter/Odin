@@ -18,15 +18,32 @@ mod turn;
 pub mod write_through;
 
 use axum::{
+    extract::DefaultBodyLimit,
     routing::{get, post},
     Router,
 };
 
 use crate::state::AppState;
 
-pub fn router() -> Router<AppState> {
+// deferred.md #92: same "axum's own Multipart default (2MB) is far below
+// a real configured max" gap uploads::mod.rs's own MULTIPART_OVERHEAD_
+// BUFFER_BYTES already fixed for /uploads — /memoryless/messages is now
+// multipart too (up to handlers::MAX_FILES_PER_SEND files bundled into
+// one turn), so it needs the same treatment, sized for the whole batch
+// rather than one file. Scoped to just this one route (chained onto its
+// own MethodRouter before it's handed to .route()), not a blanket
+// increase across every memoryless endpoint — the other two routes here
+// stay on axum's own default.
+const MULTIPART_OVERHEAD_BUFFER_BYTES: usize = 1024 * 1024;
+
+pub fn router(max_upload_mb: u64) -> Router<AppState> {
+    let body_limit =
+        (max_upload_mb as usize) * (handlers::MAX_FILES_PER_SEND) * 1024 * 1024 + MULTIPART_OVERHEAD_BUFFER_BYTES;
     Router::new()
-        .route("/memoryless/messages", post(handlers::send_message))
+        .route(
+            "/memoryless/messages",
+            post(handlers::send_message).layer(DefaultBodyLimit::max(body_limit)),
+        )
         .route(
             "/memoryless/threads/{thread_id}",
             get(handlers::get_thread),

@@ -127,7 +127,11 @@ export interface ComposerNoticeData {
 // deliberately not wired yet (deferred.md #37: no message-level field
 // exists in POST /memoryless/messages to carry one-turn-only context).
 export type UploadRole = 'ephemeral' | 'prompt_upload' | 'material_upload';
-export type AttachmentStatus = 'uploading' | 'ready' | 'error';
+// deferred.md #92: 'attached' — queued for the next Send, no network
+// activity yet (memoryless mode's new bundled-upload flow only; journey
+// mode's own separate attach flow, useJourneyChat.ts, never produces
+// this state — its files still upload individually and immediately).
+export type AttachmentStatus = 'attached' | 'uploading' | 'ready' | 'error';
 
 // One in-flight or completed upload attached to the composer. Lives only
 // in the composer's own local state — the backend's source of truth for a

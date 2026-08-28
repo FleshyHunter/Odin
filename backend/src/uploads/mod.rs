@@ -6,7 +6,10 @@
 // (410 expired, 404 not-yours) apply here unchanged.
 
 mod dedup;
-mod handlers;
+// deferred.md #92: pub(crate), not private — memoryless::turn now calls
+// stage_one_file()/StagedFileOutcome directly (bundled multi-file Send),
+// not just this module's own /uploads route.
+pub(crate) mod handlers;
 
 use axum::extract::DefaultBodyLimit;
 use axum::{routing::post, Router};

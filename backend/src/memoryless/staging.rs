@@ -100,6 +100,19 @@ pub struct StagedThread {
     pub audit_events: Vec<StagedAuditEvent>,
     pub staged_uploads: Vec<StagedUpload>,
     pub created_at: DateTime<Utc>,
+    // deferred.md #92: set (to the content_hash of each just-staged
+    // upload) when the tutor asks, in its own reply, whether an upload
+    // should be promoted to the permanent shared library — checked and
+    // cleared at the start of the NEXT turn, same "ask, then resolve on
+    // the following message" shape as journeys/turn.rs's
+    // pending_branch_topic. Keyed by content_hash, not a sources.
+    // source_id, because a staged prompt_upload has no sources row at
+    // all yet — promotion writes one for the first time via
+    // write_through_material_upload, it doesn't UPDATE an existing one.
+    // #[serde(default)]: an already-staged thread from before this field
+    // existed must still deserialize cleanly mid-TTL.
+    #[serde(default)]
+    pub pending_promotion_hashes: Vec<String>,
 }
 
 impl StagedThread {
@@ -111,6 +124,7 @@ impl StagedThread {
             audit_events: Vec::new(),
             staged_uploads: Vec::new(),
             created_at: Utc::now(),
+            pending_promotion_hashes: Vec::new(),
         }
     }
 }
