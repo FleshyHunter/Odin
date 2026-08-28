@@ -34,6 +34,15 @@
   fill: var(--glow);
 }
 
+/* SVG <text> is selectable by default — a click with even a tiny bit of
+   pointer movement between mousedown/mouseup gets read as a drag-select
+   instead of a plain click, painting a native text-selection highlight
+   right before the click's own navigation fires. Blocking selection on
+   the whole node (not just the text) is what actually prevents it. */
+.roadmap-target-node {
+  user-select: none;
+  -webkit-user-select: none;
+}
 .roadmap-target-node.clickable {
   cursor: pointer;
 }
@@ -44,6 +53,8 @@
 
 .roadmap-collapsed-node {
   cursor: pointer;
+  user-select: none;
+  -webkit-user-select: none;
 }
 .roadmap-collapsed-node:focus-visible {
   outline: 2px solid var(--focus);

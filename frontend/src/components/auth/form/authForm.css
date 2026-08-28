@@ -35,7 +35,10 @@
 .signin-pane-content .field input {
   width: 100%;
   background: var(--surface);
-  border: 1px solid var(--border);
+  /* Transparent, not just low-contrast — invisible at rest, revealed on
+     hover/focus below. Same 1px width as the hover/focus states so
+     revealing it never shifts layout. */
+  border: 1px solid transparent;
   border-radius: 8px;
   padding: 0.7rem 0.85rem;
   font-size: 0.92rem;
