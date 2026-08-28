@@ -27,13 +27,29 @@ interface ActivePanelProps {
   // this is what actually fetches/serves the fresh instantiated exercise;
   // ChatView owns the real exercise state, same as onSubmitAnswer already does.
   onStartAttempt?: (nodeId: string, nodeTitle: string, difficulty: Difficulty) => void;
+  // deferred.md #38: ExerciseCard's "Move on for now" (shown after a
+  // wrong advanced attempt) — bubbles up rather than calling the API
+  // directly, since ChatView is what actually tracks which concept the
+  // CURRENT exercise belongs to (exerciseConceptId, same reason its own
+  // mastery-isolation fix needed that field). NodeDetail's own "Skip"
+  // button doesn't need this — it already has journeyId/nodeId directly.
+  onMoveOnFromExercise?: () => void;
   width: number;
   // deferred.md #94: real DAG fetch, replacing sampleData.ts.
   journeyId: string | null;
   trackTitle: string;
 }
 
-export function ActivePanel({ exercise, mastery, onSubmitAnswer, onStartAttempt, width, journeyId, trackTitle }: ActivePanelProps) {
+export function ActivePanel({
+  exercise,
+  mastery,
+  onSubmitAnswer,
+  onStartAttempt,
+  onMoveOnFromExercise,
+  width,
+  journeyId,
+  trackTitle,
+}: ActivePanelProps) {
   const [tab, setTab] = useState<PanelTab>('now');
   // Map's own drill-down state: null = DAG view, set = a specific node's
   // detail (tiers + history). Lives here, not in Roadmap itself, since
@@ -69,6 +85,15 @@ export function ActivePanel({ exercise, mastery, onSubmitAnswer, onStartAttempt,
     setTab('now');
   };
 
+  // Shared by both the Map's onNodeClick and KIV's "Review" — same
+  // drill-down destination (NodeDetail's tier/attempt flow) either way,
+  // deferred.md #38. Switches to the Map tab so NodeDetail (gated on
+  // tab === 'map') actually renders.
+  const handleReviewConcept = (id: string, title: string, status: ConceptStatus, unmetPrerequisiteTitles: string[]) => {
+    setSelectedNode({ id, title, status, unmetPrerequisiteTitles });
+    setTab('map');
+  };
+
   return (
     <aside className="active-panel" style={{ width }}>
       <div className="panel-tabs">
@@ -85,7 +110,7 @@ export function ActivePanel({ exercise, mastery, onSubmitAnswer, onStartAttempt,
 
       {tab === 'now' && (
         <>
-          {exercise && <ExerciseCard exercise={exercise} onSubmit={onSubmitAnswer} />}
+          {exercise && <ExerciseCard exercise={exercise} onSubmit={onSubmitAnswer} onMoveOn={onMoveOnFromExercise} />}
           {mastery && <MasteryBar conceptTitle={mastery.conceptTitle} masteryScore={mastery.masteryScore} />}
           {!exercise && !mastery && (
             <p className="panel-footnote">No exercise yet for this track.</p>
@@ -105,12 +130,7 @@ export function ActivePanel({ exercise, mastery, onSubmitAnswer, onStartAttempt,
             onAttempt={handleAttempt}
           />
         ) : roadmap ? (
-          <Roadmap
-            data={roadmap}
-            onNodeClick={(id, title, status, unmetPrerequisiteTitles) =>
-              setSelectedNode({ id, title, status, unmetPrerequisiteTitles })
-            }
-          />
+          <Roadmap data={roadmap} onNodeClick={handleReviewConcept} />
         ) : (
           // Deliberately NOT sampleRoadmap as a loading fallback — showing
           // sample data over a real loading state would let a user click a
@@ -118,7 +138,7 @@ export function ActivePanel({ exercise, mastery, onSubmitAnswer, onStartAttempt,
           <p className="panel-footnote">{journeyId ? 'Loading map…' : 'No journey yet for this track.'}</p>
         ))}
 
-      {tab === 'kiv' && <KivReview />}
+      {tab === 'kiv' && <KivReview items={roadmap?.kivItems ?? []} onReview={handleReviewConcept} />}
     </aside>
   );
 }

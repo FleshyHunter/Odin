@@ -90,6 +90,9 @@ export function buildRoadmapData(apiNodes: RoadmapApiNode[], trackTitle: string)
             ? `+ ${titleById.get(otherPrereqIds[0]) ?? ''}`
             : undefined,
       unmetPrerequisiteTitles,
+      foundationGap: apiNode.foundationGap,
+      kivFlagged: apiNode.kivFlagged,
+      masteryScore: apiNode.masteryScore,
     };
   });
 
@@ -98,5 +101,8 @@ export function buildRoadmapData(apiNodes: RoadmapApiNode[], trackTitle: string)
     masteredCount: nodes.filter((node) => node.status === 'mastered').length,
     totalCount: nodes.length,
     items: collapseMasteredRuns(nodes),
+    // deferred.md #38 — from the pre-collapse list, not `items` above
+    // (see RoadmapData.kivItems's own doc comment on why that matters).
+    kivItems: nodes.filter((node) => node.kivFlagged && node.status !== 'mastered'),
   };
 }

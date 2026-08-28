@@ -41,6 +41,10 @@ function expandItems(items: RoadmapItem[], expandedGroupIds: Set<string>): Roadm
       id: concept.id,
       title: concept.title,
       status: 'pending',
+      // Not real journey_concepts data (#42's pre-existing simplification,
+      // untouched here) — never KIV-eligible.
+      foundationGap: false,
+      kivFlagged: false,
     }));
     const collapseControl: RoadmapItem = { kind: 'collapsed', id: item.id, lines: ['Collapse'] };
     return [...revealedNodes, collapseControl];

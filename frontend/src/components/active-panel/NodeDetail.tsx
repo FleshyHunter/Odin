@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react';
 import * as exercisesApi from '../../api/exercises';
+import * as kivApi from '../../api/kiv';
 import type { Attempt, Difficulty } from '../../types';
 import type { ConceptStatus } from '../roadmap/types';
 import { AttemptHistoryList } from './AttemptHistoryList';
@@ -33,9 +34,16 @@ const DIFFICULTIES: { value: Difficulty; label: string }[] = [
 // real DAG fetch), so the real history endpoint is meaningful again.
 export function NodeDetail({ journeyId, nodeId, nodeTitle, status, unmetPrerequisiteTitles, onBack, onAttempt }: NodeDetailProps) {
   const [attempts, setAttempts] = useState<Attempt[]>([]);
+  // deferred.md #38 — real "skips a foundation_gap concept" trigger.
+  // Doesn't wait for a roadmap refetch to confirm (ActivePanel's own
+  // fetch is mount/switch-only, no live push, same posture already
+  // accepted for the Map/mastery bar elsewhere) — this local state is
+  // the immediate feedback instead.
+  const [skipState, setSkipState] = useState<'idle' | 'skipping' | 'skipped' | 'error'>('idle');
 
   useEffect(() => {
     setAttempts([]);
+    setSkipState('idle');
     if (!journeyId) return;
     let cancelled = false;
     exercisesApi.getNodeHistory(journeyId, nodeId).then((result) => {
@@ -45,6 +53,17 @@ export function NodeDetail({ journeyId, nodeId, nodeTitle, status, unmetPrerequi
       cancelled = true;
     };
   }, [journeyId, nodeId]);
+
+  const handleSkip = async () => {
+    if (!journeyId || skipState === 'skipping') return;
+    setSkipState('skipping');
+    try {
+      await kivApi.skipConcept(journeyId, nodeId);
+      setSkipState('skipped');
+    } catch {
+      setSkipState('error');
+    }
+  };
 
   return (
     <div className="node-detail">
@@ -72,6 +91,19 @@ export function NodeDetail({ journeyId, nodeId, nodeTitle, status, unmetPrerequi
           </button>
         ))}
       </div>
+
+      {/* deferred.md #38 — real "skips a foundation_gap concept" trigger
+          (PRD.md's locked KIV Review). No hard gate here either — always
+          available, not just for foundation_gap concepts, since a plain
+          "review this later" is reasonable for any concept. */}
+      {journeyId &&
+        (skipState === 'skipped' ? (
+          <p className="node-skip-confirm">Flagged for review — you'll find it in the KIV tab.</p>
+        ) : (
+          <button type="button" className="node-skip-btn" onClick={handleSkip} disabled={skipState === 'skipping'}>
+            {skipState === 'error' ? 'Could not flag — retry' : 'Skip — review this later'}
+          </button>
+        ))}
 
       <p className="node-section-label">Past attempts</p>
       <AttemptHistoryList attempts={attempts} />

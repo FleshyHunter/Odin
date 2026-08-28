@@ -10,6 +10,7 @@ import { useJourneyChat } from '../../hooks/useJourneyChat';
 import { deleteJourney } from '../../api/journeys';
 import { useActivePanel, ACTIVE_PANEL_MIN_WIDTH } from '../../hooks/useActivePanel';
 import * as exercisesApi from '../../api/exercises';
+import * as kivApi from '../../api/kiv';
 import type { Difficulty, Exercise, MasteryStatus } from '../../types';
 import type { SessionOutletContext } from './SessionLayout';
 
@@ -126,6 +127,19 @@ export function ChatView() {
     const result = await exercisesApi.startAttempt(journeyId, nodeId, difficulty, nodeTitle);
     setExercise(result);
     setExerciseConceptId(nodeId);
+  };
+
+  // deferred.md #38 — PRD.md's locked KIV trigger: "moves on from a
+  // failed advanced question." Fire-and-forget, matching this app's own
+  // established "fail-soft/best-effort" posture for low-stakes actions
+  // (e.g. Redis staging) — worst case on failure, the concept just isn't
+  // flagged for later review, no data loss, nothing else breaks.
+  // ExerciseCard shows its own optimistic confirmation regardless.
+  const handleMoveOnFromExercise = () => {
+    if (!journeyId || !exerciseConceptId) return;
+    kivApi.skipConcept(journeyId, exerciseConceptId).catch((err) => {
+      console.warn('Failed to flag concept for KIV review:', err);
+    });
   };
 
   const handleDeleteTrack = () => {
@@ -314,6 +328,7 @@ export function ChatView() {
           mastery={mastery}
           onSubmitAnswer={handleSubmitAnswer}
           onStartAttempt={handleStartAttempt}
+          onMoveOnFromExercise={handleMoveOnFromExercise}
           width={panelWidth}
           journeyId={journeyId}
           trackTitle={activeTrack.title}

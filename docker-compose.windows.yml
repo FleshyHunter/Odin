@@ -40,6 +40,17 @@
 # set, /acquire, /generate_dag, /generate_exercise_template each return
 # a clean 503 rather than failing to boot — see .env.example.
 #
+# deferred.md #2b Stage 2: that same .env also needs
+# DIFY_CLASSIFY_GAP_API_KEY — its own dedicated Dify app, deliberately
+# NOT DIFY_DAG_API_KEY reused (see classify_gap()'s own comment in
+# acquisition/service.py for why). Was already read by ai_service/
+# documented in .env.example, but missing here — this compose file only
+# forwards env vars it explicitly lists under `environment:` below, so
+# the container never actually saw it even when the .env value was set.
+# Same "absent means a clean fallback, not a crash" posture as the three
+# above: unset means analyze_input's Stage 2 always fails soft to
+# "ambiguous," never a startup failure.
+#
 # deferred.md #93: that same .env optionally needs WOLFRAM_APP_ID (see
 # ai_service/app/search/wolfram_client.py) — unset means query_wolfram
 # fails soft with a per-call error, same "not configured yet" posture
@@ -104,6 +115,11 @@ services:
       DIFY_ACQUIRE_API_KEY: ${DIFY_ACQUIRE_API_KEY:-}
       DIFY_DAG_API_KEY: ${DIFY_DAG_API_KEY:-}
       DIFY_EXERCISE_TEMPLATE_API_KEY: ${DIFY_EXERCISE_TEMPLATE_API_KEY:-}
+      # deferred.md #2b Stage 2 (classify_gap) — own dedicated Dify app,
+      # see header comment above. Previously missing here entirely, so
+      # Stage 2 always fell soft to "ambiguous" regardless of whether a
+      # real key was ever set in .env.
+      DIFY_CLASSIFY_GAP_API_KEY: ${DIFY_CLASSIFY_GAP_API_KEY:-}
       # deferred.md #93 — see header comment above.
       WOLFRAM_APP_ID: ${WOLFRAM_APP_ID:-}
       SEARXNG_URL: ${SEARXNG_URL:-http://host.docker.internal:8888}

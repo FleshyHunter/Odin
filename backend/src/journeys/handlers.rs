@@ -429,6 +429,17 @@ pub struct RoadmapNodeInfo {
     // file already does.
     status: String,
     prerequisite_ids: Vec<Uuid>,
+    // deferred.md #38 — journey_concepts.foundation_gap / kiv_flagged_at,
+    // exposed here rather than via a separate KIV-list endpoint: the Map
+    // already fetches every real journey_concepts row for this journey,
+    // so the KIV tab reuses that SAME fetch (ActivePanel derives its
+    // list from this response) instead of a second, duplicate query.
+    foundation_gap: bool,
+    kiv_flagged: bool,
+    // None if mastery_bank has no row yet for this concept (never
+    // attempted) — real 0.0 is a different, meaningful state (attempted,
+    // scored zero) from "no data at all."
+    mastery_score: Option<f32>,
 }
 
 /// GET /journeys/{journey_id}/roadmap — deferred.md #94: the Map tab's
@@ -460,11 +471,20 @@ pub async fn get_roadmap(
         Some((entry,)) => entry.ok_or(JourneyError::Internal)?,
     };
 
-    let node_rows: Vec<(Uuid, String, String)> = sqlx::query_as(
-        "SELECT jc.concept_id, cc.title, jc.status FROM journey_concepts jc \
-         JOIN canonical_concepts cc ON cc.concept_id = jc.concept_id WHERE jc.journey_id = $1",
+    // deferred.md #38: LEFT JOIN mastery_bank — a concept never attempted
+    // has no row there at all, not a real score. Explicit mb.user_id
+    // predicate alongside RLS, matching get_mastery_status's own
+    // established convention in this same file.
+    #[allow(clippy::type_complexity)]
+    let node_rows: Vec<(Uuid, String, String, bool, Option<chrono::DateTime<chrono::Utc>>, Option<f32>)> = sqlx::query_as(
+        "SELECT jc.concept_id, cc.title, jc.status, jc.foundation_gap, jc.kiv_flagged_at, mb.mastery_score \
+         FROM journey_concepts jc \
+         JOIN canonical_concepts cc ON cc.concept_id = jc.concept_id \
+         LEFT JOIN mastery_bank mb ON mb.user_id = $2 AND mb.concept_id = jc.concept_id \
+         WHERE jc.journey_id = $1",
     )
     .bind(journey_id)
+    .bind(user_id)
     .fetch_all(&mut *tx)
     .await?;
 
@@ -477,29 +497,81 @@ pub async fn get_roadmap(
 
     tx.commit().await?;
 
-    let mut status_by_id: std::collections::HashMap<Uuid, String> =
-        node_rows.iter().map(|(id, _, status)| (*id, status.clone())).collect();
+    struct NodeMeta {
+        title: String,
+        status: String,
+        foundation_gap: bool,
+        kiv_flagged: bool,
+        mastery_score: Option<f32>,
+    }
+
+    let mut meta_by_id: std::collections::HashMap<Uuid, NodeMeta> = node_rows
+        .into_iter()
+        .map(|(id, title, status, foundation_gap, kiv_flagged_at, mastery_score)| {
+            (
+                id,
+                NodeMeta { title, status, foundation_gap, kiv_flagged: kiv_flagged_at.is_some(), mastery_score },
+            )
+        })
+        .collect();
     let mut prereqs_by_id: std::collections::HashMap<Uuid, Vec<Uuid>> = std::collections::HashMap::new();
     for &(concept_id, prereq_concept_id) in &edge_rows {
         prereqs_by_id.entry(concept_id).or_default().push(prereq_concept_id);
     }
-    let title_by_id: std::collections::HashMap<Uuid, String> =
-        node_rows.iter().map(|(id, title, _)| (*id, title.clone())).collect();
-    let nodes_for_order: Vec<(Uuid, String)> = node_rows.into_iter().map(|(id, title, _)| (id, title)).collect();
+    let nodes_for_order: Vec<(Uuid, String)> =
+        meta_by_id.iter().map(|(id, meta)| (*id, meta.title.clone())).collect();
 
     let ordered_ids = service::topological_order(&nodes_for_order, &edge_rows, entry_concept_id);
 
     Ok(Json(
         ordered_ids
             .into_iter()
-            .map(|id| RoadmapNodeInfo {
-                concept_id: id,
-                title: title_by_id.get(&id).cloned().unwrap_or_default(),
-                status: status_by_id.remove(&id).unwrap_or_else(|| "locked".to_string()),
-                prerequisite_ids: prereqs_by_id.remove(&id).unwrap_or_default(),
+            .map(|id| {
+                let meta = meta_by_id.remove(&id);
+                RoadmapNodeInfo {
+                    concept_id: id,
+                    title: meta.as_ref().map(|m| m.title.clone()).unwrap_or_default(),
+                    status: meta.as_ref().map(|m| m.status.clone()).unwrap_or_else(|| "locked".to_string()),
+                    foundation_gap: meta.as_ref().map(|m| m.foundation_gap).unwrap_or(false),
+                    kiv_flagged: meta.as_ref().map(|m| m.kiv_flagged).unwrap_or(false),
+                    mastery_score: meta.as_ref().and_then(|m| m.mastery_score),
+                    prerequisite_ids: prereqs_by_id.remove(&id).unwrap_or_default(),
+                }
             })
             .collect(),
     ))
+}
+
+/// POST /journeys/{journey_id}/concepts/{concept_id}/skip — deferred.md
+/// #38: the real trigger for `journey_concepts.kiv_flagged_at`, unified
+/// across both of PRD.md's locked KIV Review conditions ("moves on from
+/// a failed advanced question" — `ExerciseCard.tsx`'s "Move on for now",
+/// shown after a wrong advanced attempt — or "skips a foundation_gap
+/// concept" — `NodeDetail.tsx`'s "Skip" button). Both call sites hit
+/// this same endpoint; which PRD.md condition actually applied is
+/// implicit in whichever concept's `foundation_gap` was already set at
+/// intake, not tracked separately here. No hard gating, same posture as
+/// everywhere else in this module — skipping a concept that's already
+/// complete, or already flagged, is a harmless no-op re-timestamp, not
+/// an error.
+pub async fn skip_concept(
+    AuthUser(user_id): AuthUser,
+    State(state): State<AppState>,
+    Path((journey_id, concept_id)): Path<(Uuid, Uuid)>,
+) -> Result<axum::http::StatusCode, JourneyError> {
+    let mut tx = begin_rls_transaction(&state.pool, user_id).await?;
+    let result = sqlx::query(
+        "UPDATE journey_concepts SET kiv_flagged_at = NOW() WHERE journey_id = $1 AND concept_id = $2",
+    )
+    .bind(journey_id)
+    .bind(concept_id)
+    .execute(&mut *tx)
+    .await?;
+    if result.rows_affected() == 0 {
+        return Err(JourneyError::NotFound);
+    }
+    tx.commit().await?;
+    Ok(axum::http::StatusCode::NO_CONTENT)
 }
 
 #[derive(Serialize)]

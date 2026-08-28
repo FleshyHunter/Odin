@@ -23,44 +23,6 @@
   color: var(--glow);
 }
 
-.kiv-prompt-actions {
-  display: flex;
-  gap: 0.5rem;
-  flex-wrap: wrap;
-}
-
-.kiv-btn {
-  border-radius: var(--radius-md);
-  padding: 0.55rem 0.85rem;
-  font-size: 0.8rem;
-  font-weight: 600;
-  font-family: inherit;
-  cursor: pointer;
-  border: 1px solid var(--border-strong);
-  background: transparent;
-  color: var(--text-secondary);
-  transition: filter 0.15s ease, background 0.15s ease, color 0.15s ease, border-color 0.15s ease;
-}
-.kiv-btn:hover {
-  background: var(--bg-pane);
-  color: var(--text);
-  border-color: var(--text-muted);
-}
-.kiv-btn-primary {
-  background: var(--glow);
-  color: #1a1206;
-  border-color: var(--glow);
-}
-.kiv-btn-primary:hover {
-  filter: brightness(1.08);
-  background: var(--glow);
-  color: #1a1206;
-}
-.kiv-btn:focus-visible {
-  outline: 2px solid var(--focus);
-  outline-offset: 2px;
-}
-
 .kiv-section-label {
   font-size: 0.7rem;
   text-transform: uppercase;
@@ -145,12 +107,13 @@
   background: var(--error);
 }
 
-.kiv-mark-done {
+.kiv-review-btn {
   flex-shrink: 0;
   display: flex;
   align-items: center;
   gap: 0.35rem;
   font-size: 0.76rem;
+  font-weight: 600;
   font-family: inherit;
   color: var(--text-secondary);
   background: transparent;
@@ -160,15 +123,15 @@
   cursor: pointer;
   transition: background 0.15s ease, border-color 0.15s ease, color 0.15s ease;
 }
-.kiv-mark-done:hover {
+.kiv-review-btn:hover {
   background: var(--surface);
-  color: var(--success);
-  border-color: var(--success);
+  color: var(--glow);
+  border-color: var(--glow);
 }
-.kiv-mark-done:focus-visible {
+.kiv-review-btn:focus-visible {
   outline: 2px solid var(--focus);
   outline-offset: 2px;
 }
-.kiv-mark-done svg {
+.kiv-review-btn svg {
   flex-shrink: 0;
 }

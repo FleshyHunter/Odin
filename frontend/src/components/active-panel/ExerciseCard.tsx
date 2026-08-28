@@ -7,6 +7,10 @@ import './exerciseCard.css';
 interface ExerciseCardProps {
   exercise: Exercise;
   onSubmit?: (answer: string) => Promise<SubmitAnswerResult | undefined>;
+  // deferred.md #38 — PRD.md's locked KIV trigger: "moves on from a
+  // failed advanced question." Only ever offered for that exact case
+  // (see the render below) — never a generic "give up" button.
+  onMoveOn?: () => void;
 }
 
 function capitalize(word: string): string {
@@ -20,13 +24,14 @@ const FLAG_ICON = (
   </svg>
 );
 
-export function ExerciseCard({ exercise, onSubmit }: ExerciseCardProps) {
+export function ExerciseCard({ exercise, onSubmit, onMoveOn }: ExerciseCardProps) {
   const [answer, setAnswer] = useState('');
   const [isFlagging, setIsFlagging] = useState(false);
   const [flagState, setFlagState] = useState<'idle' | 'flagged' | 'error'>('idle');
   const [view, setView] = useState<'question' | 'answer'>('question');
   const [result, setResult] = useState<SubmitAnswerResult | null>(null);
   const [isSubmitting, setIsSubmitting] = useState(false);
+  const [movedOn, setMovedOn] = useState(false);
 
   // ExerciseCard isn't remounted between exercises (ActivePanel renders
   // it without a key), so local state has to reset itself whenever the
@@ -38,7 +43,13 @@ export function ExerciseCard({ exercise, onSubmit }: ExerciseCardProps) {
     setView('question');
     setResult(null);
     setAnswer('');
+    setMovedOn(false);
   }, [exercise.id]);
+
+  const handleMoveOn = () => {
+    onMoveOn?.();
+    setMovedOn(true);
+  };
 
   const handleSubmit = async () => {
     if (!answer.trim() || isSubmitting) return;
@@ -129,6 +140,19 @@ export function ExerciseCard({ exercise, onSubmit }: ExerciseCardProps) {
             <div className="answer-reveal-label">{result.isCorrect ? 'Correct' : 'Not quite'}</div>
             {result.expectedAnswer && <div>{result.expectedAnswer}</div>}
             {result.feedback && <div>{result.feedback}</div>}
+            {/* deferred.md #38 — PRD.md's locked KIV trigger, exact case:
+                "moves on from a failed advanced question." */}
+            {!result.isCorrect && exercise.difficulty === 'advanced' && onMoveOn && (
+              <div className="move-on-row">
+                {movedOn ? (
+                  <span className="move-on-confirm">Flagged for review — you'll find it in the KIV tab.</span>
+                ) : (
+                  <button type="button" className="move-on-btn" onClick={handleMoveOn}>
+                    Move on for now
+                  </button>
+                )}
+              </div>
+            )}
           </div>
         )
       )}

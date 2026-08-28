@@ -22,6 +22,11 @@ export interface RoadmapNode {
   // computed lazily since buildRoadmapData.ts already has every other
   // node's mapped status in scope when building this one.
   unmetPrerequisiteTitles?: string[];
+  // deferred.md #38 — KIV Review's real data, straight off the same
+  // journey_concepts row the rest of this node already comes from.
+  foundationGap: boolean;
+  kivFlagged: boolean;
+  masteryScore?: number;
 }
 
 export interface CollapsedGroupItem {
@@ -44,4 +49,11 @@ export interface RoadmapData {
   masteredCount: number;
   totalCount: number;
   items: RoadmapItem[];
+  // deferred.md #38 — flat, pre-collapse list of KIV-flagged, not-yet-
+  // mastered nodes. Deliberately separate from `items`: a KIV node could
+  // never actually end up inside a collapsed group in practice (only
+  // mastered runs collapse), but computing this from the raw per-node
+  // list rather than the post-collapse one keeps that guarantee real
+  // rather than assumed.
+  kivItems: RoadmapNode[];
 }

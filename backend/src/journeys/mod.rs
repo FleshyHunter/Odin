@@ -63,4 +63,9 @@ pub fn router() -> Router<AppState> {
         )
         // deferred.md #94: Map/Roadmap's real data, replacing sampleData.ts.
         .route("/journeys/{journey_id}/roadmap", get(handlers::get_roadmap))
+        // deferred.md #38: KIV real backend — the kiv_flagged_at trigger.
+        .route(
+            "/journeys/{journey_id}/concepts/{concept_id}/skip",
+            post(handlers::skip_concept),
+        )
 }

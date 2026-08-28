@@ -291,6 +291,22 @@ async fn query_knowledge_context(
     knowledge::query_global_context(state, user_id, &query_embedding, Some(subject_id), Some(journey_id)).await
 }
 
+/// Flow 3 (Tangent Mode) — PRD.md's locked spec: "Retrieval: GLOBAL KB
+/// (all subjects)," unlike every other journey-mode retrieval call in
+/// this file, which is deliberately subject-scoped. `None, None` is
+/// exactly `query_global_context`'s own documented "unscoped" contract
+/// (ARCHITECTURE.md's "cross-subject tangent retrieval," previously only
+/// used by memoryless mode — this is the first journey-mode caller).
+async fn query_tangent_context(state: &AppState, user_id: Uuid, query: &str) -> Result<Option<String>, AiClientError> {
+    let query_embedding = ai_client::embed(&state.http_client, &state.ai_service_url, vec![query.to_string()])
+        .await?
+        .into_iter()
+        .next()
+        .ok_or_else(|| AiClientError::UnexpectedResponse("embed() returned no vectors for the query".to_string()))?;
+
+    knowledge::query_global_context(state, user_id, &query_embedding, None, None).await
+}
+
 // Found live (2026-08-12), same root cause as memoryless mode's own
 // all_staged_context fix: journey-mode had no mechanism at all reading
 // a journey's own uploaded content back into generation — #37 built the
@@ -948,6 +964,42 @@ async fn clear_pending_branch_topic(pool: &PgPool, user_id: Uuid, thread_id: Uui
     Ok(())
 }
 
+/// Flow 3 — records which concept the student was mid-lesson on the
+/// instant a fresh off-topic tangent fires. `study_threads.
+/// pre_tangent_concept_id` (SCHEMA.md) existed since the very first
+/// migration but was never written or read anywhere until this pass —
+/// a real "capability before caller" gap, not new schema.
+async fn set_pre_tangent_concept(
+    pool: &PgPool,
+    user_id: Uuid,
+    thread_id: Uuid,
+    concept_id: Uuid,
+) -> Result<(), JourneyError> {
+    let mut tx = begin_rls_transaction(pool, user_id).await?;
+    sqlx::query("UPDATE study_threads SET pre_tangent_concept_id = $2 WHERE thread_id = $1")
+        .bind(thread_id)
+        .bind(concept_id)
+        .execute(&mut *tx)
+        .await?;
+    tx.commit().await?;
+    Ok(())
+}
+
+/// Flow 3 — fires once the student is genuinely back on topic (see
+/// send_journey_message's own resume check). PRD.md's locked Tangent
+/// Mode caps depth at exactly 1 level — clearing this is what lets a
+/// LATER, separate tangent be treated as fresh again rather than
+/// permanently tripping the depth-cap grounding response.
+async fn clear_pre_tangent_concept(pool: &PgPool, user_id: Uuid, thread_id: Uuid) -> Result<(), JourneyError> {
+    let mut tx = begin_rls_transaction(pool, user_id).await?;
+    sqlx::query("UPDATE study_threads SET pre_tangent_concept_id = NULL WHERE thread_id = $1")
+        .bind(thread_id)
+        .execute(&mut *tx)
+        .await?;
+    tx.commit().await?;
+    Ok(())
+}
+
 /// deferred.md #2d — records the offer the SAME turn a branch_gap fires,
 /// so the student's NEXT message can be read as answering it.
 async fn set_pending_branch_topic(pool: &PgPool, user_id: Uuid, thread_id: Uuid, topic: &str) -> Result<(), JourneyError> {
@@ -1008,6 +1060,121 @@ fn is_branch_confirmed(text: &str) -> bool {
         };
         !NEGATION.iter().any(|neg| rest == *neg || rest.starts_with(&format!("{neg} ")))
     })
+}
+
+/// Flow 3 (Tangent Mode) — what send_journey_message should do about
+/// tangent state for this turn, given `classify_gap`'s existing
+/// off_topic/fold_gap/branch_gap output and whether a tangent is already
+/// in progress. Deliberately takes plain, already-resolved inputs (no
+/// AppState, no DB) so this can be unit-tested without a real classifier
+/// call or a real thread row.
+#[derive(Debug, PartialEq)]
+enum TangentAction {
+    /// Nothing tangent-related this turn — normal on-topic message, no
+    /// tangent was ever in progress.
+    None,
+    /// Genuinely back on topic after a tangent — clear the marker,
+    /// tutor briefly acknowledges returning before continuing.
+    Resume { instruction: String },
+    /// PRD.md's locked depth-1 cap: a SECOND consecutive off-topic
+    /// question while already mid-tangent. Don't answer it — ground the
+    /// student instead.
+    DepthCapped { instruction: String },
+    /// A genuinely fresh off-topic question — record the marker, answer
+    /// it via global (unscoped) retrieval.
+    FreshTangent { instruction: String },
+}
+
+fn decide_tangent_action(
+    gap_classification: Option<&str>,
+    tangent_already_in_progress: bool,
+    current_concept_title: &str,
+) -> TangentAction {
+    // Deliberately only the None case, not fold_gap/branch_gap-while-
+    // mid-tangent — a rare edge case left as a known simplification
+    // (see LOG.md): pre_tangent_concept_id just stays set one extra
+    // turn in that case, cleared the next time the student is
+    // genuinely on-topic.
+    if gap_classification.is_none() && tangent_already_in_progress {
+        return TangentAction::Resume {
+            instruction: format!(
+                "(The student was on a brief tangent and is now back on topic — before answering, briefly \
+                 acknowledge returning to \"{current_concept_title}\" (for example: \"Okay, back to \
+                 {current_concept_title}...\"), then continue normally.)"
+            ),
+        };
+    }
+
+    if gap_classification != Some("off_topic") {
+        return TangentAction::None;
+    }
+
+    if tangent_already_in_progress {
+        TangentAction::DepthCapped {
+            instruction: format!(
+                "(The student is trying to go deeper into ANOTHER off-topic tangent, but you're already \
+                 mid-tangent — per policy, do NOT answer this new question. Say ONLY something like: \
+                 \"That's getting deep — want to open a new thread for this, or come back to \
+                 {current_concept_title}?\" and stop there.)"
+            ),
+        }
+    } else {
+        TangentAction::FreshTangent {
+            instruction: "(This is an off-topic tangent, unrelated to the current lesson — answer it \
+                 briefly using the reference material if any is relevant, or your own general \
+                 knowledge/search tools otherwise. No quiz unless they explicitly ask for one. You'll \
+                 return to teaching the current concept once they're back on topic.)"
+                .to_string(),
+        }
+    }
+}
+
+#[cfg(test)]
+mod tangent_action_tests {
+    use super::{decide_tangent_action, TangentAction};
+
+    #[test]
+    fn on_topic_with_no_tangent_in_progress_does_nothing() {
+        assert_eq!(decide_tangent_action(None, false, "Vectors"), TangentAction::None);
+    }
+
+    #[test]
+    fn on_topic_while_mid_tangent_resumes_with_a_callback_line() {
+        let action = decide_tangent_action(None, true, "Vectors");
+        match action {
+            TangentAction::Resume { instruction } => assert!(instruction.contains("Vectors")),
+            other => panic!("expected Resume, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn fresh_off_topic_question_starts_a_tangent() {
+        let action = decide_tangent_action(Some("off_topic"), false, "Vectors");
+        assert!(matches!(action, TangentAction::FreshTangent { .. }));
+    }
+
+    #[test]
+    fn second_off_topic_question_while_mid_tangent_hits_the_depth_cap() {
+        let action = decide_tangent_action(Some("off_topic"), true, "Vectors");
+        match action {
+            TangentAction::DepthCapped { instruction } => {
+                assert!(instruction.contains("Vectors"));
+                assert!(instruction.to_lowercase().contains("getting deep"));
+            }
+            other => panic!("expected DepthCapped, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn fold_gap_and_branch_gap_are_not_tangent_actions() {
+        assert_eq!(decide_tangent_action(Some("fold_gap"), false, "Vectors"), TangentAction::None);
+        assert_eq!(decide_tangent_action(Some("branch_gap"), false, "Vectors"), TangentAction::None);
+        // Even mid-tangent, a real DAG-gap classification isn't handled
+        // by this function — send_journey_message's own fold_gap/
+        // branch_gap arms take over; pre_tangent_concept_id is left set,
+        // a documented, deliberate simplification.
+        assert_eq!(decide_tangent_action(Some("fold_gap"), true, "Vectors"), TangentAction::None);
+    }
 }
 
 /// deferred.md #2d — the confirmation-only turn once a branch has just
@@ -1450,12 +1617,13 @@ pub async fn send_journey_message(
         .ok_or_else(|| JourneyError::Validation("this journey's teaching thread hasn't started yet".to_string()))?;
 
     let mut tx = begin_rls_transaction(&state.pool, user_id).await?;
-    let (current_concept_id, pending_branch_topic): (Uuid, Option<String>) = sqlx::query_as(
-        "SELECT current_concept_id, pending_branch_topic FROM study_threads WHERE thread_id = $1",
-    )
-    .bind(thread_id)
-    .fetch_one(&mut *tx)
-    .await?;
+    let (current_concept_id, pending_branch_topic, pre_tangent_concept_id): (Uuid, Option<String>, Option<Uuid>) =
+        sqlx::query_as(
+            "SELECT current_concept_id, pending_branch_topic, pre_tangent_concept_id FROM study_threads WHERE thread_id = $1",
+        )
+        .bind(thread_id)
+        .fetch_one(&mut *tx)
+        .await?;
     tx.commit().await?;
 
     // deferred.md #2d — the confirm-first branch offer: if last turn
@@ -1527,18 +1695,61 @@ pub async fn send_journey_message(
     )
     .await?;
 
-    // deferred.md #2b/#2c/#2d — off_topic: no special handling (stays
-    // plain TANGENT, same as before this whole classifier existed).
-    // fold_gap: wired live — small, contained (this journey only, per
-    // #2c's own decided dag_version scoping), matches #2e's "case
-    // (b)-fold probably wants SOME acknowledgment" framing. branch_gap:
-    // confirm-first (per the user's own explicit direction, 2026-08-11)
-    // — records the offer, asks THIS turn, acts on the answer next turn
-    // (see the pending_branch_topic block above).
+    // deferred.md #2b/#2c/#2d/2e — off_topic: Flow 3 (Tangent Mode), real
+    // as of this pass (see the off_topic arm below). fold_gap: wired
+    // live — small, contained (this journey only, per #2c's own decided
+    // dag_version scoping), matches #2e's "case (b)-fold probably wants
+    // SOME acknowledgment" framing. branch_gap: confirm-first (per the
+    // user's own explicit direction, 2026-08-11) — records the offer,
+    // asks THIS turn, acts on the answer next turn (see the
+    // pending_branch_topic block above).
     let mut extra_instruction: Option<String> = None;
+    // Flow 3 — true for a fresh off-topic tangent, switches retrieval
+    // from subject-scoped to the global (unscoped) KB. Depth-cap also
+    // implies skip_retrieval below — no point retrieving context for a
+    // question the model won't actually engage.
+    let mut tangent_mode = false;
+    let mut skip_retrieval = false;
+
+    // Flow 3 (Tangent Mode) — decision logic pulled into a pure,
+    // unit-tested function (see decide_tangent_action's own doc comment
+    // and its test module) rather than inlined here, matching this
+    // file's own topological_order/is_branch_confirmed precedent for
+    // anything with real branches worth testing directly.
+    match decide_tangent_action(analysis.gap_classification.as_deref(), pre_tangent_concept_id.is_some(), &current_concept_title) {
+        TangentAction::None => {}
+        TangentAction::Resume { instruction } => {
+            if let Err(err) = clear_pre_tangent_concept(&state.pool, user_id, thread_id).await {
+                tracing::warn!(?err, %journey_id, %thread_id, "Flow 3: failed to clear pre_tangent_concept_id on resume");
+            }
+            extra_instruction = Some(instruction);
+        }
+        TangentAction::DepthCapped { instruction } => {
+            skip_retrieval = true;
+            extra_instruction = Some(instruction);
+        }
+        TangentAction::FreshTangent { instruction } => {
+            // No DAG mutation, no mastery update — matches PRD.md's
+            // locked spec exactly. Tool-calling (search) is already
+            // unconditionally live on this endpoint (deferred.md
+            // #101/#102, generate_stream_with_tools below) — the model
+            // decides on its own whether to search, no separate
+            // ask-first gate, per explicit direction (2026-08-27), a
+            // deliberate deviation from PRD.md's own locked "user
+            // decides" line (doc to be updated to match once this ships).
+            tangent_mode = true;
+            if let Err(err) = set_pre_tangent_concept(&state.pool, user_id, thread_id, current_concept_id).await {
+                tracing::warn!(?err, %journey_id, %thread_id, "Flow 3: failed to record pre_tangent_concept_id");
+            }
+            extra_instruction = Some(instruction);
+        }
+    }
+
     if let Some(gap) = &analysis.gap_classification {
         tracing::info!(%journey_id, %thread_id, gap_classification = %gap, "deferred.md #2b gap signal");
-        if gap == "fold_gap" {
+        if gap == "off_topic" {
+            // Handled above by decide_tangent_action — nothing left to do.
+        } else if gap == "fold_gap" {
             match fold_gap_into_journey(
                 state,
                 user_id,
@@ -1582,22 +1793,41 @@ pub async fn send_journey_message(
 
     // deferred.md — this journey's own uploaded content, always
     // included. See fetch_journey_upload_context's own doc comment.
-    let journey_upload_context = match fetch_journey_upload_context(&state.pool, user_id, journey_id).await {
-        Ok(context) => context,
-        Err(err) => {
-            tracing::warn!(?err, %journey_id, %thread_id, "failed to fetch this journey's own uploaded content, continuing without it");
-            None
+    // Flow 3's depth-cap case (skip_retrieval) skips this too — the
+    // model isn't answering anything substantive there, just grounding
+    // the student, so there's nothing for retrieved context to help with.
+    let journey_upload_context = if skip_retrieval {
+        None
+    } else {
+        match fetch_journey_upload_context(&state.pool, user_id, journey_id).await {
+            Ok(context) => context,
+            Err(err) => {
+                tracing::warn!(?err, %journey_id, %thread_id, "failed to fetch this journey's own uploaded content, continuing without it");
+                None
+            }
         }
     };
 
     // deferred.md #18: subject-scoped retrieval against the permanent
     // knowledge base — see query_knowledge_context's own doc comment.
+    // Flow 3: a fresh tangent (tangent_mode) switches to the GLOBAL
+    // (unscoped) KB instead — PRD.md's locked Tangent Mode spec calls
+    // for cross-subject retrieval, not this journey's own subject.
     // Fails open exactly like memoryless/turn.rs's own equivalent call.
-    let global_context = match query_knowledge_context(state, user_id, subject_id, journey_id, &analysis.cleaned_query).await {
-        Ok(context) => context,
-        Err(err) => {
-            tracing::warn!(?err, %journey_id, %thread_id, "knowledge-base retrieval failed, continuing without it");
-            None
+    let global_context = if skip_retrieval {
+        None
+    } else {
+        let retrieval = if tangent_mode {
+            query_tangent_context(state, user_id, &analysis.cleaned_query).await
+        } else {
+            query_knowledge_context(state, user_id, subject_id, journey_id, &analysis.cleaned_query).await
+        };
+        match retrieval {
+            Ok(context) => context,
+            Err(err) => {
+                tracing::warn!(?err, %journey_id, %thread_id, "knowledge-base retrieval failed, continuing without it");
+                None
+            }
         }
     };
 
