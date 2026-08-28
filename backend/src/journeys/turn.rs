@@ -1020,29 +1020,63 @@ async fn set_pending_branch_topic(pool: &PgPool, user_id: Uuid, thread_id: Uuid,
 /// fallback). Errs toward requiring a recognizable affirmative: an
 /// unmatched reply is treated as declined and just falls through to a
 /// normal turn — never silently creates a journey on an ambiguous
-/// read.
+/// read. An LLM-fallback approach was tested empirically against real
+/// Ollama (2026-08-28, qwen3.5:9b, think=false) and rejected: on a set
+/// of genuinely ambiguous replies, qwen scored WORSE than these rules
+/// already do on some near-identical phrasing (e.g. "i suppose" read
+/// UNCLEAR despite being functionally the same as the already-reliable
+/// "i guess") — not just short of covering harder cases, actively less
+/// trustworthy on some easy ones. Not worth revisiting unless the
+/// underlying model changes materially.
 ///
-/// deferred.md #84/V3 audit bug #4: originally a reply that STARTS with
-/// an affirmative word but is actually declining ("yeah, no thanks")
-/// misread as confirmed — accepted at the time as low-stakes since the
-/// created journey was "deletable like any other track." That premise
-/// turned out false (no delete path existed anywhere — #84), so this
-/// now guards against a negation word landing immediately after the
-/// matched affirmative ("yeah, no thanks" -> declined). Deliberately
-/// narrow (adjacency only, not a whole-string negation scan) so a
-/// negation word appearing LATER in a genuine yes doesn't misfire
-/// ("yes, let's do it, no doubt about it" still confirms — "no" isn't
-/// adjacent to "yes"). Known, accepted remaining gap: an idiom where
-/// "no" immediately follows an affirmative WITHOUT negating it ("yeah,
-/// no doubt, let's do it") still misreads as declined — genuinely
-/// ambiguous without real intent classification, not worth one for
-/// this low-stakes a decision either.
+/// deferred.md #84/V3 audit bug #4, then #2d REOPENED (2026-08-13):
+/// two earlier fix attempts (a negation-adjacency check, then a
+/// trailing-word allowlist) both tried to allow a matched affirmative
+/// word to be followed by SOME trailing content and reject it based on
+/// what that content was — and both kept reproducing the same class of
+/// bug at a different grain size. The negation-adjacency version missed
+/// "Okay so I already tried this and got x=5, is that right?" (no
+/// negation word, but genuinely not a confirmation). The trailing-word
+/// allowlist version fixed that, but needed a new word ("then") added
+/// just to make one of its own test cases pass, and separately couldn't
+/// tell "do it please" (should confirm) from "is that right" (should
+/// not) without enumerating individual words either way.
+///
+/// CLOSED (2026-08-28) by removing the trailing-content mechanism
+/// entirely rather than patching it a third time: BRANCH_AFFIRMATIVE is
+/// now a closed list of complete, exact strings, matched only via `==`
+/// — no `strip_prefix`, no per-word or per-phrase allowlist, nothing
+/// after a match is inspected at all. A reply either matches one of
+/// these exact strings or it doesn't; there is no third "matches but
+/// might not count" case left to get wrong. Module-level (not
+/// function-local) specifically so the test module below can enumerate
+/// every entry directly as its own source of truth, rather than
+/// maintaining a second, separately-written list that could drift out
+/// of sync with the real one.
+///
+/// Known, accepted trade-off — stated plainly, not a new gap: a real
+/// confirmation phrased in a way nobody enumerated here declines, same
+/// as any other unmatched reply. This is intentional, not an oversight:
+/// the failure mode this design removes (silently swallowing a real
+/// question or statement as a confirmation) is worse than the failure
+/// mode it accepts (a genuine confirmation falling through to an
+/// ordinary turn, cheap and reversible — doubly so now that #88's
+/// journey-delete path exists). Extend BRANCH_AFFIRMATIVE directly if a
+/// specific missed phrase turns out to matter in practice; do not
+/// reintroduce prefix/trailing-content matching to chase it.
+const BRANCH_AFFIRMATIVE: &[&str] = &[
+    "yes", "yeah", "yep", "yup", "sure", "ok", "okay", "alright", "please", "go for it", "do it",
+    "sounds good", "lets do it", "let's do it", "start it", "i guess", "go ahead", "please do",
+    "go for it then", "sure thing", "yeah sure",
+];
+
 fn is_branch_confirmed(text: &str) -> bool {
-    const AFFIRMATIVE: &[&str] = &[
-        "yes", "yeah", "yep", "yup", "sure", "ok", "okay", "alright", "please", "go for it", "do it",
-        "sounds good", "lets do it", "let's do it", "start it", "i guess", "go ahead", "please do",
-    ];
-    const NEGATION: &[&str] = &["no", "not", "nope", "nah", "dont", "don't"];
+    // A question is never a confirmation. Checked on RAW text, before
+    // normalization would strip the '?' away — independent of, and
+    // unaffected by, the exact-match change above.
+    if text.contains('?') {
+        return false;
+    }
 
     let normalized: String = text
         .trim()
@@ -1051,15 +1085,90 @@ fn is_branch_confirmed(text: &str) -> bool {
         .filter(|c| c.is_alphanumeric() || c.is_whitespace() || *c == '\'')
         .collect();
 
-    AFFIRMATIVE.iter().any(|phrase| {
-        if normalized == *phrase {
-            return true;
+    BRANCH_AFFIRMATIVE.contains(&normalized.as_str())
+}
+
+#[cfg(test)]
+mod is_branch_confirmed_tests {
+    use super::*;
+
+    #[test]
+    fn every_affirmative_entry_confirms() {
+        // The actual point of the exact-match design: BRANCH_AFFIRMATIVE
+        // is the single source of truth, enumerated directly here — not
+        // a separately-maintained copy that could silently drift out of
+        // sync with what the function actually matches against.
+        for phrase in BRANCH_AFFIRMATIVE {
+            assert!(is_branch_confirmed(phrase), "{phrase:?} should confirm");
         }
-        let Some(rest) = normalized.strip_prefix(&format!("{phrase} ")) else {
-            return false;
-        };
-        !NEGATION.iter().any(|neg| rest == *neg || rest.starts_with(&format!("{neg} ")))
-    })
+    }
+
+    #[test]
+    fn plain_declines_do_not_confirm() {
+        for text in ["no", "not now", "nope", "nah", "don't"] {
+            assert!(!is_branch_confirmed(text), "{text:?} should not confirm");
+        }
+    }
+
+    #[test]
+    fn negation_after_affirmative_declines_as_a_non_exact_match() {
+        // No NEGATION list, no trailing-content logic of any kind
+        // anymore — these decline for the same reason any other
+        // unenumerated reply does: they simply aren't exact matches
+        // against BRANCH_AFFIRMATIVE.
+        for text in ["yeah, no thanks", "sure, not now", "ok, nope"] {
+            assert!(!is_branch_confirmed(text), "{text:?} should not confirm");
+        }
+    }
+
+    #[test]
+    fn question_mark_case_declines() {
+        // deferred.md #2d REOPENED (2026-08-13) — the original reported
+        // false positive.
+        assert!(!is_branch_confirmed("Okay so I already tried this and got x=5, is that right?"));
+    }
+
+    #[test]
+    fn punctuation_free_non_exact_replies_decline() {
+        // No '?' in either — prove these decline because they aren't
+        // exact matches, not because of the question-mark check.
+        for text in ["yeah is that right", "yeah I don't think so"] {
+            assert!(!is_branch_confirmed(text), "{text:?} should not confirm");
+        }
+    }
+
+    #[test]
+    fn long_replies_starting_with_an_affirmative_word_do_not_confirm() {
+        for text in [
+            "Yes but I'm still confused about why the derivative of x squared is 2x",
+            "Sure, but can you first explain why we needed the chain rule there at all",
+        ] {
+            assert!(!is_branch_confirmed(text), "{text:?} should not confirm");
+        }
+    }
+
+    #[test]
+    fn accepted_tradeoff_genuine_confirmations_not_in_the_list_now_decline() {
+        // Known, accepted trade-off (see fn/const doc comments) — not a
+        // bug. "do it please" was confirmed under an earlier
+        // trailing-word-allowlist version of this fix; it isn't one of
+        // BRANCH_AFFIRMATIVE's exact entries, so it's in this bucket now
+        // unless added explicitly.
+        for text in [
+            "yes, let's do it, no doubt about it",
+            "yes, that sounds great, let's start",
+            "do it please",
+        ] {
+            assert!(!is_branch_confirmed(text), "{text:?} is an accepted false negative");
+        }
+    }
+
+    #[test]
+    fn no_doubt_idiom_gap_remains_unchanged() {
+        // Known, still-open, pre-existing gap, unrelated to any version
+        // of this fix.
+        assert!(!is_branch_confirmed("yeah, no doubt, let's do it"));
+    }
 }
 
 /// Flow 3 (Tangent Mode) — what send_journey_message should do about
